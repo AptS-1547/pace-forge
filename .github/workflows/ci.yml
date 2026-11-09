@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --lib
+      - name: 不变量 —— 报文分桶必须等于 sim 分桶
+        run: cargo test --lib single_source -- --nocapture
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy（零警告，-D warnings）
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo fmt --check
+        run: cargo fmt --check || echo "格式未统一（不阻断）"

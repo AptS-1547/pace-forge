@@ -1,0 +1,53 @@
+[package]
+name = "pace-forge"
+version = "0.1.0"
+edition = "2021"
+description = "运动世界校园 自动刷跑客户端 · 纯 Rust，极验本地求解，数据自洽"
+license = "MIT"
+repository = "https://github.com/IRmsk/pace-forge"
+
+[lib]
+name = "pace_forge"
+path = "lib.rs"
+crate-type = ["rlib"]
+
+[features]
+default = ["cli"]
+cli = []
+gui = ["dep:eframe", "dep:egui"]
+
+[[bin]]
+name = "pace-forge"
+path = "main.rs"
+
+[dependencies]
+# --- 协议层 ---
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tiny_http = "0.12"
+ureq = { version = "2", default-features = false, features = ["json", "tls", "gzip"] }
+# 加密
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+rsa = { version = "0.9", features = ["sha2"] }
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+# 极验缺口识别（只编 PNG，避免拖入整套图片编解码）
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+# OBS 明细要 gzip+base64
+flate2 = "1"
+rand = "0.8"
+# GUI（可选，默认不编译）
+eframe = { version = "0.29", optional = true }
+egui = { version = "0.29", optional = true }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+# 不用 panic = "abort"：Web 是长期驻留进程，一个请求里漏掉的 panic 不该
+# 把整个进程连同正在跑的批次一起带走。配下面的 catch_unwind 把它隔离在单个请求内。
+panic = "unwind"
