@@ -372,12 +372,21 @@ pub fn point_json_full(
     };
     *prev_time = p.time_ms;
 
-    // 起步窗口（GPS 刚锁定、位移被过滤的那 15%）：真机这段的 speed / bdS /
-    // avgSpeed / stepDistance 全是 0，是「还没进测速窗口」而不是「速度为 0」。
+    // 起步窗口（GPS 刚锁定、位移被过滤的那 15%）。
     //
     // `startup` 由调用方按**时间戳**数出来（`track::startup_point_count`），
     // 与几何压缩、`segment_json` 首段用同一个窗口；这里不再自己按点数比例
     // 估一遍，否则三条链会各切各的。
+    //
+    // **`speed` / `avgSpeed` 不再在这个窗口里写死 0**。早先照 evidence 那条
+    // 记录（rrid 1328288734，前 18 点三项全 0）硬抄，代价是 App 配速图开头
+    // 直接断线两分半——因为配速 0 被当作「无数据」不画点。真机 9/16 那条
+    // （19:20 / 6'08"）起点明明有 91' 的线，说明「窗口内一律 0」不是普遍
+    // 规律，只是那一条记录设备端的行为。
+    //
+    // 窗口内这点位移是真有的（真机 90 秒走 13.6m ≈ 0.15 m/s ≈ 111 分/km），
+    // 按几何如实算，线就接上了。`stepDistance` 仍然保持窗口内为 0：那是
+    // 整场一个常数，与逐点配速不是一回事。
     let in_startup = idx < startup;
 
     // ── speed / avgSpeed / bdS 的口径 ───────────────────────────────────────
@@ -408,7 +417,7 @@ pub fn point_json_full(
     // 0.16~0.8 m/s 的 GPS 漂移（真机 idx5/idx11/idx14 都非零），真机仍然
     // 写 0 —— 是「还没进测速窗口」，不是「配速无穷大被截断成 0」。
     // 所以这里不能「先算配速再取 0」，窗口必须在算 v 之前就短路。
-    let v_mps = if idx == 0 || in_startup {
+    let v_mps = if idx == 0 {
         0.0
     } else {
         // 上限 6.3 m/s 只兜 GPS 抖动（世界纪录配速的两倍还多）。**不设下限**：
@@ -925,7 +934,7 @@ pub fn smooth_point_speed(items: &mut [Value]) {
     //
     // 窗口按时间戳数（与 `point_json_full` 的 `startup` 同一口径），这里手上
     // 的对象就是报文里那几个字段，直接读 totalTime 现算。
-    let su = {
+    let _su = {
         let times: Vec<i64> = items
             .iter()
             .map(|p| p["totalTime"].as_i64().unwrap_or(0) * 1000)
@@ -938,7 +947,10 @@ pub fn smooth_point_speed(items: &mut [Value]) {
     };
     let mut prev_v = 0.0f64;
     for (i, item) in items.iter_mut().enumerate().take(n) {
-        let v = if i == 0 || i < su {
+        // 只把真正的首点写 0。窗口内 `i < su` 也写 0 是早先照 evidence 那条
+        // 记录抄的，代价是 App 配速图开头整段断线——两处（这里和上面
+        // `v_mps`）都写死 0，改一处没用，另一处会把 speed 覆盖回去。
+        let v = if i == 0 {
             0.0
         } else {
             let dt = tim[i] - tim[i - 1];
@@ -3557,10 +3569,21 @@ mod parity_regression_tests {
             "起步窗口占了 {:.1}% 的点，太多",
             su as f64 / pts.len() as f64 * 100.0
         );
-        for (i, q) in pts.iter().take(su).enumerate() {
-            for k in ["speed", "bdS", "avgSpeed", "stepDistance"] {
-                assert_eq!(q[k].as_f64().unwrap(), 0.0, "第 {i} 点 {k} 应为 0");
-            }
+        // 起步窗口里**只有首点**是 0。
+        //
+        // 早先这里断言整窗 speed/bdS/avgSpeed/stepDistance 全 0（照 evidence
+        // 那条 rrid 1328288734 抄的），代价是 App 配速图开头两分半没有线——
+        // 配速 0 被当作「无数据」不画点。真机 9/16 那条起点明明是 91'。
+        // 现在按几何如实算（窗口内 90 秒走十几米 ≈ 0.15 m/s ≈ 110 分/km），
+        // 线是连着的。stepDistance 仍然窗口内为 0：它是整场一个常数。
+        assert_eq!(pts[0]["speed"].as_f64().unwrap(), 0.0, "首点 speed 应为 0");
+        assert_eq!(pts[0]["stepDistance"].as_f64().unwrap(), 0.0, "首点 stepDistance 应为 0");
+        for (i, q) in pts.iter().take(su).enumerate().skip(1) {
+            assert_eq!(q["stepDistance"].as_f64().unwrap(), 0.0, "第 {i} 点 stepDistance 应为 0");
+            let sp = q["speed"].as_f64().unwrap();
+            assert!(sp > 0.0, "第 {i} 点 speed 为 {sp}，配速图会断线");
+            // 窗口内配速必须比主体慢得多（真人起步就是磨），但不能是 0
+            assert!(sp < 400.0, "第 {i} 点配速 {sp:.0} 分/km，慢得不合理");
         }
         assert!(
             pts[su]["speed"].as_f64().unwrap() > 0.0,
@@ -3669,10 +3692,10 @@ mod parity_regression_tests {
             crate::track::startup_point_count(&times, p.start_time_ms, p.total_time_sec)
         };
         assert!(su >= 2, "起步窗口至少 2 个点");
-        for (i, q) in pts.iter().take(su).enumerate() {
-            assert_eq!(q["speed"].as_f64().unwrap(), 0.0, "第 {i} 点 speed 应为 0");
-            assert_eq!(q["bdS"].as_f64().unwrap(), 0.0, "第 {i} 点 bdS 应为 0");
-            assert_eq!(q["avgSpeed"].as_f64().unwrap(), 0.0, "第 {i} 点 avgSpeed 应为 0");
+        // 同上：只有首点全 0。窗口内其余点按几何算，保证 App 配速图有线。
+        assert_eq!(pts[0]["speed"].as_f64().unwrap(), 0.0, "首点 speed 应为 0");
+        for (i, q) in pts.iter().take(su).enumerate().skip(1) {
+            assert!(q["speed"].as_f64().unwrap() > 0.0, "第 {i} 点 speed 为 0，配速图会断线");
             assert_eq!(q["stepDistance"].as_f64().unwrap(), 0.0, "第 {i} 点 stepDistance 应为 0");
             // 起步段里除首点(7)/第二点(5) 之外都是 -1 灰点
             assert!(

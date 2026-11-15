@@ -134,7 +134,19 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
     // 边界上那半个到一整个步长」。这一项没法用公式估准（窗口边界落在两个
     // 采样点之间，落点由速度决定），所以先按老公式给初值，再**按实测首段
     // 里程迭代收敛**：3 轮就够，映射对 cluster 近似 1:1。
-    let mut cluster = (total_len * STARTUP_DIST_RATIO - step_est).max(total_len * 0.002);
+    // 窗口内至少每点 1 米。
+    //
+    // `totalDis` 是整数米，逐点差值才是配速的分母。真机起步窗口 18 点走
+    // 13.6m（0.76m/点），整数化后基本每点 +1，配速落在 80~90 分/km，App
+    // 配速图开头是有线的（9/16 那条从 91' 起笔）。
+    //
+    // 早先这里只按「全程 1.1%」给预算，2km 路线 23 个窗口点只分到 8.2m
+    // （0.36m/点），整数化后大量点差值为 0 → 配速 0 → App 把 0 当作「无
+    // 数据」不画点，**开头两分半整条线是断的**，比配速准确度问题显眼得多。
+    let min_per_point = k as f64 * 4.0;
+    let mut cluster = (total_len * STARTUP_DIST_RATIO - step_est)
+        .max(total_len * 0.002)
+        .max(min_per_point);
     let target_first = total_len * STARTUP_DIST_RATIO;
     let bound_time = start_ms + startup_sec(total_sec) * 1000;
 
@@ -145,7 +157,12 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
     let denom_in = (k - 1) as f64;
     for i in 0..k {
         let t = i as f64 / denom_in;
-        want.push(cluster * t.powf(1.5));
+        // 线性铺，不用 `t^1.5` 缓入。
+        //
+        // 缓入的起点斜率为 0，第一个采样点位移几乎是 0，配速算出来 400 多
+        // 分/公里；App 配速图最左边那截就会贴着底走。真机 9/16 那条起点
+        // 是 91'（0.18 m/s），是平的，不是从 0 爬上来。
+        want.push(cluster * t);
     }
     // 窗口外是**仿射**映射 `[arc[k-1], total_len] → [cluster, total_len]`，
     // 不是等距重铺。
