@@ -675,7 +675,7 @@ pub fn sample_by_time(
     for _ in 0..2 {
         let pts: Vec<(f64, f64)> = s.iter().map(|&x| point_at_arc(path, &arc, x)).collect();
         let speeds =
-            kinematics::pace_profile(&pts, v0, &dts, total_len, seed, kin, floor, ceil);
+            kinematics::pace_profile(&pts, v0, &dts, total_len, seed, kin, floor, ceil, 1.0);
         let mut cum = 0.0f64;
         let mut ns = Vec::with_capacity(n);
         ns.push(0.0);

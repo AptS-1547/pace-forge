@@ -16,7 +16,7 @@
 //! 曲率由三点法现场计算，速度剖面基于 OU 过程。
 
 use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 
 use super::geo::{distance, M_PER_DEG_LAT, m_per_deg_lng};
 
@@ -186,6 +186,7 @@ pub fn pace_profile(
     p: &KinParams,
     floor: f64,
     ceil: f64,
+    stall_gain: f64,
 ) -> Vec<f64> {
     let n = dts.len();
     if n == 0 {
@@ -259,6 +260,51 @@ pub fn pace_profile(
 
     // ③ 精确命中目标里程（尊重逐点 cap）
     fit_capped(&mut w, dts, target_dist, floor, &caps);
+
+    // ④ 中途停顿点——这一条决定 App 配速图长什么样
+    //
+    // 真机（`evidence/obs_real_20261002.json`）中途有一个 0.06 m/s 的点：
+    // 站着没动、或者 GPS 那几秒没更新。它对自己的里程毫无贡献，却把 App
+    // 配速图的纵轴撑到 300+ 分/公里——主体的正常波动（6' 上下晃 ±0.5'）
+    // 在这个量程里只占零点几个百分点，画出来就是一条平线，只在几处有深谷。
+    //
+    // 没有这个极值点，纵轴只到 20 几分，主体的波动就被放大成满屏锯齿，
+    // 看起来像「人没在稳定地跑」。所以停顿点不是装饰，是量程锚点。
+    //
+    // 位置随机、避开首尾各 5%（起步窗口和收尾冲刺本来就慢/快，再塞停顿
+    // 会连成一片），一次 1~2 个，与真机 114 点里那 1 个同量级。
+    if n >= 20 && stall_gain > 0.0 {
+        let stalls = if rng.gen::<f64>() < 0.65 { 1 } else { 2 };
+        let lo = (n / 20).max(1);
+        let hi = n - lo;
+        if hi > lo {
+            let mut stalled: Vec<usize> = Vec::new();
+            for _ in 0..stalls {
+                let idx = lo + (rng.gen::<f64>() * (hi - lo) as f64) as usize;
+                if idx < w.len() && !stalled.contains(&idx) {
+                    // 真机那个点 0.06 m/s；取一个同样量级但不等于它的值
+                    w[idx] = (0.055 + rng.gen::<f64>() * 0.05) * stall_gain;
+                    stalled.push(idx);
+                }
+            }
+            // 停顿点几乎不产生里程（0.06 m/s × 5s = 0.3m，正常是 15m），
+            // 差额摊给其余点。不能回头再跑一次 `fit_capped`——它会把停顿点
+            // 抬回 floor，等于白做，所以这里绕开被停顿的点逐个补。
+            let cur: f64 = w.iter().zip(dts).map(|(a, b)| a * b).sum();
+            let deficit = target_dist - cur;
+            if deficit > 0.0 {
+                let free: Vec<usize> = (0..w.len()).filter(|i| !stalled.contains(i)).collect();
+                if !free.is_empty() {
+                    let add = deficit / free.len() as f64;
+                    for &i in &free {
+                        let dt = dts.get(i).copied().unwrap_or(1.0).max(1e-6);
+                        let cap = caps.get(i).copied().unwrap_or(ceil);
+                        w[i] = (w[i] + add / dt).min(cap);
+                    }
+                }
+            }
+        }
+    }
     w
 }
 
@@ -380,7 +426,7 @@ mod tests {
             .collect();
         let dts = vec![2.0; 199];
         let target = 1000.0;
-        let w = pace_profile(&pts, 2.8, &dts, target, 42, &KinParams::default(), 1.0, 6.0);
+        let w = pace_profile(&pts, 2.8, &dts, target, 42, &KinParams::default(), 1.0, 6.0, 1.0);
         let total: f64 = w.iter().zip(&dts).map(|(v, dt)| v * dt).sum();
         assert!((total - target).abs() < 1.0, "总里程 {total} 偏离目标 {target}");
     }
@@ -391,8 +437,16 @@ mod tests {
             .map(|i| (30.5, 104.0 + i as f64 * 5.0 / m_per_deg_lng(30.5)))
             .collect();
         let dts = vec![2.0; 99];
-        let w = pace_profile(&pts, 2.5, &dts, 500.0, 1, &KinParams::default(), 1.5, 4.0);
+        let w = pace_profile(&pts, 2.5, &dts, 500.0, 1, &KinParams::default(), 1.5, 4.0, 1.0);
+        // 中途停顿点是**有意的例外**：它远远低于 floor（0.06 m/s 那种），
+        // 存在的意义就是把 App 配速图的纵轴撑开，别让主体波动被放大成锯齿。
+        // 真机同样有这种点，所以这里只要求「绝大多数点」落在包络内。
+        let stalled = w.iter().filter(|v| **v < 1.5).count();
+        assert!(stalled <= 2, "{stalled} 个点低于 floor，超出停顿点上限");
         for v in &w {
+            assert!(*v <= 4.0, "速度 {v} 超出上限");
+        }
+        for v in w.iter().filter(|v| **v >= 1.5) {
             assert!((1.5..=4.0).contains(v), "速度 {v} 越界");
         }
     }
@@ -404,7 +458,7 @@ mod tests {
             .map(|i| (30.5, 104.0 + i as f64 * 5.0 / m_per_deg_lng(30.5)))
             .collect();
         let dts = vec![1.5; 299];
-        let w = pace_profile(&pts, 3.0, &dts, 1200.0, 7, &KinParams::default(), 1.0, 6.0);
+        let w = pace_profile(&pts, 3.0, &dts, 1200.0, 7, &KinParams::default(), 1.0, 6.0, 1.0);
 
         // 真·lag-1 自相关：必须显著高于白噪声上界
         let r1 = lag1_autocorr(&w);
@@ -445,7 +499,7 @@ mod tests {
         // σ=0：这条测的是冲刺项本身。σ 拉到真机量级（1.10）之后，噪声
         // 会盖住 12% 的冲刺幅度，测的就不再是冲刺了。
         let kin = KinParams { sigma: 0.0, ..Default::default() };
-        let w = pace_profile(&pts, 2.8, &dts, 2000.0, 11, &kin, 1.0, 8.0);
+        let w = pace_profile(&pts, 2.8, &dts, 2000.0, 11, &kin, 1.0, 8.0, 1.0);
         let n = w.len();
         let mid_avg: f64 = w[n / 3..n * 2 / 3].iter().sum::<f64>() / (n / 3) as f64;
         let tail_avg: f64 = w[n - 20..].iter().sum::<f64>() / 20.0;
@@ -467,7 +521,7 @@ mod tests {
             sigma: 0.0,
             ..Default::default()
         };
-        let w = pace_profile(&pts, 2.8, &dts, 1000.0, 11, &p, 1.0, 8.0);
+        let w = pace_profile(&pts, 2.8, &dts, 1000.0, 11, &p, 1.0, 8.0, 1.0);
         let n = w.len();
         let mid: f64 = w[n / 3..n * 2 / 3].iter().sum::<f64>() / (n / 3) as f64;
         let tail: f64 = w[n - 20..].iter().sum::<f64>() / 20.0;
@@ -480,8 +534,8 @@ mod tests {
             .map(|i| (30.5, 104.0 + i as f64 * 5.0 / m_per_deg_lng(30.5)))
             .collect();
         let dts = vec![2.0; 79];
-        let a = pace_profile(&pts, 2.8, &dts, 400.0, 99, &KinParams::default(), 1.0, 6.0);
-        let b = pace_profile(&pts, 2.8, &dts, 400.0, 99, &KinParams::default(), 1.0, 6.0);
+        let a = pace_profile(&pts, 2.8, &dts, 400.0, 99, &KinParams::default(), 1.0, 6.0, 1.0);
+        let b = pace_profile(&pts, 2.8, &dts, 400.0, 99, &KinParams::default(), 1.0, 6.0, 1.0);
         assert_eq!(a, b);
     }
 }

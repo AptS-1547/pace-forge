@@ -107,6 +107,7 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
         &p.kin,
         p.v_floor,
         p.v_ceil,
+        1.0,
     );
 
     // ② 步频：由 OU 回归到「该速度的目标步频」
@@ -381,7 +382,7 @@ pub fn retime(
     let dt_avg = total_sec as f64 / (n - 1) as f64;
     let dts0 = vec![dt_avg; n - 1];
     let v0 = total_len / total_sec.max(1) as f64;
-    let speeds = pace_profile(points, v0, &dts0, total_len, seed, kin, v_floor, v_ceil);
+    let speeds = pace_profile(points, v0, &dts0, total_len, seed, kin, v_floor, v_ceil, 1.0);
 
     // 由速度反推每段用时，并用最大余数法分配，保证总时长精确。
     //
