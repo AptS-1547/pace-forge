@@ -275,8 +275,11 @@ pub fn pace_profile(
     // 会连成一片），一次 1~2 个，与真机 114 点里那 1 个同量级。
     if n >= 20 && stall_gain > 0.0 {
         let stalls = if rng.gen::<f64>() < 0.65 { 1 } else { 2 };
-        let lo = (n / 20).max(1);
-        let hi = n - lo;
+        // 下界不能只按比例：`submit` 里起步窗口内的点 `v_mps` 被强制 0
+        // （真机前 18 点就是 0），停顿点落进去等于没停——配速写 0，不进极值，
+        // 纵轴照样撑不开。起步窗口约 20 点，所以下界至少 20。
+        let lo = (n / 20).max(20);
+        let hi = n.saturating_sub(10).max(lo + 1);
         if hi > lo {
             let mut stalled: Vec<usize> = Vec::new();
             for _ in 0..stalls {
