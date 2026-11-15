@@ -1306,22 +1306,6 @@ mod nudge_tests {
         dense
     }
 
-    /// 真正的直角拐角：两段各 20m，用来验证「偏离远超过上限就不动」。
-    fn sharp_l() -> Vec<(f64, f64)> {
-        let lat0: f64 = 38.9000;
-        let lon0 = 121.5000;
-        let mlat = 1.0 / 110_540.0;
-        let mlon = 1.0 / (111_320.0 * lat0.to_radians().cos());
-        let mut dense = Vec::new();
-        for i in 0..=20 {
-            dense.push((lat0, lon0 + 20.0 * (i as f64 / 20.0) * mlon));
-        }
-        for i in 1..=20 {
-            dense.push((lat0 + 20.0 * (i as f64 / 20.0) * mlat, lon0 + 20.0 * mlon));
-        }
-        dense
-    }
-
     fn tp(lat: f64, lon: f64, t: i64) -> TrackPoint {
         TrackPoint {
             lat,
