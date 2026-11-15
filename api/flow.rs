@@ -1187,9 +1187,40 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 5 秒一采，相邻点隔 15~31m，中间的拐角全被直线抹掉——画出来就是斜着
     // 切过楼角。这里只在「密折线偏离直线超过 12m」时移动那一个点，绝大多数
     // 段落不动，`ΔtotalTime` 一个都不改。
+    //
+    // 挪点会改变折线里程，而里程自检比的是「折线 vs 报文声明」——两边一起变
+    // 就拦不住。所以这里再加一道兜底：挪完量一次总长，偏差超 1.5% 就整段
+    // 回退。实测没有兜底时 2km/12min 会被顶到 2.64km。
+    let len_of = |p: &[crate::track::TrackPoint]| -> f64 {
+        p.windows(2)
+            .map(|w| {
+                crate::track::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon))
+            })
+            .sum()
+    };
+    let len_before = len_of(&track_points);
+    let snapshot = track_points.clone();
     let nudged = crate::track::nudge_to_corners(&mut track_points, &xy, 12.0);
     if nudged > 0 {
-        log(&format!("[track] 拐角补位：{nudged} 个上报点挪到拐角上"));
+        let len_after = len_of(&track_points);
+        let drift = if len_before > 0.0 {
+            (len_after - len_before).abs() / len_before
+        } else {
+            0.0
+        };
+        if drift > 0.015 {
+            track_points = snapshot;
+            log(&format!(
+                "[track] 拐角补位会改里程 {:.2}%（{} 个点），已整段回退",
+                drift * 100.0,
+                nudged
+            ));
+        } else {
+            log(&format!(
+                "[track] 拐角补位：{nudged} 个上报点挪到拐角上（里程变 {:.2}%）",
+                drift * 100.0
+            ));
+        }
     }
     if clamped > 0 {
         log(&format!(

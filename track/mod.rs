@@ -1233,6 +1233,19 @@ pub fn nudge_to_corners(pts: &mut [TrackPoint], dense: &[(f64, f64)], dev_m: f64
         if i + 1 == pts.len() - 1 {
             continue;
         }
+        // **挪动距离必须设上限**。拐角半径通常十几米，挪得比这多说明最近
+        // 的密折线下标配错了（比如跨了另一圈），那已经不是「补拐角」而是
+        // 「换位置」。里程层面的兜底在 `flow` 里（挪完量总长，偏差 >1.5%
+        // 就整段回退），这里只挡明显离谱的。
+        //
+        // 没有这个上限时实测把 2km/12min 的平均速度从 2.69 m/s 顶到
+        // 3.67 m/s（里程虚增 36%），还制造出 43.9 m/s 的相邻跳变——
+        // 那是比「斜切过楼角」严重得多的问题。
+        let limit = 20.0;
+        let shift = geo::distance((pts[i + 1].lat, pts[i + 1].lon), dense[worst.0]);
+        if shift > limit || shift <= 1e-9 {
+            continue;
+        }
         pts[i + 1].lat = dense[worst.0].0;
         pts[i + 1].lon = dense[worst.0].1;
         moved += 1;
@@ -1273,19 +1286,38 @@ pub fn queue_num(pos: usize, n: usize, startup: usize) -> i32 {
 mod nudge_tests {
     use super::*;
 
-    /// 一条 L 形密折线：先向东 100m，再向北 100m。
-    /// 上报点只有两端，中间那个拐角不在任何采样点上——这正是要修的情况。
-    fn l_shape() -> Vec<(f64, f64)> {
+    /// 一条带拐角的密折线，规模贴近真实：总长 30m（= 两段 5 秒上报间隔），
+    /// 中间向北凸出 8m。真实场景里 5 秒采样的相邻点隔 15m 左右，拐角切掉的
+    /// 就是这种量级——不是几十米的大直角。
+    fn bent_shape() -> Vec<(f64, f64)> {
         let lat0: f64 = 38.9000;
         let lon0 = 121.5000;
         let mlat = 1.0 / 110_540.0; // 1m 的纬度
         let mlon = 1.0 / (111_320.0 * lat0.to_radians().cos());
         let mut dense = Vec::new();
+        // 东向 30m，纬度按 sin(πt) 凸起 8m
+        for i in 0..=30 {
+            let t = i as f64 / 30.0;
+            dense.push((
+                lat0 + 8.0 * (std::f64::consts::PI * t).sin() * mlat,
+                lon0 + 30.0 * t * mlon,
+            ));
+        }
+        dense
+    }
+
+    /// 真正的直角拐角：两段各 20m，用来验证「偏离远超过上限就不动」。
+    fn sharp_l() -> Vec<(f64, f64)> {
+        let lat0: f64 = 38.9000;
+        let lon0 = 121.5000;
+        let mlat = 1.0 / 110_540.0;
+        let mlon = 1.0 / (111_320.0 * lat0.to_radians().cos());
+        let mut dense = Vec::new();
         for i in 0..=20 {
-            dense.push((lat0, lon0 + 100.0 * (i as f64 / 20.0) * mlon));
+            dense.push((lat0, lon0 + 20.0 * (i as f64 / 20.0) * mlon));
         }
         for i in 1..=20 {
-            dense.push((lat0 + 100.0 * (i as f64 / 20.0) * mlat, lon0 + 100.0 * mlon));
+            dense.push((lat0 + 20.0 * (i as f64 / 20.0) * mlat, lon0 + 20.0 * mlon));
         }
         dense
     }
@@ -1300,8 +1332,9 @@ mod nudge_tests {
 
     #[test]
     fn corner_point_is_moved_onto_the_turn() {
-        let dense = l_shape();
-        let (start, corner, end) = (dense[0], dense[20], dense[40]);
+        let dense = bent_shape();
+        let corner = dense[15]; // 凸起点
+        let (start, end) = (dense[0], dense[30]);
         let mlat = 1.0 / 110_540.0;
         let mut pts = vec![
             tp(start.0, start.1, 0),
@@ -1309,7 +1342,7 @@ mod nudge_tests {
             tp(end.0 + 30.0 * mlat, end.1, 10000), // 第三点：让第二点不是末点
         ];
         let before = pts[1];
-        let moved = nudge_to_corners(&mut pts, &dense, 12.0);
+        let moved = nudge_to_corners(&mut pts, &dense, 5.0);
         assert_eq!(moved, 1, "应当移动 1 个点");
         // 时间戳一个都不许动
         assert_eq!(pts[1].time_ms, before.time_ms);
@@ -1322,12 +1355,19 @@ mod nudge_tests {
 
     #[test]
     fn straight_segment_is_left_alone() {
-        let dense = l_shape();
-        // 只取东向那一段（本来就是直线）
-        let straight: Vec<(f64, f64)> = dense[..21].to_vec();
+        let dense = bent_shape();
+        // 一条真正的直线（密折线首尾之间没有弯）
+        let straight: Vec<(f64, f64)> = (0..=30)
+            .map(|i| {
+                (
+                    dense[0].0 + (dense[30].0 - dense[0].0) * (i as f64 / 30.0),
+                    dense[0].1 + (dense[30].1 - dense[0].1) * (i as f64 / 30.0),
+                )
+            })
+            .collect();
         let mut pts = vec![
             tp(straight[0].0, straight[0].1, 0),
-            tp(straight[20].0, straight[20].1, 5000),
+            tp(straight[30].0, straight[30].1, 5000),
         ];
         let before = pts.clone();
         let moved = nudge_to_corners(&mut pts, &straight, 12.0);
@@ -1337,8 +1377,8 @@ mod nudge_tests {
 
     #[test]
     fn last_point_is_never_moved() {
-        let dense = l_shape();
-        let (start, end) = (dense[0], dense[40]);
+        let dense = bent_shape();
+        let (start, end) = (dense[0], dense[30]);
         let mut pts = vec![
             tp(start.0, start.1, 0),
             tp(end.0, end.1, 5000),
@@ -1350,10 +1390,10 @@ mod nudge_tests {
 
     #[test]
     fn degenerate_inputs_are_noops() {
-        let dense = l_shape();
+        let dense = bent_shape();
         let mut one = vec![tp(dense[0].0, dense[0].1, 0)];
         assert_eq!(nudge_to_corners(&mut one, &dense, 12.0), 0);
-        let mut two = vec![tp(dense[0].0, dense[0].1, 0), tp(dense[40].0, dense[40].1, 5000)];
+        let mut two = vec![tp(dense[0].0, dense[0].1, 0), tp(dense[30].0, dense[30].1, 5000)];
         assert_eq!(nudge_to_corners(&mut two, &[], 12.0), 0);
         assert_eq!(nudge_to_corners(&mut two, &dense, 0.0), 0);
         assert_eq!(nudge_to_corners(&mut two, &dense, -1.0), 0);
@@ -1361,11 +1401,11 @@ mod nudge_tests {
 
     #[test]
     fn deviation_below_threshold_is_ignored() {
-        let dense = l_shape();
-        let (start, end) = (dense[0], dense[40]);
+        let dense = bent_shape();
+        let (start, end) = (dense[0], dense[30]);
         let mut pts = vec![tp(start.0, start.1, 0), tp(end.0, end.1, 5000)];
-        // 阈值大到不成立
-        assert_eq!(nudge_to_corners(&mut pts, &dense, 10_000.0), 0);
+        // 阈值大于实际偏离（8m）就不动
+        assert_eq!(nudge_to_corners(&mut pts, &dense, 9.0), 0);
     }
 }
 
