@@ -89,8 +89,9 @@ impl CheatReport {
 
     /// 在 `now` 时刻的状态。
     pub fn status_at(&self, now: i64) -> Status {
-        if self.checked_at_ms <= 0
-            || !(0..FRESH_MS).contains(&now.saturating_sub(self.checked_at_ms))
+        // `now < checked_at` 也要算过期：时钟回拨（或缓存来自"未来"）时
+        // `saturating_sub` 会得到 0，正好落在新鲜区间里，被当成刚查过。
+        if self.checked_at_ms <= 0 || now < self.checked_at_ms || now - self.checked_at_ms >= FRESH_MS
         {
             return Status::Stale;
         }
@@ -214,6 +215,33 @@ pub fn query(
     let report = CheatReport::from_data(&data, crate::crypto::envelope::now_ms() as i64)?;
     log(&format!("[cheat] {}", report.summary()));
     Ok(report)
+}
+
+#[cfg(test)]
+mod clock_skew_tests {
+    use super::*;
+
+    fn report(checked: i64) -> CheatReport {
+        CheatReport {
+            self_info: Value::Null,
+            self_present: true,
+            list: Vec::new(),
+            checked_at_ms: checked,
+        }
+    }
+
+    #[test]
+    fn clock_backwards_is_stale_not_fresh() {
+        // 缓存时间戳在"未来"（时钟回拨过）→ 不能当成刚查过
+        assert_eq!(report(10_000).status_at(5_000), Status::Stale);
+    }
+
+    #[test]
+    fn just_now_is_fresh() {
+        assert_eq!(report(10_000).status_at(10_000), Status::NoRecord);
+        assert_eq!(report(10_000).status_at(10_000 + FRESH_MS - 1), Status::NoRecord);
+        assert_eq!(report(10_000).status_at(10_000 + FRESH_MS), Status::Stale);
+    }
 }
 
 #[cfg(test)]

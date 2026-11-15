@@ -1651,6 +1651,16 @@ pub fn run_full(
     // 三道拦截见 `guard::Guard::check`：上次结果未知 → 拦；时间段重叠 →
     // 拦；不同账号 → 各记各的。
     let mut guard = super::guard::Guard::open(&super::session::data_dir(), &uid)?;
+    // 有别的时段的未知结果时放行（它不影响这一段的判重），但要说一声：
+    // 那条记录可能已经在服务端，用户该去核对。
+    if let Some((ps, pe)) = guard.pending_range() {
+        log(&format!(
+            "! [guard] 另有 {} ~ {} 的提交结果未知（与本次不重叠，不影响提交）。\
+             建议到运动记录页核对那条是否入账。",
+            super::guard::fmt_ms(ps),
+            super::guard::fmt_ms(pe)
+        ));
+    }
     guard.begin(&uuid, start_ms, stop_ms)?;
     log(&format!(
         "[guard] 台账已记 pending（{} ~ {}），提交中…",

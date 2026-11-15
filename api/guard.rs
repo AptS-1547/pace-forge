@@ -174,14 +174,32 @@ impl Guard {
             .map(|a| (a.start_ms, a.stop_ms))
     }
 
+    /// 与给定时间段**重叠**的未知结果尝试。
+    ///
+    /// 「结果未知」只在**同一段时间**才有害：那种情况再发一次会产生两条
+    /// 时间重叠的记录，物理上不可能（一个人不能在同一段时间里跑两次）。
+    /// 不同时间段的新提交跟它没有关系，拦下来只会把人卡死——上次 pending
+    /// 是昨天的，今天照样该能跑。
+    pub fn pending_overlapping(&self, start_ms: i64, stop_ms: i64) -> Option<(i64, i64)> {
+        // 半开区间重叠：起点落在对方内部，或终点落在对方内部，或完整包住。
+        let overlap = |a: &Attempt| start_ms < a.stop_ms && stop_ms > a.start_ms;
+        self.attempts
+            .iter()
+            .filter(|a| a.outcome.is_none() && overlap(a))
+            .map(|a| (a.start_ms, a.stop_ms))
+            .next()
+    }
+
     /// 提交前检查：本轮能不能发。
     pub fn check(&self, start_ms: i64, stop_ms: i64) -> Result<(), String> {
         if start_ms <= 0 || stop_ms <= start_ms {
             return Err("提交时间范围无效".into());
         }
-        if let Some((ps, pe)) = self.pending_range() {
+        // 只有**时间重叠**的未知结果才拦。不同时间段的新提交跟它无关，
+        // 一刀切拦死会让一次超时把账号永久卡住。
+        if let Some((ps, pe)) = self.pending_overlapping(start_ms, stop_ms) {
             return Err(format!(
-                "上次提交（{} ~ {}）结果未知，已阻止新的提交。\
+                "这段时间（{} ~ {}）上次提交结果未知，已阻止重复提交。\
                  未查到不代表未入账——请先到运动记录页刷新核对，确认没入账再重来。",
                 fmt_ms(ps),
                 fmt_ms(pe)
@@ -232,7 +250,7 @@ impl Guard {
 }
 
 /// 台账里的毫秒时间戳转成人能读的 `MM-DD HH:MM`（本地时区）。
-fn fmt_ms(ms: i64) -> String {
+pub(crate) fn fmt_ms(ms: i64) -> String {
     if ms <= 0 {
         return "未知".into();
     }
@@ -316,13 +334,34 @@ mod tests {
     }
 
     #[test]
-    fn pending_blocks_next_submission() {
+    fn overlapping_pending_blocks_submission() {
         let d = tmpdir("pending");
         let mut g = Guard::open(&d, "u1").unwrap();
         g.begin("uuid-a", T0, T0 + H).unwrap();
-        // 换一个完全不重叠的时间段也必须拦住——未知结果的影响面是整个账号
-        let err = g.check(T0 + 10 * H, T0 + 11 * H).unwrap_err();
+        // 同一段时间：再发一次会产生两条时间重叠的记录，必须拦。
+        let err = g.check(T0 + H / 2, T0 + H * 2).unwrap_err();
         assert!(err.contains("结果未知"), "实际: {err}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 不同时间段的未知结果**不该**拦住新提交。
+    ///
+    /// 拦它的理由只有「同一段时间不能跑两次」；昨天那次 pending 跟今天这段
+    /// 没有关系，一刀切会让人卡死到手动删台账。
+    #[test]
+    fn non_overlapping_pending_allows_submission() {
+        let d = tmpdir("pending_far");
+        let mut g = Guard::open(&d, "u1").unwrap();
+        g.begin("uuid-a", T0, T0 + H).unwrap();
+        assert!(g.check(T0 + 10 * H, T0 + 11 * H).is_ok(), "不重叠就该放行");
+        // 但「有未核对的结果」这件事仍然成立，调用方据此提示。
+        assert!(g.has_pending());
+        assert_eq!(g.pending_overlapping(T0 + 10 * H, T0 + 11 * H), None);
+        assert_eq!(
+            g.pending_overlapping(T0, T0 + H),
+            Some((T0, T0 + H)),
+            "重叠时要能报出是哪个时间段"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -367,7 +406,10 @@ mod tests {
         }
         let g = Guard::open(&d, "u1").unwrap();
         assert!(g.has_pending(), "重启后必须仍认为上次结果未知");
-        assert!(g.check(T0 + 5 * H, T0 + 6 * H).is_err());
+        // 同一段时间仍然拦
+        assert!(g.check(T0, T0 + H).is_err());
+        // 不同时间段放行——崩溃留下的 pending 不该变成永久锁
+        assert!(g.check(T0 + 5 * H, T0 + 6 * H).is_ok());
         let _ = std::fs::remove_dir_all(&d);
     }
 
