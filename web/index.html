@@ -642,6 +642,14 @@ $('planBtn').onclick = async () => {
       <div class="kv"><span>时间桶</span><b>${r.bucketCount}</b></div>
       <div class="kv"><span>平均步频</span><b>${(r.avgCadence ?? 0).toFixed(1)} 步/分</b></div>
       <div class="kv"><span>步数自相关</span><b>${acTxt}</b></div>
+      ${(() => {
+        // 实际走的支路。请求里选「操场绕圈」不代表真绕成操场——打卡点不像
+        // 操场时算法会退回路线规划，不显示出来用户会以为自己跑的是标准跑道。
+        if (!r.trackMode) return '';
+        const m = { stadium: '操场绕圈', route: '围栏路线', draw: '手绘轨迹' }[r.trackMode] || r.trackMode;
+        const warn = r.stadiumFallback;
+        return `<div class="kv"><span>实际路线</span><b class="${warn ? 'err' : 'ok'}">${m}${warn ? '（操场判定失败，已退回路线规划）' : ''}</b></div>`;
+      })()}
       <div class="kv"><span>自检</span><b class="${r.blocked ? 'err' : 'ok'}">${r.issueSummary}</b></div>
       ${issueHtml}
       ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:#8b949e">流程日志（${r.logs.length} 条）</summary><pre class="mono" style="font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}

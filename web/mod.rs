@@ -686,6 +686,8 @@ fn handle_plan(
                     "checkpointPassed": passed,
                     "coords": coords,
                     "mode": "online",
+                    "trackMode": o.track_mode,
+                    "stadiumFallback": o.stadium_fallback,
                     "policy": {
                         "minDistance": o.policy.min_distance,
                         "validTime": o.policy.valid_time,
@@ -719,6 +721,10 @@ fn handle_plan(
     let mode = body["mode"].as_str().unwrap_or("free");
     let lane = body["lane"].as_i64().unwrap_or(1).clamp(1, 8) as u8;
 
+    // 离线预览用的是**固定尺寸**的标准跑道（`STRAIGHT` + `lane_radius`），
+    // 而以你填的坐标当圆心。真正提交时走的是 `try_stadium_track`——拿打卡点
+    // 反推场心、尺寸、朝向。两者不是同一条线，所以离线预览只能当「大概长这
+    // 样」看；要看真轨迹得连上服务端（在线模式会跑一次 dry_run）。
     let (xy, _planner_len) = if mode == "stadium" {
         let spec = crate::track::StadiumSpec::new(lat, lng).with_lane(lane);
         let lap = crate::track::lap_length(lane);
@@ -889,6 +895,9 @@ fn handle_plan(
         "checkpoints": track.checkpoints.len(),
         "coords": coords,
         "mode": mode,
+        // 离线预览不是真实提交的几何：操场模式这里画的是固定尺寸标准跑道，
+        // 在线提交时是从打卡点反推的椭圆。前端据此提示一句。
+        "preview": true,
         "lane": lane,
         "avgCadence": (sim.avg_cadence * 10.0).round() / 10.0,
         "stepAutocorr": (ac * 1000.0).round() / 1000.0,

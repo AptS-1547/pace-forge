@@ -512,6 +512,11 @@ pub struct RunOutcome {
     /// 自检与提交共用同一份。早先 probe 传的是空数组，于是 `type=2` 的打卡
     /// 标记与 `fivePointJson` 的 `isFixed` 只有上传那份才有——自检守着另一份报文。
     pub fixed: Vec<super::submit::FixedPoint>,
+    /// 轨迹实际走的支路：`"stadium"` 操场绕圈 / `"route"` 围栏路线 /
+    /// `"draw"` 手绘。
+    pub track_mode: &'static str,
+    /// 请求了操场绕圈但判定「打卡点不像操场」而回退到路线规划。
+    pub stadium_fallback: bool,
 }
 
 /// 只做到自检为止（不发任何写请求）。
@@ -735,9 +740,14 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 采用，连围栏内缩和打卡点吸附都不做——点位已经在用户画的线上了。
     // 记分跑优先尝试操场绕圈。`None` 表示打卡点外框不像操场（散在校园
     // 各处），自动回退到下面的路线规划——不是所有学校都绕操场跑。
+    // 请求了操场却没成，必须让界面知道（`stadium_fallback`），否则用户以为
+    // 自己跑的是标准跑道，实际走的是绕楼路线。
+    let mut stadium_fallback = false;
     let oval: Option<Vec<(f64, f64)>> = if p.run_mode == 1 {
         let seed0 = if p.seed != 0 { p.seed } else { start_ms as u64 };
-        try_stadium_track(&cps, p.distance_m, p.sample_step_m, seed0, log)
+        let got = try_stadium_track(&cps, p.distance_m, p.sample_step_m, seed0, log);
+        stadium_fallback = got.is_none();
+        got
     } else {
         None
     };
@@ -750,7 +760,12 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 只有围栏支路会算这份（操场/手绘/无围栏都没有障碍数据）。
     let mut blockers_used: Vec<Vec<(f64, f64)>> = Vec::new();
 
+    // 实际走了哪条支路。请求里的 `run_mode` 只是「想走操场」，能不能真绕成
+    // 操场还要看打卡点像不像操场（`try_stadium_track` 会拒），所以界面必须
+    // 显示**实际**结果，否则用户只知道「我选了操场」，不知道退回了路线规划。
+    let mut track_mode: &'static str = "route";
     let track = if let Some(custom) = p.custom_path.as_ref().filter(|v| v.len() >= 2) {
+        track_mode = "draw";
         log(&format!("[track] 采用手绘轨迹 {} 个控制点", custom.len()));
         // 不传 must：手绘的整条价值就是用户自己控制形状，把没画到的点位
         // 强行插进去只会在原地拉出几百米的跳变（GEO_JUMP），把线撕烂。
@@ -838,6 +853,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             actual_length_m: actual,
         }
     } else if let Some(pts) = oval {
+        track_mode = "stadium";
         // 操场绕圈：打卡点在跑道上，椭圆天然穿过它们；时间戳先按均匀分配，
         // 后面 retime 会按速度模型重排，这里只需要一个合法初值。
         let n = pts.len();
@@ -1158,6 +1174,20 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             ));
         }
     }
+    // ⑤.7 吸附把邻居拉开了就压回来。
+    //
+    // 上一步的 `nudge_to` 是按 1/(k+1) 衰减平移的，挪完没复查间距：原本贴着
+    // 上限的（6.3 m/s × 5s = 31.5m）再被拉开就成了 38.7m / 7.74 m/s，超了
+    // 服务端的单点速度上限，App 上是一条斜穿场地的直线。这里只动非打卡点。
+    let pinned: Vec<usize> = snap.items.iter().filter(|s| s.shifted).map(|s| s.index).collect();
+    let max_gap = crate::api::submit::MAX_POINT_SPEED_MPS * crate::track::SAMPLE_INTERVAL_SEC;
+    let clamped = crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
+    if clamped > 0 {
+        log(&format!(
+            "√ [snap] 吸附后 {clamped} 处相邻间距超过 {max_gap:.1}m（{:.1} m/s 上限），已压回",
+            crate::api::submit::MAX_POINT_SPEED_MPS
+        ));
+    }
     // 压平后点都落在原折线上，弧长总和几乎不变，但报文的 totalDis 必须
     // 与 `allLocJson` 末点的 totalDis 同源，所以在这里重算一次。
     // 吸附改过坐标，这一次重算同时把吸附引起的几米变化算进去。
@@ -1424,6 +1454,8 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         record_id: None,
         submission_points: probe_sub.points,
         fixed,
+        track_mode,
+        stadium_fallback,
     })
 }
 

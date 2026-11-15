@@ -1070,6 +1070,59 @@ pub fn snap_checkpoints(pts: &mut [TrackPoint], cps: &[(f64, f64)]) -> SnapRepor
     rep
 }
 
+/// 吸附之后把「被拉开的相邻间距」压回限值内。
+///
+/// `snap_checkpoints` 会把采样点挪到打卡点上、邻居按 1/(k+1) 一起平移。挪完
+/// **没有复查间距**——原本已经贴着上限的间隔（`v_ceil × dt`，6.3 m/s × 5s =
+/// 31.5m）再被两侧各拉开几米，就成了 38.7m / 7.74 m/s：
+///
+///   · 服务端 `detect` 有速度上限判据，超了判异常；
+///   · App 详情页按点序连线，这一段在图上是一条斜穿场地的直线。
+///
+/// 修正时**不碰打卡点自己**（那是 `CP_MISS` 的唯一保障），只把另一端拉近。
+/// 代价是那个邻居点偏离路径几米，比「速度超限 + 图上一条斜线」划算。
+///
+/// 返回被修正的段数。
+pub fn clamp_sample_gaps(pts: &mut [TrackPoint], pinned: &[usize], max_gap_m: f64) -> usize {
+    if pts.len() < 2 || max_gap_m <= 0.0 {
+        return 0;
+    }
+    let is_pinned = |i: usize| pinned.contains(&i);
+    let mut fixed = 0usize;
+    // 要迭代：压一段会让邻居那段的间距变大（点被拽过来），一轮扫完还剩超限的。
+    // 实测 38.69m 一轮只到 33.82m，三轮落到 31.5m。
+    for _ in 0..6 {
+        let mut round = 0usize;
+        for i in 0..pts.len() - 1 {
+            let a = (pts[i].lat, pts[i].lon);
+            let b = (pts[i + 1].lat, pts[i + 1].lon);
+            let gap = geo::distance(a, b);
+            if gap <= max_gap_m || gap <= 1e-9 {
+                continue;
+            }
+            // 两端怎么分配修正量：打卡点不动，另一端全担；都不是就各让一半。
+            let (wa, wb) = match (is_pinned(i), is_pinned(i + 1)) {
+                (true, true) => continue, // 两点都被钉住，动不了，交给服务端判
+                (true, false) => (0.0, 1.0),
+                (false, true) => (1.0, 0.0),
+                (false, false) => (0.5, 0.5),
+            };
+            let pull = (gap - max_gap_m) / gap;
+            let (dlat, dlon) = ((b.0 - a.0) * pull, (b.1 - a.1) * pull);
+            pts[i].lat += dlat * wa;
+            pts[i].lon += dlon * wa;
+            pts[i + 1].lat -= dlat * wb;
+            pts[i + 1].lon -= dlon * wb;
+            round += 1;
+        }
+        fixed += round;
+        if round == 0 {
+            break;
+        }
+    }
+    fixed
+}
+
 /// 排队序号 `queueNum`：真机起步段恒 0，之后**固定步长的 floor 分区**从 1 到 24。
 ///
 /// 真机（`raw_points` 114 点 / `speed_json` 55 桶，rrid 1328288734）不是按位置
@@ -1837,6 +1890,78 @@ mod checkpoint_hit_tests {
         );
         // 吸附不能改变点数（否则等于偷偷换了采样节奏）
         assert_eq!(track.len(), pipeline(&cps, 2000.0, 700, 2026, false).unwrap().0.len());
+    }
+}
+
+#[cfg(test)]
+mod gap_clamp_tests {
+    //! 吸附打卡点后把被拉开的间距压回速度上限。
+
+    use super::*;
+
+    fn tp(lat: f64, lon: f64) -> TrackPoint {
+        TrackPoint { lat, lon, time_ms: 0 }
+    }
+
+    /// 沿 lat 走的一条直线，`n` 个点、间距 `step_m`。
+    fn line(n: usize, step_m: f64) -> Vec<TrackPoint> {
+        let mlat = geo::M_PER_DEG_LAT;
+        (0..n)
+            .map(|i| tp(47.38 + (i as f64 * step_m) / mlat, 123.95))
+            .collect()
+    }
+
+    #[test]
+    fn clamps_oversized_gap_without_moving_pinned_point() {
+        // 3 个点，中间那个被吸附挪远：0→1 变成 38.7m（真机实测那个数）
+        let mut pts = line(3, 15.0);
+        let mlat = geo::M_PER_DEG_LAT;
+        pts[1].lat += 23.7 / mlat;
+        let before = geo::distance((pts[0].lat, pts[0].lon), (pts[1].lat, pts[1].lon));
+        assert!((before - 38.7).abs() < 0.5, "夹具不成立：间距 {before:.2}m");
+
+        let pinned = [1usize];
+        let fixed = clamp_sample_gaps(&mut pts, &pinned, 31.5);
+        assert!(fixed > 0, "超限的段必须被处理");
+
+        let after = geo::distance((pts[0].lat, pts[0].lon), (pts[1].lat, pts[1].lon));
+        assert!(after <= 31.6, "间距没压回去：{after:.2}m");
+        // 打卡点自己一格都不能动（动了就是 CP_MISS）。它原本在 15m 处，
+        // 被夹具挪远 23.7m，所以期望位置是 38.7m 那一点。
+        let want = 47.38 + (15.0 + 23.7) / mlat;
+        assert!(
+            (pts[1].lat - want).abs() < 1e-9,
+            "被钉住的打卡点被挪了：{} vs {want}",
+            pts[1].lat
+        );
+    }
+
+    #[test]
+    fn leaves_normal_gaps_alone() {
+        let mut pts = line(5, 14.0);
+        let before: Vec<(f64, f64)> = pts.iter().map(|p| (p.lat, p.lon)).collect();
+        let fixed = clamp_sample_gaps(&mut pts, &[], 31.5);
+        assert_eq!(fixed, 0, "正常间距不该被改");
+        for (i, p) in pts.iter().enumerate() {
+            assert_eq!((p.lat, p.lon), before[i], "第 {i} 点被无故移动");
+        }
+    }
+
+    #[test]
+    fn iterates_until_neighbours_converge() {
+        // 连续两段都超限：压第一段会把点拽向第二段，必须迭代才收敛
+        let mut pts = line(3, 15.0);
+        let mlat = geo::M_PER_DEG_LAT;
+        pts[1].lat += 20.0 / mlat;
+        pts[2].lat += 20.0 / mlat;
+        clamp_sample_gaps(&mut pts, &[], 31.5);
+        for i in 0..2 {
+            let g = geo::distance(
+                (pts[i].lat, pts[i].lon),
+                (pts[i + 1].lat, pts[i + 1].lon),
+            );
+            assert!(g <= 31.6, "第 {i} 段仍有 {g:.2}m，没收敛");
+        }
     }
 }
 
