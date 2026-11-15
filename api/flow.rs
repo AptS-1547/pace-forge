@@ -1094,6 +1094,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         }
         None => (1.0, 8.0),
     };
+    // ⓹.4 主体配速预检（判定逻辑见 `body_pace_note`）。
+    if let Some(note) = body_pace_note(p.distance_m, p.duration_sec, pol.pace_range) {
+        log(&note);
+    }
+
     let xy: Vec<(f64, f64)> = track.points.iter().map(|q| (q.lat, q.lon)).collect();
     // 采样点在弧长空间就对齐到打卡点（详见 `track::sample_by_time`）：
     // 5 秒网格的相邻点可以差 20m 以上，事后再靠吸附瞬移会扯出大间隔。
@@ -1502,6 +1507,62 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
 /// 完整流程：自检通过后上传明细并提交成绩。
 ///
 /// `confirm` 返回 false 时在提交前中止，已上传的 OBS 对象保留（不影响）。
+/// 主体配速提示。返回 `None` 表示不用提示。
+///
+/// **为什么要单独算主体配速**：起步窗口是「占时长但不产里程」的——
+/// `startup_sec` 秒里几乎不动，剩下的时间必须把全部里程跑完。所以真正
+/// 发出去的逐点配速是**主体配速**，不是「距离/时长」那个平均值，两者能
+/// 差半分钟以上。
+///
+/// 这个差别决定一条记录看起来红不红：学校区间 5'00"~10'00" 时，平均
+/// 5'47" 听着合规，主体却是 4'57" —— 已经在上界外面，整条线全红。生成
+/// 过程里原本没有任何地方会把这件事说出来。
+///
+/// 只提示，不改参数：距离和时长是用户选的，主体配速是它们的数学结果。
+pub fn body_pace_note(
+    distance_m: f64,
+    duration_sec: i64,
+    pace_range: Option<(f64, f64)>,
+) -> Option<String> {
+    let (pa, pb) = pace_range?;
+    if !distance_m.is_finite() || distance_m <= 0.0 || duration_sec <= 0 {
+        return None;
+    }
+    let (fast, slow) = (pa.min(pb), pa.max(pb));
+    if !(fast.is_finite() && slow.is_finite()) || slow <= 0.0 {
+        return None;
+    }
+    let startup = crate::track::startup_sec(duration_sec).max(0) as f64;
+    let run_sec = (duration_sec as f64 - startup).max(1.0);
+    let body_pace = 1_000.0 / (60.0 * (distance_m / run_sec));
+    let fmt = |m: f64| {
+        let mm = m.floor() as i64;
+        let ss = ((m - mm as f64) * 60.0).round() as i64;
+        format!("{mm}'{ss:02}\"")
+    };
+    // 距边界的余量（秒/公里）；负数是已经越界。
+    let margin_fast = (body_pace - fast) * 60.0;
+    let margin_slow = (slow - body_pace) * 60.0;
+    let worst = margin_fast.min(margin_slow);
+    if worst < 0.0 {
+        let side = if margin_fast < 0.0 { "快于下界" } else { "慢于上界" };
+        return Some(format!(
+            "! [pace] 主体配速 {} {}（区间 {}~{}，起步窗口 {}s 不产里程）——逐点几乎全部会标红，建议把时长调长或距离调短。",
+            fmt(body_pace), side, fmt(fast), fmt(slow), startup as i64
+        ));
+    }
+    if worst < 40.0 {
+        return Some(format!(
+            "! [pace] 主体配速 {} 距区间边界只有 {:.0} 秒（区间 {}~{}）——正常的逐点波动就会越过边界标红，建议留出 1 分钟以上余量。",
+            fmt(body_pace), worst, fmt(fast), fmt(slow)
+        ));
+    }
+    Some(format!(
+        "[pace] 主体配速 {}（区间 {}~{}，余量 {:.0} 秒）",
+        fmt(body_pace), fmt(fast), fmt(slow), worst
+    ))
+}
+
 pub fn run_full(
     client: &Client,
     p: &RunParams,
@@ -1985,6 +2046,63 @@ pub fn upload_detail(
     }
     log(&format!("√ [obs] {ok}/{} 个 key 上传成功", keys.len()));
     Ok(keys)
+}
+
+#[cfg(test)]
+mod body_pace_tests {
+    use super::body_pace_note;
+
+    /// 已经越界：2km/11min 的主体配速约 4'35"，快于 5'00" 下界。
+    #[test]
+    fn too_fast_body_is_flagged() {
+        let note = body_pace_note(2000.0, 660, Some((5.0, 10.0))).unwrap();
+        assert!(note.contains("快于下界"), "{note}");
+    }
+
+    /// 2km/16min：主体 7'12"，落在区间中央，不该报警。
+    #[test]
+    fn central_body_is_not_warned() {
+        let note = body_pace_note(2000.0, 960, Some((5.0, 10.0))).unwrap();
+        assert!(note.starts_with("[pace] 主体配速"), "{note}");
+        assert!(!note.starts_with('!'), "不该是警告：{note}");
+    }
+
+    /// 贴边：2km/12min 的主体配速是 5'04"，距 5'00" 下界只有 4 秒。
+    /// 这就是用户那张图「在 5' 线上反复穿越」的直接成因。
+    #[test]
+    fn hugging_the_edge_warns() {
+        let note = body_pace_note(2000.0, 720, Some((5.0, 10.0))).unwrap();
+        assert!(note.starts_with("! [pace]"), "{note}");
+        assert!(note.contains("距区间边界只有"), "{note}");
+        assert!(note.contains("5'04"), "应报出主体配速，实际 {note}");
+    }
+
+    /// 太慢：主体超过上界。
+    #[test]
+    fn too_slow_body_is_flagged() {
+        let note = body_pace_note(2000.0, 1500, Some((5.0, 10.0))).unwrap();
+        assert!(note.contains("慢于上界"), "{note}");
+    }
+
+    #[test]
+    fn no_policy_means_no_note() {
+        assert!(body_pace_note(2000.0, 720, None).is_none());
+    }
+
+    #[test]
+    fn degenerate_inputs_are_silent() {
+        assert!(body_pace_note(0.0, 720, Some((5.0, 10.0))).is_none());
+        assert!(body_pace_note(2000.0, 0, Some((5.0, 10.0))).is_none());
+        assert!(body_pace_note(2000.0, 720, Some((0.0, 0.0))).is_none());
+    }
+
+    /// 区间上下界写反了也要能认（`speedTop` / `speedBottom` 语义不保证）。
+    #[test]
+    fn reversed_range_is_normalized() {
+        let a = body_pace_note(2000.0, 720, Some((5.0, 10.0))).unwrap();
+        let b = body_pace_note(2000.0, 720, Some((10.0, 5.0))).unwrap();
+        assert_eq!(a, b);
+    }
 }
 
 #[cfg(test)]
