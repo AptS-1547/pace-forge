@@ -262,17 +262,27 @@ pub fn inspect(c: &Check) -> Report {
             format!("步数分桶和 {step_sum} ≠ totalSteps {}", c.total_steps),
         ));
     }
-    // 空桶：连续多个 10 秒完全没位移，服务端会判定为静止
-    let empty = c
-        .sim
-        .speed_buckets
-        .iter()
-        .filter(|b| b.distance < 0.5)
-        .count();
-    if empty > 0 {
+    // 空桶：**连续多个** 10 秒完全没位移，服务端才会判定为静止。
+    //
+    // 早先的写法是 `filter(<0.5).count()`，单个空桶就报警——真机 114 点里
+    // 本来就有十几处零位移（起步窗口 + 中途站着看手机），对着真机数据跑这个
+    // 检查也会一路响，属于自己吓自己。何况中途停顿点是有意注入的：它把
+    // App 配速图的纵轴撑开，作用恰恰是「像真机」。注释写着「连续多个」，
+    // 代码就该按连续算。
+    let mut run = 0usize;
+    let mut worst = 0usize;
+    for b in &c.sim.speed_buckets {
+        if b.distance < 0.5 {
+            run += 1;
+            worst = worst.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    if worst >= 2 {
         issues.push(Issue::warn(
             "BUCKET_EMPTY",
-            format!("{empty} 个速度桶位移不足 0.5m，接近静止"),
+            format!("连续 {worst} 个速度桶位移不足 0.5m，接近静止"),
         ));
     }
 

@@ -143,7 +143,10 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
     // 早先这里只按「全程 1.1%」给预算，2km 路线 23 个窗口点只分到 8.2m
     // （0.36m/点），整数化后大量点差值为 0 → 配速 0 → App 把 0 当作「无
     // 数据」不画点，**开头两分半整条线是断的**，比配速准确度问题显眼得多。
-    let min_per_point = k as f64 * 4.0;
+    // 每点 0.9m：真机起步窗口 18 点走 13.6m（0.76m/点），换算 0.15~0.18 m/s
+    // ≈ 92~111 分/km。取 0.9 是让整数米化之后绝大多数点差值 ≥1，配速图
+    // 那条线才连得上，同时不至于慢到 400 分/km。
+    let min_per_point = k as f64 * 0.9;
     let mut cluster = (total_len * STARTUP_DIST_RATIO - step_est)
         .max(total_len * 0.002)
         .max(min_per_point);
@@ -233,7 +236,10 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
         if err.abs() <= total_len * 0.0005 {
             break;
         }
-        let next = (cluster + err).clamp(total_len * 0.0005, total_len * 0.05);
+        // 下限用 min_per_point：收敛的目标是「首段里程 1.1%」，但它会把
+        // cluster 一路压回 ~8m，窗口内每点又只剩 0.36m，配速图开头重新断线。
+        // 两个目标冲突时，用户看得见的那条线优先——首段里程是内部指标。
+        let next = (cluster + err).clamp(min_per_point, total_len * 0.05);
         if (next - cluster).abs() < 1e-6 {
             break;
         }
@@ -242,7 +248,7 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
         want.clear();
         for i in 0..k {
             let t = i as f64 / denom_in;
-            want.push(cluster * t.powf(1.5));
+            want.push(cluster * t);
         }
         for &a in &arc[k..n] {
             let f = if span_out > 1e-9 {
@@ -1863,12 +1869,12 @@ mod checkpoint_hit_tests {
             "首段时长 {}s 与 15.5% 的 {want_first}s 差超过 2 秒",
             dur_of(&segs[0])
         );
-        // ⑤ 首段里程 ≈ 1.1% 总里程（±30%）
+        // ⑤ 首段里程上界 5%（真机 1.1%，理由见 `submit` 同名断言：
+        // 窗口内每点必须 ≥0.9m，否则整数米化后配速图开头断线）
         let first_dis = segs[0]["distance"].as_f64().unwrap();
         assert!(
-            (first_dis - last_dis * 0.011).abs() <= last_dis * 0.011 * 0.3,
-            "首段 {first_dis:.1}m 偏离 1.1% 基准 {:.1}m 超过 30%",
-            last_dis * 0.011
+            first_dis <= last_dis * 0.05,
+            "首段 {first_dis:.1}m 超过总里程 5%"
         );
     }
 
