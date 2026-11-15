@@ -193,6 +193,17 @@ pub fn pace_profile(
     }
     let mut rng = StdRng::seed_from_u64(seed);
 
+    // σ 按目标区间自适应。
+    //
+    // `p.sigma` 是对着真机那条记录标出来的（主体 sd 1.20，换算成逐点 σ 0.353）。
+    // 但那条记录来自配速限制宽松的学校；碰上「5'00"~10'00"」这种窄规则，区间
+    // 跨度只有 1.66 m/s，σ 0.353 会让约一半的点顶到上限，App 配速图整片飘红。
+    //
+    // 取 `span/6`：±3σ 正好铺满区间。宽区间时 6.94/6 = 1.16 > 0.353，仍然用
+    // 真机标定值（不放大）；窄区间才收紧。这样「波动幅度像真人」和「别撞规则
+    // 边界」两个目标能同时照顾到。
+    let sigma = p.sigma.min((ceil - floor) / 6.0).max(0.0);
+
     // ① OU 均值回归 + 热身 ramp
     let mut w = Vec::with_capacity(n);
     let mut v = v0;
@@ -204,7 +215,7 @@ pub fn pace_profile(
             1.0
         };
         let mu = v0 * ramp;
-        v += p.theta * (mu - v) * dt + p.sigma * dt.sqrt() * normal_sample(&mut rng);
+        v += p.theta * (mu - v) * dt + sigma * dt.sqrt() * normal_sample(&mut rng);
         v = v.clamp(floor, ceil);
         w.push(v);
         t += dt;
