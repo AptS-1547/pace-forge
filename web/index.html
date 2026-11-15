@@ -7,17 +7,40 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
-.msg.warn{color:#f5b942}
-.ok{color:#22d3a6}
+.msg.warn{color:var(--warn)}
+.ok{color:var(--ok)}
   :root {
+    /* 色板：中性底 + 单一强调色。
+       强调色只用于「主行动」（生成轨迹 / 添加 / 定位），
+       语义色（ok / bad）只用于状态文字与标签，不做按钮铺底——
+       之前一屏里同时出现蓝、青绿、绿、红四种实心按钮，视觉上像调色板。 */
     --bg: #0f1115; --panel: #171a21; --panel2: #1f232c;
-    --line: #2a2f3a; --fg: #e6e8ec; --dim: #8b93a1;
-    --ok: #3fb950; --bad: #f85149; --accent: #4493f8;
+    --line: #2a2f3a; --fg: #e6e8ec; --dim: #8b93a1; --dim2: #7d8694;
+    --ok: #3fb950; --bad: #f85149; --warn: #d29922; --accent: #4a9eff;
+    /* 危险色只有一处用途：不可逆动作（真的跑）。其余红色都是 --bad 状态文字 */
+    --danger: #b4231c; --danger-hi: #d32f26;
+    /* 输入框底色，比 panel2 再深一档，让控件从面板里浮出来 */
+    --input: #121620;
+    --accent-dim: rgba(74,158,255,.14);
+    --line-soft: #21262d;
+
+    /* 间距（4 基准，只允许这几档） */
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s6: 24px; --s8: 32px;
+    /* 圆角：卡片 12、控件 8、胶囊 999 */
+    --r-card: 12px; --r-ctl: 8px; --r-pill: 999px;
+    /* 字号 */
+    --t-xs: 11px; --t-sm: 12px; --t-base: 13px; --t-md: 14px; --t-lg: 16px; --t-xl: 19px;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  /* 声明深色方案：滚动条、原生控件、自动填充底色才会跟着变深，
+     否则深色面板里混一条亮色滚动条。 */
+  html { color-scheme: dark; scrollbar-gutter: stable; }
+  ::selection { background: var(--accent-dim); }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
-    font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font: var(--t-md)/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
   a { color: var(--accent); }
   .wrap {
@@ -29,36 +52,62 @@
 
   /* ---- 登录 ---- */
   #login {
-    max-width: 380px; margin: 12vh auto; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 12px; padding: 32px 28px;
+    max-width: 380px; margin: 10vh auto; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r-card); padding: var(--s8) var(--s6);
   }
-  #login h1 { font-size: 19px; margin: 0 0 6px; font-weight: 600; }
-  #login p.sub { color: var(--dim); font-size: 13px; margin: 0 0 24px; }
-  .field { margin-bottom: 14px; }
-  .field label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+  #login h1 { font-size: var(--t-xl); margin: 0 0 4px; font-weight: 700; letter-spacing: -.01em; }
+  #login p.sub { color: var(--dim); font-size: var(--t-base); margin: 0 0 var(--s6); }
+  /* 版本号挪到卡片底部：原来贴在标题下面且是 #30363d，对比度 1.6:1，等于不存在 */
+  #login .mark { margin: 2px 0 0; font-size: var(--t-xs); color: var(--dim2); font-family: var(--font-mono); }
+  #btn { width: 100%; min-height: 44px; }
+  .field { margin-bottom: var(--s4); }
+  .field label { display: block; font-size: var(--t-sm); color: var(--dim); margin-bottom: 6px; letter-spacing: .02em; }
   input {
-    width: 100%; padding: 10px 12px; background: var(--panel2); color: var(--fg);
-    border: 1px solid var(--line); border-radius: 8px; font-size: 14px; outline: none;
+    width: 100%; padding: 0 12px; height: 40px; background: var(--panel2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: var(--t-md);
+    font-family: inherit; outline: none; transition: border-color .15s ease, box-shadow .15s ease;
   }
-  input:focus { border-color: var(--accent); }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  /* 按钮只有一套语义：强调色＝主行动，danger＝不可逆动作，ghost＝次要。
+     默认不铺满整行（原来 width:100% 让每个按钮都变成一条色带）。 */
   button {
-    width: 100%; padding: 11px; background: var(--accent); color: #fff; border: 0;
-    border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+    width: auto; min-height: 38px; padding: 9px 16px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--accent); color: #fff; border: 1px solid transparent;
+    border-radius: var(--r-ctl); font-size: var(--t-md); font-weight: 600;
+    font-family: inherit; line-height: 1.2; white-space: nowrap;
+    cursor: pointer; transition: filter .15s ease, transform .12s ease, background .15s ease, border-color .15s ease;
   }
-  button:disabled { opacity: .55; cursor: not-allowed; }
-  .msg { font-size: 13px; margin-top: 14px; min-height: 20px;
-         white-space: pre-line; line-height: 1.55; }
-  .msg.warn { color:#f5b942; border-color:#5a4a1e; background:#2a2416; }
-.msg.err { color: var(--bad); max-height: 40vh; overflow-y: auto; }
+  button:hover:not(:disabled) { filter: brightness(1.12); }
+  button:active:not(:disabled) { transform: scale(.985); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .5; cursor: not-allowed; transform: none; filter: none; }
+
+  /* 进行中：文字前挂一个转圈，宽度不跳。JS 加/删这个 class。 */
+  .busy { position: relative; }
+  .busy::before {
+    content: ''; width: 12px; height: 12px; flex: none;
+    border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
+    animation: spin .7s linear infinite; opacity: .8;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .msg { font-size: var(--t-base); margin-top: var(--s3); min-height: 20px;
+         white-space: pre-line; line-height: 1.55; color: var(--dim); }
+  /* 警告原来只有字色，没有边框和底色却有 border-color，看着像漏了半条样式 */
+  .msg.warn { color: var(--warn); background: rgba(210,153,34,.09);
+    border: 1px solid rgba(210,153,34,.28); border-radius: var(--r-ctl); padding: 8px 10px; }
+.msg.err { color: #ffb4ad; background: rgba(248,81,73,.07);
+    border: 1px solid rgba(248,81,73,.22); border-radius: var(--r-ctl); padding: 8px 10px;
+    max-height: 40vh; overflow-y: auto; }
   .anchor-icon { pointer-events: none; }
   .anchor-cross { width: 20px; height: 20px; margin: 0 auto; position: relative; }
   .anchor-cross::before, .anchor-cross::after {
-    content: ''; position: absolute; background: #f5b942; box-shadow: 0 0 3px #000;
+    content: ''; position: absolute; background: var(--warn); box-shadow: 0 0 3px #000;
   }
   .anchor-cross::before { left: 9px; top: 0; width: 2px; height: 20px; }
   .anchor-cross::after { top: 9px; left: 0; height: 2px; width: 20px; }
   .anchor-label {
-    font-size: 11px; color: #f5b942; text-align: center; margin-top: 1px;
+    font-size: var(--t-xs); color: var(--warn); text-align: center; margin-top: 1px;
     text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap;
   }
   .msg.ok { color: var(--ok); }
@@ -66,87 +115,121 @@
   /* ---- 主界面 ---- */
   #app { display: none; }
   .topbar {
-    display: flex; align-items: center; gap: 14px; padding-bottom: 18px;
-    border-bottom: 1px solid var(--line); margin-bottom: 20px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: var(--s3); padding-bottom: var(--s4);
+    border-bottom: 1px solid var(--line); margin-bottom: var(--s4); flex-wrap: wrap;
   }
   .avatar {
     width: 40px; height: 40px; border-radius: 50%; background: var(--accent);
-    display: grid; place-items: center; font-weight: 700; color: #fff;
+    display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 15px; flex: none;
   }
   .who { flex: 1; min-width: 180px; }
-  .who b { font-size: 15px; }
-  .who div { color: var(--dim); font-size: 12px; }
+  .who b { font-size: 15px; font-weight: 600; }
+  .who div { color: var(--dim); font-size: var(--t-sm); }
+  /* 构建号：原来是硬编码字符串 + #30363d（对比度 1.6:1，等于看不见）。
+     改成运行时从 /api/health 取版本，颜色提到可读的 --dim。 */
+  #buildTag {
+    position: fixed; right: 8px; bottom: 6px; z-index: 999;
+    font-family: var(--font-mono); font-size: var(--t-xs); color: var(--dim);
+    background: rgba(15,17,21,.86); padding: 2px 7px; border-radius: 5px;
+    pointer-events: none; letter-spacing: .01em;
+  }
   /* 账号行：名字永远单行省略，别被右边那排按钮挤成竖排 */
   .accname { min-width: 0; }
   .accname b, .accname .hint {
     display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .ghost {
-    width: auto; padding: 7px 14px; background: transparent; color: var(--dim);
-    border: 1px solid var(--line); font-weight: 400; font-size: 13px;
-  }
-  .ghost:hover { color: var(--fg); border-color: var(--dim); }
 
-  .grid { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 20px; align-items: start; }
+  .grid { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: var(--s4); align-items: start; }
   /* grid 项默认 min-width:auto，Leaflet 地图这类绝对尺寸内容会把列撑破，
      表现就是「上面的卡片和下面的地图宽度对不上」。 */
   .grid > * { min-width: 0; }
 
   #map { height: 42vh; min-height: 300px; background: #0b0d11; width: 100%; }
-  #detail { padding: 14px 16px; font-size: 13px; }
-  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; }
-  .kv span:nth-child(odd) { color: var(--dim); }
-  .hint { color: var(--dim); font-size: 12px; padding: 0 16px 14px; }
-  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  #detail { padding: 14px var(--s4); font-size: var(--t-base); }
+  .hint { color: var(--dim); font-size: var(--t-sm); padding: 0 var(--s4) 14px; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: var(--t-sm); }
   .spin {
     width: 15px; height: 15px; border: 2px solid var(--line); border-top-color: var(--accent);
     border-radius: 50%; animation: sp .7s linear infinite; display: inline-block; vertical-align: -2px;
   }
   @keyframes sp { to { transform: rotate(360deg); } }
+  /* 系统开了「减少动态效果」时，转圈保留但不再持续旋转，其余过渡降为瞬时 */
+  @media (prefers-reduced-motion: reduce) {
+    .spin, .busy::before { animation: none; }
+    *, *::before, *::after { transition-duration: .01ms !important; }
+  }
 
-.runform { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
-.runform label { display: flex; flex-direction: column; font-size: 12px; color: #93a4b8; gap: 4px; }
-.runform input { width: 84px; padding: 7px 9px; background: #0e141c; border: 1px solid #223041;
-  border-radius: 7px; color: #e6edf3; font-size: 14px; }
-.runform button { padding: 8px 16px; background: #22d3a6; color: #06121a; border: 0;
-  border-radius: 7px; font-weight: 600; cursor: pointer; height: 36px; }
-.runform button:disabled { opacity: .5; cursor: default; }
+.runform { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: flex-end; margin-bottom: var(--s3); }
+.runform label { display: flex; flex-direction: column; font-size: var(--t-xs); color: var(--dim);
+  gap: 5px; letter-spacing: .02em; }
+/* label 不许被同行其他控件挤扁——「最低/最高」两个 64px 的框原来被压成
+   28px，placeholder 直接竖排成两行。宁可整行换行。 */
+.runform > label { flex: 0 0 auto; }
+.runform label span > input { flex: none; }
+.runform input { width: 84px; height: 38px; padding: 0 10px; background: var(--input); border: 1px solid var(--line);
+  border-radius: var(--r-ctl); color: var(--fg); font-size: var(--t-md); font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; }
+.runform input:focus, .runform select:focus { border-color: var(--accent); outline: none;
+  box-shadow: 0 0 0 3px var(--accent-dim); }
+/* 按钮不再单独配色：继承全局强调色，只统一高度 */
+.runform > button { min-height: 38px; }
 /* 复选框不是文本输入框：`.runform input { width:84px; padding:7px 9px }` 会把
    checkbox 也撑成一个大方块，深色主题下就是个突兀的蓝色大勾。
    带复选框的那一行单独走横排。 */
 .runform label.chkline { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; }
 .runform input[type="checkbox"] {
   width: 17px; height: 17px; padding: 0; margin: 0; flex: none;
-  accent-color: #22d3a6; cursor: pointer;
+  accent-color: var(--accent); cursor: pointer;
 }
 /* 下拉框之前一条样式都没有，浏览器直接给白底黑字，在深色面板上是一块
    刺眼的白。跟输入框同一套配色；箭头自己画，因为 appearance:none 之后
    原生的三角也没了。 */
 .runform select {
-  padding: 7px 30px 7px 9px; background-color: #0e141c; color: #e6edf3;
-  border: 1px solid #223041; border-radius: 7px; font-size: 14px; height: 36px;
+  padding: 8px 30px 8px 10px; background-color: var(--input); color: var(--fg);
+  border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: var(--t-md);
+  height: 38px; font-family: inherit;
   -webkit-appearance: none; appearance: none; cursor: pointer;
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238b93a1' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 10px center;
 }
-.runform select:focus { border-color: #4493f8; outline: none; }
-.runform select option { background: #0e141c; color: #e6edf3; }
-.planout { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 14px; }
+.runform select option { background: var(--input); color: var(--fg); }
+/* 结果区原来贴着卡片边缘，加内边距；空的时候整块收掉不留白条 */
+.planout { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s2) var(--s4); padding: var(--s3) var(--s4); }
 .planout:empty { display: none; }
-.kv { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0;
-  border-bottom: 1px solid #161f2b; }
-.kv span { color: #7d8ea3; }
-.kv b { color: #e6edf3; font-weight: 600; }
-.kv b.mono { font-family: ui-monospace, monospace; font-size: 11px; }
-.planout .note { grid-column: 1/-1; margin-top: 8px; font-size: 12px; color: #6b7c91; }
-button.mini{padding:3px 8px;font-size:11px;line-height:1.6}
-button.mini:disabled{opacity:.35}
-button.danger{background:#dc2626;border-color:#dc2626;color:#fff}
-button.danger:hover{background:#b91c1c}
-button.danger:disabled{opacity:.5}
-button.primary{background:#238636;border-color:#2ea043;color:#fff}
-button.primary:hover{background:#2ea043}
-button.primary:disabled{opacity:.5}
+.kv { display: flex; justify-content: space-between; gap: var(--s3); font-size: var(--t-base);
+  padding: 5px 0; border-bottom: 1px solid var(--line-soft); }
+.kv span { color: var(--dim); }
+.kv b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.kv b.mono { font-family: var(--font-mono); font-size: var(--t-xs); }
+.planout .note { grid-column: 1/-1; margin-top: var(--s2); font-size: var(--t-sm); color: var(--dim2); }
+.planout .hint { padding: 0; grid-column: 1/-1; }
+
+/* ---- 按钮变体 ---- */
+button.mini { min-height: 0; padding: 4px 9px; font-size: var(--t-xs); line-height: 1.5; border-radius: 6px; }
+button.mini:disabled { opacity: .35; }
+button.ghost { background: transparent; color: var(--dim);
+  border: 1px solid var(--line); font-weight: 500; }
+button.ghost:hover:not(:disabled) { color: var(--fg); border-color: var(--dim); background: var(--panel2); filter: none; }
+/* primary 与默认按钮同色：强调色只有一种 */
+button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+/* danger 只用于不可逆动作，全站只有「真的跑」一个 */
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color: var(--danger-hi); filter: none; }
+
+/* ---- 主行动条：两个按钮并排，不再是四条横向色带 ---- */
+.actionbar {
+  display: flex; gap: var(--s3); margin-top: var(--s4); padding-top: var(--s4);
+  border-top: 1px solid var(--line-soft);
+  flex: 1 1 100%;   /* 它是 .runform 的子项，不占满整行就只剩按钮自身宽度 */
+}
+.actionbar button { flex: 1 1 0; min-height: 46px; font-size: 15px; }
+
+/* 账号行的手机号/密码：桌面端跟「添加」并排，窄屏由 560 断点整行摊开 */
+.accrow-inputs > input { flex: 1 1 150px; width: auto; min-width: 0; }
+/* 经纬度框：118px 能完整放下「留空=用围栏」，窄屏由下面断点改成整行。
+   选择器要压过 `.runform input`，所以带一层 .runform。 */
+.runform .coord-input { width: 118px; }
 
   /* ================= 响应式 =================
      三档断点：宽屏笔记本 / 平板竖屏 / 手机。
@@ -165,6 +248,10 @@ button.primary:disabled{opacity:.5}
     #map { height: 50vh; min-height: 280px; }
     #list { max-height: 44vh; }
     .planout { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    /* 平板宽度也不够把「时长自动 + 配速换算」塞进配速那一行 */
+    .runform label.chkline { flex: 1 1 100%; }
+    /* 单列时内容一路到底，固定在右下角的版本号会压在按钮/地图上 */
+    #buildTag { display: none; }
   }
 
   /* 手机 */
@@ -180,8 +267,9 @@ button.primary:disabled{opacity:.5}
     .who { flex: 1 1 calc(100% - 44px); min-width: 0; }
     .who b, .who div { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .who b { font-size: 14px; }
-    /* 三个操作按钮均分第二行，拇指够得着，不用横向找 */
-    .topbar .ghost { flex: 1 1 30%; padding: 9px 6px; font-size: 12px; }
+    /* 三个操作按钮均分第二行，拇指够得着，不用横向找。高度直接给 44，
+       不依赖 pointer:coarse —— 手机上接鼠标/桌面窄窗也得是同一个手感 */
+    .topbar .ghost { flex: 1 1 30%; padding: 9px 6px; font-size: 12px; min-height: 44px; }
 
     #map { height: 46vh; min-height: 230px; }
     #list { max-height: 38vh; }
@@ -191,10 +279,30 @@ button.primary:disabled{opacity:.5}
     .rec .r2 { gap: 8px; font-size: 11px; }
 
     /* 表单：输入框独占一行，按钮排成一行三等分 */
-    .runform { gap: 6px; }
-    .runform input { flex: 1 1 100%; width: 100%; height: 42px; }
-    .runform button { flex: 1 1 28%; height: 42px; padding: 0 8px; }
-    .kv { gap: 3px 10px; }
+    .runform { gap: var(--s2); }
+    .runform input { flex: 0 0 44px; width: 100%; height: 44px; }
+    .runform select { height: 44px; }
+    .runform button { flex: 1 1 28%; min-height: 44px; padding: 0 8px; }
+    .kv { gap: var(--s1) 10px; }
+
+    /* 账号行的两个输入框原来被内联 flex:1;min-width:120px 钉死在 120px，
+       390px 屏上手机号只看得到 8 位。窄屏一律整行。 */
+    .accrow-inputs > input { flex: 1 1 100%; width: 100%; min-width: 0; height: 44px; }
+    /* 添加是主行动，整行；两个次要比肩并排 */
+    #accAdd { flex: 1 1 100%; min-height: 44px; }
+    .accrow-inputs > button.ghost { flex: 1 1 calc(50% - var(--s1)); min-height: 44px; }
+
+    /* 经纬度框改成整行，placeholder 不再被截成「留空=用围」。
+       只改 input 的 width 没用——它的父 label 是 flex 项，宽度吃内容，
+       所以要把 label 本身撑满一行。 */
+    #locWrap > label { flex: 1 1 100%; }
+    .runform .coord-input { width: 100%; }
+    /* 「时长自动」连同右侧的配速换算说明一起独占一行，别和时长/步数挤三列 */
+    .runform label.chkline { flex: 1 1 100%; }
+
+    /* 两个主行动在手机上竖排：先「生成轨迹」再「真的跑」，危险按钮压在最下面 */
+    .actionbar { flex-direction: column; gap: var(--s2); }
+    .actionbar button { flex: none; width: 100%; min-height: 48px; }
 
     /* 5 个按钮固定约 200px，名字容器 flex:1 会被一直压——实测被挤到
        26px，一个汉字一行。小屏让按钮换行到第二排，名字独占一整行。 */
@@ -207,13 +315,12 @@ button.primary:disabled{opacity:.5}
     .accrow button.mini { flex: 1 1 30%; min-width: 0; padding: 7px 4px; }
   }
 
-  /* 触摸设备：交付面积比屏幕宽度更重要，一律放宽到 42px 以上 */
+  /* 触摸设备：交付面积比屏幕宽度更重要，一律放宽到 44px 以上 */
   @media (hover: none) and (pointer: coarse) {
-    button:not(.mini):not(.ghost) { min-height: 42px; }
-    button.ghost { min-height: 40px; }
-    button.mini { min-height: 34px; padding: 7px 11px; font-size: 12px; }
+    button:not(.mini) { min-height: 44px; }
+    button.mini { min-height: 36px; padding: 7px 11px; font-size: var(--t-sm); }
     /* 16px 是 iOS Safari 的免缩放阈值，低于它一聚焦就放大页面 */
-    input, select { min-height: 42px; font-size: 16px; }
+    input, select { min-height: 44px; font-size: 16px; }
     .rec { padding-top: 13px; padding-bottom: 13px; }
     .leaflet-container { -webkit-tap-highlight-color: transparent; }
   }
@@ -232,28 +339,36 @@ button.primary:disabled{opacity:.5}
     #list { max-height: 60vh; }
   }
 
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
+    overflow: hidden; box-shadow: 0 1px 0 rgba(255,255,255,.02) inset;
+  }
   /* 一级卡片一律铺满父容器。原来没写，靠 block 默认撑满；显式声明一次，
      免得哪个面板被 max-width 或内容宽度影响，跟上下的卡片宽度对不上。 */
   #app > .panel { width: 100%; max-width: none; box-sizing: border-box; }
   #app > .grid { width: 100%; box-sizing: border-box; }
+  /* 分区标题：原来 13px 正文色，和正文同级，扫视时找不到段落边界。
+     抬成小号全大写式的分隔带——字号不变但加权重、提亮、加宽字距。 */
   .panel h2 {
-    font-size: 13px; font-weight: 600; color: var(--dim); margin: 0;
-    padding: 14px 16px; border-bottom: 1px solid var(--line); letter-spacing: .3px;
+    font-size: var(--t-sm); font-weight: 700; color: var(--fg); margin: 0;
+    padding: 13px var(--s4); border-bottom: 1px solid var(--line);
+    letter-spacing: .06em; background: rgba(255,255,255,.012);
+    display: flex; align-items: baseline; gap: var(--s2);
   }
+  .panel h2 .hint { padding: 0; font-size: var(--t-xs); }
   /* 轨迹显隐开关。单独一行 flex，不塞进标题里——标题高度随字号变，
      复选框尺寸又跟系统设置走，塞进去早晚错位。 */
   .trackbar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
-    padding: 9px 16px; border-bottom: 1px solid var(--line);
-    font-size: 12px; color: var(--dim);
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--s4);
+    padding: 10px var(--s4); border-bottom: 1px solid var(--line);
+    font-size: var(--t-sm); color: var(--dim);
   }
   .trackbar label {
-    display: inline-flex; align-items: center; gap: 6px;
+    display: inline-flex; align-items: center; gap: 7px;
     cursor: pointer; user-select: none;
   }
   .trackbar input {
-    accent-color: #22d3a6; cursor: pointer; margin: 0;
+    accent-color: var(--accent); cursor: pointer; margin: 0;
     width: 15px; height: 15px; flex: none;
   }
   #list { max-height: 62vh; overflow-y: auto; }
@@ -261,10 +376,11 @@ button.primary:disabled{opacity:.5}
     padding: 12px 16px; border-bottom: 1px solid var(--line); cursor: pointer;
   }
   .rec:hover { background: var(--panel2); }
+  .rec:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .rec.sel { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
   .rec .r1 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .rec .dist { font-size: 16px; font-weight: 600; }
-  .rec .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; white-space: nowrap; }
+  .rec .tag { font-size: var(--t-xs); padding: 2px 7px; border-radius: var(--r-pill); white-space: nowrap; }
   .tag.ok { background: rgba(63,185,80,.15); color: var(--ok); }
   .tag.bad { background: rgba(248,81,73,.15); color: var(--bad); }
   .rec .r2 { color: var(--dim); font-size: 12px; margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
@@ -275,7 +391,20 @@ button.primary:disabled{opacity:.5}
   }
   .rec:hover .rid { opacity: 1; }
   .rec .rid:hover { color: var(--accent); text-decoration: underline; }
-  .empty { padding: 30px 16px; text-align: center; color: var(--dim); font-size: 13px; }
+  .empty { padding: 22px 16px; text-align: center; color: var(--dim); font-size: var(--t-base); }
+
+  /* 多账号选择页。原来是内联拼的一张卡片：底色 #0d1117 是全站第六种背景，
+     圆角 14 不在刻度上；按钮是 inline-flex 居中，账号名和 UID 被并排挤成一行。 */
+  #picker { position: fixed; inset: 0; z-index: 1000; padding: 20px; overflow: auto;
+    background: rgba(15,17,21,.94); }
+  .pick-card { margin: auto; max-width: 420px; width: 100%; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r-card); padding: var(--s6); }
+  .pick-card h1 { margin: 0 0 4px; font-size: var(--t-xl); font-weight: 700; }
+  .pick-card p.sub { margin: 0 0 var(--s4); font-size: var(--t-base); color: var(--dim); }
+  .pick-item { width: 100%; flex-direction: column; align-items: flex-start; gap: 2px;
+    text-align: left; padding: 12px 14px; margin-bottom: var(--s2); height: auto; }
+  .pick-item b { font-size: var(--t-md); }
+  .pick-item .sub2 { font-size: var(--t-xs); color: var(--dim); font-variant-numeric: tabular-nums; }
 
 
 </style>
@@ -285,7 +414,6 @@ button.primary:disabled{opacity:.5}
 <!-- 登录 -->
 <div id="login">
   <h1>运动世界校园</h1>
-  <p style="font-size:10px;color:#30363d;font-family:monospace;margin:0">9077a37 · 11-06 09:34</p>
   <p class="sub">登录后查看跑步记录与轨迹</p>
   <div class="field">
     <label>手机号</label>
@@ -297,6 +425,7 @@ button.primary:disabled{opacity:.5}
   </div>
   <button id="btn">登录并保存</button>
   <div class="msg" id="msg"></div>
+  <p class="mark" id="loginTag">本地控制台</p>
 </div>
 
 <div id="picker" style="display:none"></div>
@@ -304,8 +433,8 @@ button.primary:disabled{opacity:.5}
 <!-- 主界面 -->
 <div id="app" class="wrap">
   <div class="topbar">
-    <span id="buildTag" title="构建版本" style="position:fixed;right:6px;bottom:4px;font-size:10px;color:#30363d;font-family:monospace;z-index:999">9077a37 · 11-06 09:34</span>
-    <div class="avatar" id="ava">·</div>
+    <span id="buildTag" title="构建版本">本地控制台</span>
+    <div class="avatar" id="ava" aria-hidden="true">·</div>
     <div class="who">
       <b id="uname">—</b>
       <div id="uinfo">—</div>
@@ -317,10 +446,10 @@ button.primary:disabled{opacity:.5}
 
   <div class="panel" id="accPanel">
     <h2>账号 <span id="accCount" class="hint" style="font-weight:400"></span></h2>
-    <div id="accList"><div class="hint">加载中…</div></div>
-    <div class="runform" style="margin-top:12px;padding-top:12px;border-top:1px solid #21262d">
-      <input id="accUser" type="tel" placeholder="手机号" style="flex:1;min-width:120px">
-      <input id="accPass" type="password" placeholder="密码" style="flex:1;min-width:120px">
+    <div id="accList"><div class="empty"><span class="spin"></span> 读取账号…</div></div>
+    <div class="runform accrow-inputs" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft)">
+      <input id="accUser" type="tel" placeholder="手机号" aria-label="手机号">
+      <input id="accPass" type="password" placeholder="密码" aria-label="密码">
       <button id="accAdd">添加</button>
       <button class="ghost" id="accLoginAll">全部登录</button>
       <button class="ghost" id="accBatch">批量刷</button>
@@ -330,7 +459,7 @@ button.primary:disabled{opacity:.5}
 
   <div class="panel" id="semPanel">
     <h2>记分跑 · 学期进度</h2>
-    <div id="semOut" class="planout"><div class="hint">点右上「查学期」加载</div></div>
+    <div id="semOut" class="planout"><div class="hint">点顶部「查学期」加载</div></div>
   </div>
 
   <div class="panel" id="runPanel">
@@ -370,7 +499,8 @@ button.primary:disabled{opacity:.5}
         <span id="durHint" class="hint"></span>
       </label>
       <label>时长 分<input id="rDur" type="number" value="12" step="0.1" min="3" max="180" readonly></label>
-      <label>步数<input id="rSteps" type="number" step="10" min="100" placeholder="留空按配速自动推算"></label>
+      <label>步数<input id="rSteps" type="number" step="10" min="100" placeholder="自动"
+        title="留空则按配速区间推算步数，一般不用填"></label>
       <label>何时跑<select id="rWhen">
         <option value="now">现在</option>
         <option value="at">指定时刻</option>
@@ -391,9 +521,9 @@ button.primary:disabled{opacity:.5}
         <span id="drawInfo" class="hint" style="margin-left:8px"></span>
       </div>
       <div id="locWrap" style="flex-basis:100%;display:flex;gap:8px;align-items:flex-end;
-           flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1b2430">
-        <label style="margin:0">纬度<input id="llLat" type="number" step="0.000001" placeholder="留空用围栏" style="width:118px"></label>
-        <label style="margin:0">经度<input id="llLng" type="number" step="0.000001" placeholder="留空用围栏" style="width:118px"></label>
+           flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft)">
+        <label style="margin:0">纬度<input id="llLat" class="coord-input" type="number" step="0.000001" placeholder="留空=用围栏" aria-label="纬度"></label>
+        <label style="margin:0">经度<input id="llLng" class="coord-input" type="number" step="0.000001" placeholder="留空=用围栏" aria-label="经度"></label>
         <label style="margin:0">坐标来自<select id="llCoord">
           <option value="gcj02">高德 / 腾讯</option>
           <option value="bd09">百度</option>
@@ -413,8 +543,10 @@ button.primary:disabled{opacity:.5}
         <button id="blockSave" class="ghost">保存禁区</button>
         <span id="blockInfo" class="hint"></span>
       </div>
-      <button id="planBtn">生成轨迹</button>
-      <button id="runBtn" class="danger">真的跑（提交）</button>
+      <div class="actionbar">
+        <button id="planBtn" type="button">生成轨迹</button>
+        <button id="runBtn" class="danger" type="button">真的跑（提交）</button>
+      </div>
     </div>
     <div id="planOut" class="planout"></div>
   </div>
@@ -422,7 +554,7 @@ button.primary:disabled{opacity:.5}
   <div class="grid">
     <div class="panel">
       <h2>跑步记录</h2>
-      <div id="list"><div class="empty">加载中…</div></div>
+      <div id="list"><div class="empty"><span class="spin"></span> 加载记录…</div></div>
     </div>
     <div>
       <div class="panel">
@@ -432,7 +564,7 @@ button.primary:disabled{opacity:.5}
           <label><input type="checkbox" id="showRec" checked> 记录轨迹</label>
         </div>
         <div id="map"></div>
-        <div id="detail" class="hint">选择左侧一条记录查看轨迹</div>
+        <div id="detail" class="hint">点一条记录看轨迹</div>
       </div>
     </div>
   </div>
@@ -442,12 +574,31 @@ button.primary:disabled{opacity:.5}
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 const $ = id => document.getElementById(id);
+/* 地图和 Canvas 上的颜色也要走令牌，但 Leaflet 是把 color 写进 SVG 的属性里，
+   那里 var() 不生效，所以在运行期把令牌解析成真实色值再传进去。 */
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const api = async (url, opt) => {
   const r = await fetch(url, opt);
   const j = await r.json();
   if (!j.ok) throw new Error(j.error || '请求失败');
   return j.data;
 };
+/* 按钮进入/退出「进行中」态：禁用 + 转圈，避免连点重复提交 */
+const busy = (btn, on) => { if (btn) { btn.classList.toggle('busy', on); btn.disabled = on; } };
+
+/* 构建号：从 /api/health 取真实版本号。
+   原来这里写死 `9077a37 · 11-06 09:34`，早就和 HEAD 对不上了。
+   纯静态预览（没起服务）时请求会失败，保持「本地控制台」不变。 */
+(async () => {
+  try {
+    const r = await fetch('/api/health', { cache: 'no-store' });
+    const j = await r.json();
+    const v = j && (j.version || (j.data && j.data.version));
+    if (!v) return;
+    const text = `v${v} · 本地控制台`;
+    ['buildTag', 'loginTag'].forEach(id => { const el = $(id); if (el) el.textContent = text; });
+  } catch (_) { /* 无后端：留默认文案 */ }
+})();
 
 /* ---------- 登录 ---------- */
 $('btn').onclick = async () => {
@@ -592,7 +743,7 @@ $('planBtn').onclick = async () => {
   if (!(dist > 0) || !(dur > 0)) return setOut('距离和时长要填正数', true);
 
   const btn = $('planBtn');
-  btn.disabled = true;
+  busy(btn, true);
   setOut('生成中…');
   try {
     const r = await api('/api/plan', {
@@ -652,13 +803,13 @@ $('planBtn').onclick = async () => {
       })()}
       <div class="kv"><span>自检</span><b class="${r.blocked ? 'err' : 'ok'}">${r.issueSummary}</b></div>
       ${issueHtml}
-      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:#8b949e">流程日志（${r.logs.length} 条）</summary><pre class="mono" style="font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}
+      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim)">流程日志（${r.logs.length} 条）</summary><pre class="mono" style="font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}
       <div class="note">${r.note}</div>`;
     drawPreview(r.coords, r.fence, r.checkpoints);
   } catch (e) {
     setOut(e.message, true);
   } finally {
-    btn.disabled = false;
+    busy(btn, false);
   }
 };
 /* ---------- 记分跑：学期进度 ---------- */
@@ -688,8 +839,8 @@ $('semBtn').onclick = async () => {
         <div class="kv"><span>目标</span><b>${(target/1000).toFixed(1)} km / ${g.targetCount || 0} 次</b></div>
         <div class="kv"><span>还差</span><b class="${pct >= 100 ? 'ok' : 'warn'}">${Math.max(0, (target-done)/1000).toFixed(2)} km</b></div>
         <div class="kv"><span>学期剩余</span><b class="${g.daysLeft < 7 ? 'err' : ''}">${g.daysLeft >= 0 ? g.daysLeft + ' 天' : '已结束'}</b></div>
-        <div style="margin-top:10px;height:8px;background:#21262d;border-radius:4px;overflow:hidden">
-          <div style="width:${pct}%;height:100%;background:${pct>=100?'#22c55e':'#22d3a6'}"></div>
+        <div style="margin-top:10px;height:8px;background:var(--line-soft);border-radius:4px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${pct>=100?'var(--ok)':'var(--accent)'}"></div>
         </div>
         <div class="hint" style="margin-top:6px">完成 ${pct.toFixed(1)}%</div>
       ` : '<div class="hint" style="margin-top:8px">未取到学期目标</div>'}
@@ -714,7 +865,7 @@ $('runBtn').onclick = async () => {
   if (!confirm(`确认提交 ${modeName}：${dist} km / ${dur} 分钟？\n时间：${when}\n\n提交后 10 分钟内不能再跑。`)) return;
 
   const btn = $('runBtn');
-  btn.disabled = true;
+  busy(btn, true);
   setOut('提交中，别关页面…');
   try {
     const r = await api('/api/run', {
@@ -747,13 +898,13 @@ $('runBtn').onclick = async () => {
       <div class="kv"><span>步数</span><b>${r.steps}</b></div>
       <div class="kv"><span>步频</span><b>${(r.cadence||0).toFixed(1)} 步/分</b></div>
       <div class="kv"><span>明细 key</span><b>${r.obsKeys || 0} 个已上传</b></div>
-      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:#8b949e">流程日志</summary><pre class="mono" style="font-size:11px;max-height:240px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}`;
+      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim)">流程日志</summary><pre class="mono" style="font-size:11px;max-height:240px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}`;
     loadRecords();
   } catch (e) {
     setOut(e.message, true);
     $('planOut').innerHTML = `<div class="msg err">提交失败</div><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">${e.message}</pre>`;
   } finally {
-    btn.disabled = false;
+    busy(btn, false);
   }
 };
 
@@ -798,9 +949,9 @@ function drawPreview(coords, fence, checkpoints) {
   const fring = fenceRing(fence);
   if (fring.length >= 3) {
     const poly = L.polygon(fring, {
-      color: '#f59e0b', weight: 2, fillOpacity: 0.05, dashArray: '6 4'
+      color: tok('--warn'), weight: 2, fillOpacity: 0.05, dashArray: '6 4'
     }).bindPopup('围栏：' + fence.name +
-      (fenceIsGcj(fence) ? '' : '<br><span style="color:#f85149">坐标系未转换，可能整体偏移</span>'));
+      (fenceIsGcj(fence) ? '' : '<br><span style="color:var(--danger)">坐标系未转换，可能整体偏移</span>'));
     group.addLayer(poly);
   }
 
@@ -810,7 +961,7 @@ function drawPreview(coords, fence, checkpoints) {
   if (trackLayer) { map.removeLayer(trackLayer); trackLayer = null; }
   if (coords && coords.length) {
     trackLayer = L.layerGroup();
-    L.polyline(coords, { color: '#22d3a6', weight: 4, opacity: 0.9 }).addTo(trackLayer);
+    L.polyline(coords, { color: tok('--accent'), weight: 4, opacity: 0.9 }).addTo(trackLayer);
     if ($('showTrack') && $('showTrack').checked) trackLayer.addTo(map);
   }
 
@@ -826,7 +977,7 @@ function drawPreview(coords, fence, checkpoints) {
       // 那条路进来时没有轨迹可比）。把 null 说成「未经过」是错的判断，
       // 用户会以为点位被算法漏掉了。
       const known = c.passed === true || c.passed === false;
-      const color = c.passed === true ? '#22c55e' : (c.passed === false ? '#ef4444' : '#8b949e');
+      const color = c.passed === true ? tok('--ok') : (c.passed === false ? tok('--danger') : tok('--dim'));
       const state = c.passed === true ? '✓ 轨迹经过'
         : (c.passed === false ? `✗ 未经过（最近 ${c.nearest}m）` : '未生成轨迹，无法判断是否经过');
       group.addLayer(L.circleMarker(ll, {
@@ -848,7 +999,7 @@ function drawPreview(coords, fence, checkpoints) {
   if (anchor) {
     const ag = toGcj02(anchor.lat, anchor.lng, anchor.coord);
     group.addLayer(L.circleMarker(ag, {
-      radius: 9, color: '#a855f7', fillColor: '#a855f7', fillOpacity: .35, weight: 3,
+      radius: 9, color: tok('--fg'), fillColor: tok('--fg'), fillOpacity: .18, weight: 3,
     }).bindPopup('你指定的中心点（' + anchor.coord.toUpperCase() + ' 数值）'));
   }
 
@@ -876,24 +1027,24 @@ function renderAccounts(r) {
   $('accCount').textContent = `${r.count} 个 · ${r.ready} 个就绪`;
   const list = $('accList');
   if (!r.accounts || !r.accounts.length) {
-    list.innerHTML = '<div class="hint">还没有账号，下面添加一个</div>';
+    list.innerHTML = '<div class="empty">还没有账号 · 在下面填手机号和密码，点「添加」</div>';
     return;
   }
   list.innerHTML = r.accounts.map(a => {
-    const dot = a.loggedIn ? '#22c55e' : (a.enabled ? '#f59e0b' : '#6b7280');
+    const dot = a.loggedIn ? 'var(--ok)' : (a.enabled ? 'var(--warn)' : 'var(--dim)');
     const state = a.loggedIn ? '已登录'
       : (a.hasPassword ? (a.enabled ? '待登录' : '已停用') : '无密码');
-    return `<div class="accrow" data-id="${a.id}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #161b22${a.current ? ';background:#161b22;border-radius:6px;padding-left:8px' : ''}">
+    return `<div class="accrow" data-id="${a.id}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft)${a.current ? ';background:var(--panel2);border-radius:6px;padding-left:8px' : ''}">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex:none"></span>
       <div class="accname" style="flex:1;min-width:0">
-        <b style="font-size:13px">${a.label}${a.current ? ' <span style="color:#22d3a6;font-size:11px">当前</span>' : ''}</b>
+        <b style="font-size:13px">${a.label}${a.current ? ' <span style="color:var(--accent);font-size:11px">当前</span>' : ''}</b>
         <div class="hint" style="font-size:11px">${a.username} · ${a.school || '—'} · ${state}</div>
       </div>
       <button class="ghost mini" data-act="switch"  data-id="${a.id}" ${a.current ? 'disabled' : ''}>切换</button>
       <button class="ghost mini" data-act="login"   data-id="${a.id}" ${a.hasPassword ? '' : 'disabled'}>重登</button>
       <button class="ghost mini" data-act="logout"  data-id="${a.id}" ${a.loggedIn ? '' : 'disabled'}>退出</button>
       <button class="ghost mini" data-act="toggle"  data-id="${a.id}">${a.enabled ? '停用' : '启用'}</button>
-      <button class="ghost mini" data-act="del"     data-id="${a.id}" style="color:#ef4444">删除</button>
+      <button class="ghost mini" data-act="del"     data-id="${a.id}" style="color:var(--danger)">删除</button>
     </div>`;
   }).join('');
 
@@ -985,7 +1136,7 @@ $('accAdd').onclick = async () => {
   const m = $('accMsg');
   if (!u || !p) { m.textContent = '手机号和密码都要填'; m.className = 'msg err'; return; }
   const btn = $('accAdd');
-  btn.disabled = true;
+  busy(btn, true);
   m.textContent = '登录中（极验本地求解，可能要几秒）…';
   m.className = 'msg';
   try {
@@ -1003,14 +1154,14 @@ $('accAdd').onclick = async () => {
     m.textContent = e.message;
     m.className = 'msg err';
   } finally {
-    btn.disabled = false;
+    busy(btn, false);
   }
 };
 
 $('accLoginAll').onclick = async () => {
   const m = $('accMsg');
   const btn = $('accLoginAll');
-  btn.disabled = true;
+  busy(btn, true);
   m.textContent = '批量登录中…';
   m.className = 'msg';
   try {
@@ -1026,7 +1177,7 @@ $('accLoginAll').onclick = async () => {
     m.textContent = e.message;
     m.className = 'msg err';
   } finally {
-    btn.disabled = false;
+    busy(btn, false);
   }
 };
 
@@ -1043,7 +1194,7 @@ $('accBatch').onclick = async () => {
 
   const m = $('accMsg');
   const btn = $('accBatch');
-  btn.disabled = true;
+  busy(btn, true);
   m.textContent = '批量提交中，别关页面…';
   m.className = 'msg';
   try {
@@ -1069,7 +1220,7 @@ $('accBatch').onclick = async () => {
     m.textContent = e.message;
     m.className = 'msg err';
   } finally {
-    btn.disabled = false;
+    busy(btn, false);
   }
 };
 
@@ -1441,10 +1592,10 @@ function redrawStrokes() {
   if (drawLayer) map.removeLayer(drawLayer);
   drawLayer = L.featureGroup().addTo(map);
   for (const st of strokes) {
-    L.polyline(st, { color: '#22d3a6', weight: 4, opacity: 0.95 }).addTo(drawLayer);
+    L.polyline(st, { color: tok('--accent'), weight: 4, opacity: 0.95 }).addTo(drawLayer);
     // 起点单独标一下，用户要知道从哪开跑
     L.circleMarker(st[0], {
-      radius: 5, color: '#0ea5e9', fillColor: '#0ea5e9', fillOpacity: 0.9, weight: 2
+      radius: 5, color: tok('--warn'), fillColor: tok('--warn'), fillOpacity: 0.9, weight: 2
     }).addTo(drawLayer).bindTooltip('起点');
   }
   const m = strokesLength();
@@ -1537,7 +1688,7 @@ function drawBlockers() {
   if (!blockLayer) return;
   blockLayer.clearLayers();
   localBlockers.forEach(poly => {
-    L.polygon(poly, { color: '#f85149', weight: 2, dashArray: '5 3', fillOpacity: .18 })
+    L.polygon(poly, { color: tok('--bad'), weight: 2, dashArray: '5 3', fillOpacity: .18 })
       .addTo(blockLayer);
   });
   const n = localBlockers.length;
@@ -1695,6 +1846,13 @@ async function loadRecords() {
     $('list').innerHTML = rows.map((r, i) => recHtml(r, i)).join('');
     [...document.querySelectorAll('.rec')].forEach((el, i) => {
       el.onclick = () => selectRec(rows[i], el);
+      // 键盘用户也要能开记录：原来是纯 div + onclick，Tab 根本走不到
+      el.onkeydown = (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          selectRec(rows[i], el);
+        }
+      };
     });
     // rrid 点一下复制。它挂在 .rec 里面，不拦一下的话点它也会选中整条记录。
     [...document.querySelectorAll('.rec .rid')].forEach(el => {
@@ -1758,7 +1916,8 @@ function recHtml(r, i) {
   // 结果让用户「把那条记录的 rrid 发我」时，他根本没有任何地方能看到它。
   // 报 issue 时这是唯一能把一条记录指认出来的东西。
   const rid = r.rrid ?? r.id ?? r.recordId;
-  return `<div class="rec" data-i="${i}">
+  return `<div class="rec" data-i="${i}" role="button" tabindex="0"
+    aria-label="${dist.toFixed(2)} 公里，${fmtDur(secs)}，${valid ? '有效' : '未达标'}">
     <div class="r1">
       <span class="dist">${dist.toFixed(2)} km</span>
       <span class="tag ${valid ? 'ok' : 'bad'}">${valid ? '有效' : '未达标'}</span>
@@ -2104,14 +2263,13 @@ function showPicker(list, r) {
   const box = $('picker');
   box.style.display = 'flex';
   box.innerHTML = `
-    <div style="margin:auto;max-width:420px;width:100%;padding:32px 22px;background:#0d1117;border:1px solid #21262d;border-radius:14px">
-      <h1 style="margin:0 0 4px;font-size:22px">选择账号</h1>
-      <p class="hint" style="margin:0 0 18px">库里存了 ${list.length} 个账号，点一下直接登录</p>
+    <div class="pick-card">
+      <h1>选择账号</h1>
+      <p class="sub">库里存了 ${list.length} 个账号，点一下直接登录</p>
       ${list.map(a => `
-        <button class="ghost" data-id="${a.id}"
-          style="width:100%;text-align:left;margin-bottom:8px;padding:12px 14px">
+        <button class="ghost pick-item" data-id="${a.id}">
           <b>${a.label}</b>
-          <div class="hint" style="font-size:11px">${a.username} · ${a.school || '—'}</div>
+          <span class="sub2">${a.username} · ${a.school || '—'}</span>
         </button>`).join('')}
       <button class="ghost" id="pickOther" style="width:100%;margin-top:6px">用其他账号登录</button>
       <div class="msg" id="pickMsg"></div>
