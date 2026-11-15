@@ -1146,6 +1146,100 @@ pub fn clamp_sample_gaps(pts: &mut [TrackPoint], pinned: &[usize], max_gap_m: f6
     fixed
 }
 
+/// 点到线段的最短距离（米）。
+fn point_to_segment_m(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    // 用米制近似投影：把经纬度按所在纬度的米/度换算成平面坐标再算。
+    let lat0 = (a.0 + b.0) * 0.5;
+    let mx = 111_320.0 * lat0.to_radians().cos();
+    let my = 110_540.0;
+    let to_xy = |q: (f64, f64)| ((q.1 - a.1) * mx, (q.0 - a.0) * my);
+    let (px, py) = to_xy(p);
+    let (bx, by) = to_xy(b);
+    let (dx, dy) = (bx, by);
+    let len2 = dx * dx + dy * dy;
+    if len2 <= 1e-12 {
+        return (px * px + py * py).sqrt();
+    }
+    let t = ((px * dx + py * dy) / len2).clamp(0.0, 1.0);
+    let (cx, cy) = (t * dx, t * dy);
+    ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
+}
+
+/// 把跨过拐角的上报点**挪到**拐角上（不插点、不改时间戳）。
+///
+/// ## 为什么不插点
+///
+/// 参照实现（参考实现 `school_track.rs::preserve_corners`）是在相邻采样点之间
+/// 插入拐角顶点，时间戳线性插值。那套做法在它那边成立，在我们这里会被自己
+/// 的检查拦下：5 秒网格中间插一个点就是 2.5 秒，而 `preflight` 的
+/// `SAMPLE_RATE_SHORT` 是 Fatal ——「真机最短非零间隔是 3s」。
+///
+/// 所以这里只**移动**已经存在的那一个点：点数不变、`ΔtotalTime` 仍是 5 秒，
+/// 代价是这一点到上一点的距离会变短（拐角半径），换来连线不再斜切过拐角。
+/// 真机本身 `ΔtotalDis` 就在 0~31m 之间跳（标准差 9.44），这点变化落在
+/// 它的正常范围里。
+///
+/// ## 只挪确实绕路的段
+///
+/// 只有「密折线在两点之间偏离直线超过 `dev_m`」时才动。我们的几何是 5m
+/// 密采样、上报间隔 5 秒（约 15m），绝大多数相邻对本来就在直线上，硬挪只会
+/// 制造不必要的抖动。
+///
+/// 返回移动的点数。
+pub fn nudge_to_corners(pts: &mut [TrackPoint], dense: &[(f64, f64)], dev_m: f64) -> usize {
+    if pts.len() < 3 || dense.len() < 3 || dev_m <= 0.0 {
+        return 0;
+    }
+    // 每个上报点在密折线上的最近下标：只在这些下标之间找拐角，避免把
+    // 别的圈次的位置错配到这一段。
+    let nearest = |p: (f64, f64)| -> usize {
+        let mut best = (usize::MAX, f64::MAX);
+        for (i, q) in dense.iter().enumerate() {
+            let d = geo::distance(p, *q);
+            if d < best.1 {
+                best = (i, d);
+            }
+        }
+        best.0
+    };
+    let mut idx: Vec<usize> = pts.iter().map(|q| nearest((q.lat, q.lon))).collect();
+    // 最近下标必须单调（同一圈内），否则说明密折线在这里折返过——
+    // 那样按区间找中间点会跨圈，直接放弃这一段。
+    for i in 1..idx.len() {
+        if idx[i] < idx[i - 1] {
+            idx[i] = idx[i - 1];
+        }
+    }
+    let mut moved = 0usize;
+    for i in 0..pts.len() - 1 {
+        let (a, b) = ((pts[i].lat, pts[i].lon), (pts[i + 1].lat, pts[i + 1].lon));
+        let (lo, hi) = (idx[i], idx[i + 1]);
+        if hi <= lo + 1 {
+            continue;
+        }
+        // 找这段密折线里离直线 a→b 最远的点
+        let mut worst = (0usize, 0.0f64);
+        for (j, q) in dense.iter().enumerate().take(hi).skip(lo + 1) {
+            let d = point_to_segment_m(*q, a, b);
+            if d > worst.1 {
+                worst = (j, d);
+            }
+        }
+        if worst.1 <= dev_m {
+            continue;
+        }
+        // 把终点挪到拐角上。起点不动——起点是上一点，动它会让前一段也跟着变。
+        // 末点不挪：它是收尾哨兵，位置有语义。
+        if i + 1 == pts.len() - 1 {
+            continue;
+        }
+        pts[i + 1].lat = dense[worst.0].0;
+        pts[i + 1].lon = dense[worst.0].1;
+        moved += 1;
+    }
+    moved
+}
+
 /// 排队序号 `queueNum`：真机起步段恒 0，之后**固定步长的 floor 分区**从 1 到 24。
 ///
 /// 真机（`raw_points` 114 点 / `speed_json` 55 桶，rrid 1328288734）不是按位置
@@ -1173,6 +1267,106 @@ pub fn queue_num(pos: usize, n: usize, startup: usize) -> i32 {
     let span = n - 1 - startup;
     let step = span.div_ceil(24).max(1);
     (1 + (pos - startup) / step).min(24) as i32
+}
+
+#[cfg(test)]
+mod nudge_tests {
+    use super::*;
+
+    /// 一条 L 形密折线：先向东 100m，再向北 100m。
+    /// 上报点只有两端，中间那个拐角不在任何采样点上——这正是要修的情况。
+    fn l_shape() -> Vec<(f64, f64)> {
+        let lat0: f64 = 38.9000;
+        let lon0 = 121.5000;
+        let mlat = 1.0 / 110_540.0; // 1m 的纬度
+        let mlon = 1.0 / (111_320.0 * lat0.to_radians().cos());
+        let mut dense = Vec::new();
+        for i in 0..=20 {
+            dense.push((lat0, lon0 + 100.0 * (i as f64 / 20.0) * mlon));
+        }
+        for i in 1..=20 {
+            dense.push((lat0 + 100.0 * (i as f64 / 20.0) * mlat, lon0 + 100.0 * mlon));
+        }
+        dense
+    }
+
+    fn tp(lat: f64, lon: f64, t: i64) -> TrackPoint {
+        TrackPoint {
+            lat,
+            lon,
+            time_ms: t,
+        }
+    }
+
+    #[test]
+    fn corner_point_is_moved_onto_the_turn() {
+        let dense = l_shape();
+        let (start, corner, end) = (dense[0], dense[20], dense[40]);
+        let mlat = 1.0 / 110_540.0;
+        let mut pts = vec![
+            tp(start.0, start.1, 0),
+            tp(end.0, end.1, 5000),          // 这一步从起点直冲终点，跳过整个拐角
+            tp(end.0 + 30.0 * mlat, end.1, 10000), // 第三点：让第二点不是末点
+        ];
+        let before = pts[1];
+        let moved = nudge_to_corners(&mut pts, &dense, 12.0);
+        assert_eq!(moved, 1, "应当移动 1 个点");
+        // 时间戳一个都不许动
+        assert_eq!(pts[1].time_ms, before.time_ms);
+        // 挪到的位置应该贴近拐角
+        let d = geo::distance((pts[1].lat, pts[1].lon), corner);
+        assert!(d < 2.0, "挪动后距拐角 {d:.2}m，应当 <2m");
+        // 第三点不该被动
+        assert!((pts[2].lat - (end.0 + 30.0 * mlat)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn straight_segment_is_left_alone() {
+        let dense = l_shape();
+        // 只取东向那一段（本来就是直线）
+        let straight: Vec<(f64, f64)> = dense[..21].to_vec();
+        let mut pts = vec![
+            tp(straight[0].0, straight[0].1, 0),
+            tp(straight[20].0, straight[20].1, 5000),
+        ];
+        let before = pts.clone();
+        let moved = nudge_to_corners(&mut pts, &straight, 12.0);
+        assert_eq!(moved, 0, "直线段不该动");
+        assert_eq!(pts[1].lat, before[1].lat);
+    }
+
+    #[test]
+    fn last_point_is_never_moved() {
+        let dense = l_shape();
+        let (start, end) = (dense[0], dense[40]);
+        let mut pts = vec![
+            tp(start.0, start.1, 0),
+            tp(end.0, end.1, 5000),
+        ];
+        let _ = nudge_to_corners(&mut pts, &dense, 12.0);
+        // 末点（收尾哨兵）位置保持不变——即使它跨过了整个拐角
+        assert_eq!((pts[1].lat, pts[1].lon), (end.0, end.1));
+    }
+
+    #[test]
+    fn degenerate_inputs_are_noops() {
+        let dense = l_shape();
+        let mut one = vec![tp(dense[0].0, dense[0].1, 0)];
+        assert_eq!(nudge_to_corners(&mut one, &dense, 12.0), 0);
+        let mut two = vec![tp(dense[0].0, dense[0].1, 0), tp(dense[40].0, dense[40].1, 5000)];
+        assert_eq!(nudge_to_corners(&mut two, &[], 12.0), 0);
+        assert_eq!(nudge_to_corners(&mut two, &dense, 0.0), 0);
+        assert_eq!(nudge_to_corners(&mut two, &dense, -1.0), 0);
+    }
+
+    #[test]
+    fn deviation_below_threshold_is_ignored() {
+        let dense = l_shape();
+        let (start, end) = (dense[0], dense[40]);
+        let mut pts = vec![tp(start.0, start.1, 0), tp(end.0, end.1, 5000)];
+        // 阈值大到不成立
+        assert_eq!(nudge_to_corners(&mut pts, &dense, 10_000.0), 0);
+    }
 }
 
 #[cfg(test)]

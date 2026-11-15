@@ -52,6 +52,7 @@ fn main() {
             }
         }
         "semester" => show_semester(),
+        "cheat" => do_cheat(),
         "logout" => do_logout(),
         "relogin" => do_relogin(),
         "check" => {
@@ -409,6 +410,42 @@ fn do_logout() {
         eprintln!("本地 token 清理失败: {e}");
     } else {
         println!("本地 token 已清除");
+    }
+}
+
+/// 违规名单自查。提交成功不代表没被标记——跑批判定是事后做的。
+fn do_cheat() {
+    let sess = pace_forge::api::session::load_session();
+    if !sess.is_valid() {
+        eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
+        std::process::exit(1);
+    }
+    let client = pace_forge::api::client::Client::new(
+        pace_forge::api::client::DeviceProfile::default(),
+    )
+    .with_credentials(pace_forge::api::client::Credentials {
+        uid: Some(sess.uid.to_string()),
+        token: Some(sess.token.clone()),
+        unid: Some(sess.unid.clone()),
+    });
+    let mut last = String::new();
+    match pace_forge::api::cheat::query(&client, 1, &mut |l| {
+        last = l.to_string();
+    }) {
+        Ok(report) => {
+            println!("{last}");
+            // 「未知」不能报成「清白」——退出码区分开，脚本里才判得对。
+            use pace_forge::api::cheat::Status;
+            match report.status() {
+                Status::Flagged => std::process::exit(2),
+                Status::Unknown | Status::Stale => std::process::exit(3),
+                Status::NoRecord => {}
+            }
+        }
+        Err(e) => {
+            eprintln!("查询失败: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

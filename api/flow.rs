@@ -1182,6 +1182,15 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     let pinned: Vec<usize> = snap.items.iter().filter(|s| s.shifted).map(|s| s.index).collect();
     let max_gap = crate::api::submit::MAX_POINT_SPEED_MPS * crate::track::SAMPLE_INTERVAL_SEC;
     let clamped = crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
+    // ⓹.6 拐角补位：把跨过拐角的上报点挪到拐角上（插点会被 SAMPLE_RATE_SHORT 拦）。
+    //
+    // 5 秒一采，相邻点隔 15~31m，中间的拐角全被直线抹掉——画出来就是斜着
+    // 切过楼角。这里只在「密折线偏离直线超过 12m」时移动那一个点，绝大多数
+    // 段落不动，`ΔtotalTime` 一个都不改。
+    let nudged = crate::track::nudge_to_corners(&mut track_points, &xy, 12.0);
+    if nudged > 0 {
+        log(&format!("[track] 拐角补位：{nudged} 个上报点挪到拐角上"));
+    }
     if clamped > 0 {
         log(&format!(
             "√ [snap] 吸附后 {clamped} 处相邻间距超过 {max_gap:.1}m（{:.1} m/s 上限），已压回",
@@ -1541,6 +1550,21 @@ pub fn run_full(
     let uuid = super::client::uuid_v4().to_uppercase();
     let stop_ms = start_ms + p.duration_sec * 1000;
 
+    // ❼.7 提交台账：**发请求之前**先把「要提交这个时间段」落盘。
+    //
+    // 顺序不能反过来。先发后记的话，进程在请求发出后崩掉就没有任何痕迹，
+    // 下次启动会认为这段时间没提交过，再跑一次就是同一时间段两条记录——
+    // 那是服务端最容易判定异常的形态（一个人不可能同时跑两次）。
+    //
+    // 三道拦截见 `guard::Guard::check`：上次结果未知 → 拦；时间段重叠 →
+    // 拦；不同账号 → 各记各的。
+    let mut guard = super::guard::Guard::open(&super::session::data_dir(), &uid)?;
+    guard.begin(&uuid, start_ms, stop_ms)?;
+    log(&format!(
+        "[guard] 台账已记 pending（{} ~ {}），提交中…",
+        start_ms, stop_ms
+    ));
+
     // 必到点直接复用 `dry_run` 那一份（`out.fixed`）：它是点位里 `type=2`
     // 标记与 `fivePointJson` 的由来，自检和提交必须是同一份输入。
     // geoFencesJson：真机的围栏对象是
@@ -1661,9 +1685,29 @@ pub fn run_full(
     // runes/runef 关联头：策略下发时刻+uid、运行uuid+开始时刻
     let runes = format!("{}{}", out.policy.timestamp, uid);
     let runef = format!("{}{}", uuid, start_ms);
-    let data = super::submit::save_record(client, &body, &runes, &runef)?;
+    let data = match super::submit::save_record_detailed(client, &body, &runes, &runef) {
+        Ok(d) => d,
+        Err(f) => {
+            // 只有「服务端明确驳回」才释放时间段。网络错误、HTTP 异常、
+            // 响应解析失败一律留着 pending —— 请求可能已经入账，只是我们
+            // 没看到回执。这条区分是整套台账的立足点。
+            if f.rejected {
+                guard.rejected(&uuid)?;
+                log("[guard] 服务端明确驳回，已释放该时间段");
+            } else {
+                log("[guard] 提交结果未知，台账保留 pending（不会自动重试）");
+            }
+            return Err(f.message);
+        }
+    };
     out.submitted = true;
     out.record_id = super::submit::extract_record_id(&data);
+    if let Some(rrid) = out.record_id {
+        // 台账落账失败不该让整次提交失败（记录已经入账了），但要说出来。
+        if let Err(e) = guard.accepted(&uuid, rrid) {
+            log(&format!("[guard] 警告：台账写 accepted 失败（记录已提交）: {e}"));
+        }
+    }
     log(&format!("√ [submit] 提交成功，记录 id={:?}", out.record_id));
 
     // ⑨ OBS：用 rrid 重算桶 id 和 objectKey

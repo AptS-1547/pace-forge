@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod start_time;
 pub mod client;
+pub mod cheat;
 pub mod coord;
 pub mod fence;
 pub mod obs;
@@ -10,6 +11,7 @@ pub mod points;
 pub mod policy;
 pub mod flow;
 pub mod gmttime;
+pub mod guard;
 pub mod gt4;
 pub mod gt4image;
 pub mod login;

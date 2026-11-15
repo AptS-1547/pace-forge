@@ -31,7 +31,7 @@ fn bearing_deg(from: (f64, f64), to: (f64, f64)) -> f64 {
 ///
 /// 日历换算复用 [`civil_from_days`]，时区复用 [`tz_offset_sec`]，两处都不再
 /// 各自实现一份——时区规则要改的时候只改一个地方。
-fn fmt_run_time(ms: i64) -> String {
+pub(crate) fn fmt_run_time(ms: i64) -> String {
     let secs = ms / 1000 + tz_offset_sec();
     let days = secs.div_euclid(86_400);
     let tod = secs.rem_euclid(86_400);
@@ -1859,24 +1859,56 @@ mod tests {
 /// 成功码是 **10000**，不是 0。这一点很容易踩：接口在顶层 `error` 里回
 /// `{"error":10000,"message":"成功"}`，照「err != 0 就是失败」判断就会把
 /// 一次成功的提交当成驳回，用户看到「提交被驳回 error=10000: 成功」。
+/// 一次提交的失败，带上「能不能确定没入账」这个关键区分。
+#[derive(Debug)]
+pub struct SubmitFailure {
+    pub message: String,
+    /// `true` = 服务端明确驳回（有业务错误码），可以确定没有入账；
+    /// `false` = 网络错误 / HTTP 层异常 / 响应看不懂，**结果未知**。
+    ///
+    /// 这个区分决定了提交台账怎么写：明确驳回可以释放时间段，让用户重来；
+    /// 未知必须留着 pending，因为「查不到」不等于「没入账」。
+    pub rejected: bool,
+}
+
 pub fn save_record(
     client: &Client,
     body: &Value,
     runes: &str,
     runef: &str,
 ) -> Result<Value, String> {
+    save_record_detailed(client, body, runes, runef).map_err(|f| f.message)
+}
+
+/// 同 [`save_record`]，但把「明确驳回」和「结果未知」分开回报。
+pub fn save_record_detailed(
+    client: &Client,
+    body: &Value,
+    runes: &str,
+    runef: &str,
+) -> Result<Value, SubmitFailure> {
     // 真机提交会额外带 runes / runef 两个关联头：
     //   runes = 策略时间戳 + uid      （这条记录基于哪一次策略下发）
     //   runef = 运行 uuid + startTime （这份轨迹属于哪一次运行）
     // 缺了它们提交照样能成，但风控侧少了把「策略→运行→成绩」串起来的
     // 线索，关联性更弱。见 Miempire src/api/submit.rs:228-237。
-    let raw = client.request_with_headers(
-        "POST",
-        &format!("{}/api/v70260/runnings/save/record", crate::crypto::consts::hosts::RUN),
-        Some(body),
-        &[("runes", runes), ("runef", runef)],
-    )?;
-    let v = crate::api::client::expect_ok(&raw)?;
+    // 网络层失败一律算「未知」：请求可能已经到达服务端并入了账，
+    // 只是响应没回来。这种时候自动重试就是制造重复记录。
+    let raw = client
+        .request_with_headers(
+            "POST",
+            &format!("{}/api/v70260/runnings/save/record", crate::crypto::consts::hosts::RUN),
+            Some(body),
+            &[("runes", runes), ("runef", runef)],
+        )
+        .map_err(|e| SubmitFailure {
+            message: e,
+            rejected: false,
+        })?;
+    let v = crate::api::client::expect_ok(&raw).map_err(|e| SubmitFailure {
+        message: e,
+        rejected: false,
+    })?;
     let err = v.get("error").and_then(|e| e.as_i64()).unwrap_or(0);
     // 10000 是成功码（和 HTTP 的 200 一个道理，别拿 0 当成功）
     if err != 0 && err != 10000 {
@@ -1891,7 +1923,10 @@ pub fn save_record(
             10603 => "（请求过于频繁，被限流）",
             _ => "",
         };
-        return Err(format!("提交被驳回 error={err}: {msg}{hint}"));
+        return Err(SubmitFailure {
+            message: format!("提交被驳回 error={err}: {msg}{hint}"),
+            rejected: true,
+        });
     }
     Ok(v.get("data").cloned().unwrap_or(Value::Null))
 }

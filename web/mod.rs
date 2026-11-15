@@ -385,6 +385,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Get, "/api/fences") => handle_fences(request, state, &query),
         (Method::Get, "/api/points") => handle_points(request, state, &query),
         (Method::Get, "/api/records") => handle_records(request, state, &query),
+        (Method::Get, "/api/cheat") => handle_cheat(request, state, &query),
         (Method::Get, "/api/blockers") => handle_blockers_get(request),
         (Method::Post, "/api/blockers") => {
             let body = read_json(&mut request)?;
@@ -1937,6 +1938,57 @@ fn handle_raw(
             let v: Value = serde_json::from_str(&raw)
                 .unwrap_or_else(|_| json!({"raw_text": raw.chars().take(2000).collect::<String>()}));
             json_ok(request, v)
+        }
+        Err(e) => json_err(request, &e),
+    }
+}
+
+/// 违规名单自查。`GET /api/cheat?page=1`
+///
+/// 服务端跑批判定，和提交是否成功无关——提交成功也可能事后被标记。
+/// 这个接口是唯一能自己确认的入口，所以结果要原样返回给前端，
+/// 由前端区分「没有记录」和「结果未知」两种状态。
+fn handle_cheat(request: tiny_http::Request, state: Shared, query: &str) -> Result<(), String> {
+    let page = query_param(query, "page")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1i64);
+    // 先克隆 client 再放锁：网络请求几十秒，持锁做 IO 会让整个面板假死。
+    let client = {
+        let st = state.lock().map_err(|e| e.to_string())?;
+        if !st.logged_in() {
+            return json_err(request, "请先登录");
+        }
+        let Some(c) = st.client() else {
+            return json_err(request, "当前账号没有可用会话，请重新登录");
+        };
+        c.clone()
+    };
+    let mut lines: Vec<String> = Vec::new();
+    match crate::api::cheat::query(&client, page, &mut |l| lines.push(l.to_string())) {
+        Ok(report) => {
+            for l in &lines {
+                eprintln!("{l}");
+            }
+            let status = match report.status() {
+                crate::api::cheat::Status::NoRecord => "no_record",
+                crate::api::cheat::Status::Flagged => "flagged",
+                crate::api::cheat::Status::Unknown => "unknown",
+                crate::api::cheat::Status::Stale => "stale",
+            };
+            json_ok(
+                request,
+                json!({
+                    "status": status,
+                    "label": report.status().label(),
+                    "count": report.count(),
+                    "reason": report.reason(),
+                    "appeal": report.appeal(),
+                    "occurredAt": report.occurred_at(),
+                    "rrid": report.record_id(),
+                    "checkedAtMs": report.checked_at_ms,
+                    "listCount": report.list.len(),
+                }),
+            )
         }
         Err(e) => json_err(request, &e),
     }
