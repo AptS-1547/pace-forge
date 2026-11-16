@@ -119,11 +119,17 @@ pub struct FixedPoint {
 
 /// 必到点 `id` 的起始值。
 ///
-/// 真机 rrid 1328288734 的五个必到点是 81/82/83/84/85 —— 与轨迹点的 id
-/// （3516 起）完全不是一个量级，说明它是**必到点表自己的自增列**，不是从
-/// 轨迹点 id 派生的。早先我们从 1 起发（1..5），比真机小两个数量级，是
-/// 一条明显的差异；现在固定从 81 起连续递增。
-pub const FIXED_POINT_ID_BASE: i64 = 81;
+/// **从 1 起**（即 `id` = 1..N），不是 81 起。
+///
+/// 改成 81 的依据是真机样本 rrid 1328288734（`obs_real_20261002.json`）的
+/// 五个必到点是 81/82/83/84/85。但那份样本**从来没配过 App 截图**；而实测
+/// 把项目退回到 11-11 那个 commit（`13f7fdf`，`id` 从 1 起）跑出来的记录
+/// `rrid=1367193178`，App 里**五个点位全都画出来了**，改成 81 起之后只剩 4 个。
+///
+/// 同为真机数据，一份是 81 起、一份是 1 起（辛厚泽 11-11 的 400..404 又是另一
+/// 个量级），说明这个字段的值本身不承载语义，但**大数会让 App 少画点**——
+/// 具体原因在 App 侧没查到（壳保护，反编译不出渲染逻辑），以实测为准。
+pub const FIXED_POINT_ID_BASE: i64 = 1;
 
 /// 「轨迹经过这个必到点」的判定半径（米）。
 ///
@@ -3085,10 +3091,13 @@ mod audit_tests {
             "isFixed 必须原样跟随服务端标记（P220 在 position 3）"
         );
 
-        // ④ id 从 81 起连续；flag 全场同值
+        // ④ id 从 1 起连续；flag 全场同值
+        //
+        // 曾经锁的是 81 起（照真机样本 1328288734），但那条样本没有 App 截图；
+        // 实测 11-11 那版（id 从 1 起）跑出来的记录 App 能画全 5 个点，
+        // 81 起只剩 4 个。见 FIXED_POINT_ID_BASE 的注释。
         let ids: Vec<i64> = inner.iter().map(|f| f["id"].as_i64().unwrap()).collect();
-        assert_eq!(ids, vec![81, 82, 83, 84, 85], "id 必须从 {FIXED_POINT_ID_BASE} 起连续");
-        assert!(ids[0] >= 80, "id 基数必须落在真机量级（≥80）");
+        assert_eq!(ids, vec![1, 2, 3, 4, 5], "id 必须从 {FIXED_POINT_ID_BASE} 起连续");
         let flags: Vec<i64> = inner.iter().map(|f| f["flag"].as_i64().unwrap()).collect();
         assert!(
             flags.iter().all(|&f| f == p.start_time_ms),
