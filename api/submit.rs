@@ -48,8 +48,7 @@ use crate::track::TrackPoint;
 /// 官方卡路里不是「每公里固定千卡」，而是 MET × 体重 × 时长：
 /// 配速越慢，单位时间消耗越低，但单位距离消耗反而更高。用固定 62 kcal/km
 /// 会让「慢跑 3 公里」和「快跑 3 公里」报出同一个卡路里，与同时上报的
-/// 配速、步频自相矛盾（参考实现/某实现 的 `track/calorie.rs` 用的是
-/// 官方分档公式，pace 这里对齐）。
+/// 配速、步频自相矛盾（官方用的是按配速分档的公式，这里对齐）。
 pub const DEFAULT_WEIGHT_KG: f64 = 68.0;
 /// 最长允许跑步时长（秒）。
 pub const MAX_RUN_TIME: i64 = 7200;
@@ -337,7 +336,7 @@ pub struct Submission {
     /// 供排查用的签名原文。
     pub canonical: String,
     /// 点位数组（`allLocJson` 那份，28 字段/点）。报文里 `allLocJson` 现在发
-    /// 空串（真机/参考实现 都这样，轨迹只走 OBS），所以派生字段自检从这里取点。
+    /// 空串（真机样本如此，轨迹只走 OBS），所以派生字段自检从这里取点。
     ///
     /// **与自检、OBS 明细是同一份实例**：由 [`build_points`] 造一次，
     /// [`build_from_points`] 原样收下，`flow` 直接交给明细上传。
@@ -527,7 +526,7 @@ pub fn point_json_full(
     // 真机分布：{0: 89, -1: 17, 2: 5, 5: 1, 6: 1, 7: 1}（共 114 点）。
     // 和老实现的三处差异：起点是 7 不是 0、第二个点是 5；起步段（GPS 刚
     // 锁定、位移被过滤）整段是 **-1**；全程不出现 1，打卡位置改用 2 承载。
-    // 类型只认最新一份真机实测（账号 实测账号，rrid 1362483656 / 1366096492，
+    // 类型只认最新一份真机实测（实测账号，rrid 1362483656 / 1366096492，
     // 104 个采样点）：`{0: 101, 3: 1, 5: 1, 6: 1}`。
     //
     //   5  起点（第 1 个点）
@@ -873,8 +872,7 @@ pub fn speed_field(distance_m: f64, time_sec: i64) -> i64 {
 
 /// 官方卡路里分档：由配速（分/公里）取 MET。
 ///
-/// 三个分段来自运动世界官方换算（参考实现 家族 `某实现/src/track/calorie.rs`
-/// 与 `另一实现` 两处独立实现一致）：
+/// 三个分段来自运动世界官方换算（两处独立实现的结果一致）：
 ///
 /// | 配速 p（分/公里） | MET |
 /// |---|---|
@@ -1039,7 +1037,7 @@ pub fn smooth_point_speed(items: &mut [Value]) {
 
 /// 从已组装好的点位数组切圈（每 1000m 一圈，末圈 `isFullLap=false`）。
 ///
-/// 结构对齐真机 OBS `laps_json`（14 个字段，见 参考实现 `track/wire.rs::build_laps`）：
+/// 结构对齐真机 OBS `laps_json`（14 个字段）：
 /// `avgPace` 用十进制分钟/公里、`avgStride` 用厘米、`elevationGain` 按圈内
 /// 正增量累计、`endAltRel` 相对首点海拔。
 ///
@@ -1595,7 +1593,7 @@ pub fn build_from_points(
 
     let save_record = json!({
         "address": "",
-        // 轨迹不进 body：真机与 参考实现 都发空串，点集只走 OBS 的 run_data。
+        // 轨迹不进 body：真机发空串，点集只走 OBS 的 run_data。
         //
         // 详情接口对这类提交一律回 allLocJson=null、jsonFromObs=1（实测 50/50），
         // 所以塞不塞点都不会让详情带回坐标。发空串是为了跟真机报文一致，
@@ -1788,7 +1786,7 @@ mod tests {
         let sim = test_sim(&params(), &points());
         let sub = build(&params(), &points(), &[], &sim).unwrap();
         let v = &sub.save_record;
-        // allLocJson 必须是**空串**，与真机/参考实现 一致，点集只走 OBS 的 run_data。
+        // allLocJson 必须是**空串**，与真机一致，点集只走 OBS 的 run_data。
         // 注意：这不是「画不出线」的原因——详情接口对这类提交固定回
         // allLocJson=null、jsonFromObs=1，塞点也一样（实测 50/50）。
         assert_eq!(v["allLocJson"], json!(""), "allLocJson 应发空串");
@@ -2303,7 +2301,7 @@ mod point_shape_tests {
         // 真机点里没有 steps 字段（步数只在 segment_json / laps_json 里）
         assert!(p0.get("steps").is_none(), "真机没有 steps 字段，不该多发");
 
-        // type 只认最新真机（账号 实测账号，104 点）：起点 5、倒数第二 3、末点 6，
+        // type 只认最新真机（实测账号，104 点）：起点 5、倒数第二 3、末点 6，
         // 其余全 0。老样本那套 7 / -1 / 2 已经不对了，见 `ptype` 处的注释。
         assert_eq!(arr[0]["type"], 5, "真机起点 type=5");
         let last = arr.len() - 1;
@@ -2377,7 +2375,7 @@ mod point_shape_tests {
         for p in &arr {
             types.insert(p["type"].as_i64().unwrap());
         }
-        // 新版真机（账号 实测账号，104 点）分布 {0: 101, 3: 1, 5: 1, 6: 1}
+        // 新版真机（实测账号，104 点）分布 {0: 101, 3: 1, 5: 1, 6: 1}
         assert!(types.len() >= 2, "点位类型要有变化，实际 {types:?}");
         for t in &types {
             assert!(

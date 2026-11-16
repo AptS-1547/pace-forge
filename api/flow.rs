@@ -1529,7 +1529,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 自检与上传必须共用同一份点位。
     //
     // 早先这里是数 `type=2` 打卡标记的个数，用来兜「`fixed` 传空」——
-    // 但新版真机（账号 实测账号，rrid 1362483656）压根不发 `type=2`，
+    // 但新版真机（实测账号，rrid 1362483656）压根不发 `type=2`，
     // 104 个点全是 `{0: 101, 3: 1, 5: 1, 6: 1}`，5 个必经点完全靠
     // `fivePointJson` 渲染。所以改成直接数必到点数组，不再依赖采样点类型。
     let n_fixed = probe_sub
@@ -1965,8 +1965,8 @@ pub fn run_full(
     // 之前把 envelope 整个塞进来，服务端解不出点位列表。
     // OBS 的 fixed_point_json 要的是**完整 envelope**（含 fivePointJson 内层串、
     // useZip、runAreaId、geoFencesJson、freedomShowFence），不是裸点位数组。
-    // 参照实现 参考实现 的 build_obs_object 就是这么发的；传裸数组时服务端解析
-    // 不出点位，于是「按顺序通过所有点位」永远 false。
+    // 实测真机报文就是这么发的；传裸数组时服务端解析不出点位，于是
+    // 「按顺序通过所有点位」永远 false。
     let five_pt = body
         .get("fivePointJson")
         .and_then(|v| v.as_str())
@@ -2641,7 +2641,7 @@ mod fixed_point_payload_tests {
         let loc: Vec<serde_json::Value> =
             serde_json::from_str(run["allLocJson"].as_str().unwrap()).unwrap();
 
-        // 新版真机（账号 实测账号，rrid 1362483656）的 allLocJson 里
+        // 新版真机（实测账号，rrid 1362483656）的 allLocJson 里
         // **没有任何打卡标记**：104 个点全是 {0: 101, 3: 1, 5: 1, 6: 1}，
         // 5 个必经点完全靠 `fivePointJson` 渲染。早先要求 type=2 是照
         // 10-02 老样本写的，那套口径服务端已经不用了。
