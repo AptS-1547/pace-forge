@@ -162,9 +162,37 @@ fn try_stadium_track(
         return None;
     }
 
-    const FIELD_TO_TRACK: f64 = 1.35;
-    let radius = (minor * FIELD_TO_TRACK / 2.0).clamp(20.0, 30.0);
-    let straight = (major * FIELD_TO_TRACK - 2.0 * radius).clamp(35.0, 140.0);
+    // 先认标准跑道。
+    //
+    // 校园里的田径场绝大多数就是标准的，而「打卡点外框 × 系数」这条路
+    // 没法反推准确半径：打卡点可能落在跑道外沿、内场边线、或者场地正中，
+    // 三种分布算出来的半径差一倍。原来那个 `clamp(20, 30)` 更糟——标准
+    // 400m 第 1 道运行半径 36.8，被压到 30 就是整圈往里缩 6.8 米，直段
+    // 正好落进中央足球场（issue #6 的截图就是这个）。
+    //
+    // 标准 400m 跑道外框：长 84.39 + 2×46.26 ≈ 177m，宽 2×46.26 ≈ 92.5m。
+    // 外准差给足（长 ±28、宽 ±22），覆盖实测里打卡点略微内缩的情况。
+    let looks_standard_400 =
+        (major - 177.0).abs() < 28.0 && (minor - 92.5).abs() < 22.0;
+    // 280m 左右的校内小场也常见（直道 ~55、半径 ~26），外框约 160×75。
+    let looks_small_oval = (major - 160.0).abs() < 30.0 && (minor - 75.0).abs() < 20.0;
+
+    let (radius, straight) = if looks_standard_400 {
+        // 第 1 道：36.5 内突沿 + 0.30 内突沿到分道线
+        log("[track] 外框像标准 400m 跑道，按第 1 道尺寸生成（半径 36.8m）");
+        (36.8, 84.39)
+    } else if looks_small_oval {
+        log("[track] 外框像 280m 校内小场，按半径 26m 生成");
+        (26.0, 55.0)
+    } else {
+        const FIELD_TO_TRACK: f64 = 1.35;
+        let r = (minor * FIELD_TO_TRACK / 2.0).clamp(20.0, 45.0);
+        let st = (major * FIELD_TO_TRACK - 2.0 * r).clamp(35.0, 140.0);
+        log(&format!(
+            "[track] 外框 {major:.0}×{minor:.0}m 不像标准跑道，按比例拟合：半径 {r:.1}m 直道 {st:.1}m"
+        ));
+        (r, st)
+    };
     let lap = 2.0 * straight + 2.0 * std::f64::consts::PI * radius;
     let spec = crate::track::OvalSpec {
         straight,
@@ -2298,6 +2326,61 @@ mod tests {
                 assert!(stop < now, "时长 {dur}s：stopTime 落到了未来");
             }
         }
+    }
+
+    /// 标准 400m 跑道的半径不能被上限压小。
+    ///
+    /// 原来 `radius` 是 `clamp(20, 30)`，而第 1 道运行半径是 36.8——整圈
+    /// 往里缩 6.8 米，直段直接落进中央足球场。实测三种打卡点分布（外沿、
+    /// 内场边线、内场里面）算出来全是 30，一个都没跑掉。
+    #[test]
+    fn stadium_radius_keeps_standard_400m_track() {
+        let lat0 = 47.386;
+        let lng0 = 123.956;
+        let klat = crate::track::geo::m_per_deg_lat(lat0);
+        let klng = crate::track::geo::m_per_deg_lng(lat0);
+        let mk = |dy: f64, dx: f64| Checkpoint {
+            lat: lat0 + dy / klat,
+            lng: lng0 + dx / klng,
+            glat: lat0 + dy / klat,
+            glon: lng0 + dx / klng,
+            name: "P".into(),
+        };
+        // 标准 400m 跑道外框：长 84.39+2*46.26 ≈ 177，宽 2*46.26 ≈ 92.5
+        let (half_l, half_w) = (88.5, 46.26);
+        let cps = vec![
+            mk(0.0, -half_l),
+            mk(0.0, half_l),
+            mk(2.0 * half_w, -half_l),
+            mk(2.0 * half_w, half_l),
+        ];
+        let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
+        let l2 = std::rc::Rc::clone(&logs);
+        let mut log = move |s: &str| l2.borrow_mut().push(s.to_string());
+        let r = try_stadium_track(&cps, 2000.0, 10.0, 42, &mut log);
+        drop(log);
+        assert!(r.is_some(), "标准 400m 外框该认成操场");
+
+        let got = logs.borrow();
+        // 日志里那句带 半径XXm，抠出来核对没被压到 30
+        let line = got
+            .iter()
+            .find(|l| l.contains("操场绕圈"))
+            .expect("缺少操场日志");
+        let rad: f64 = line
+            .split("半径")
+            .nth(1)
+            .and_then(|t| t.split('m').next())
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(0.0);
+        assert!(
+            (rad - 36.8).abs() < 1.0,
+            "标准 400m 外框应该直接按第 1 道 36.8m 生成，实际 {rad}m：{line}"
+        );
+        assert!(
+            got.iter().any(|l| l.contains("标准 400m")),
+            "应该走标准跑道那条分支：{got:?}"
+        );
     }
 
     /// 四角围成跑道外框 → 认成操场，生成的椭圆首尾闭合。

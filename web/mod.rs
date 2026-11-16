@@ -2229,6 +2229,47 @@ mod index_html_tests {
             .collect()
     }
 
+    /// 空点集不能覆盖已查到的点位。
+    ///
+    /// 后端在手绘、操场、部分预览分支回的是 `checkpoints: []`，空数组在 JS
+    /// 里是 truthy，原来 `if (checkpoints) lastCheckpoints = checkpoints`
+    /// 会把已经查到的点位整个清空——图上点位全消失、手绘面板「点位 N/M」
+    /// 也归零。issue #4 报的「生成路线把点位刷走了」就是这个。
+    #[test]
+    fn empty_checkpoint_array_must_not_overwrite() {
+        assert!(
+            INDEX_HTML.contains("Array.isArray(checkpoints) && checkpoints.length"),
+            "drawPreview 必须判非空才更新 lastCheckpoints"
+        );
+        assert!(
+            !INDEX_HTML.contains("if (checkpoints) lastCheckpoints = checkpoints;"),
+            "旧的 truthy 判断还在，空数组照样会覆盖"
+        );
+    }
+
+    /// 多校区要有可切换的入口。
+    ///
+    /// 服务端对多校区学校会下发多个围栏，但界面原来只把它们并成一个视野框
+    /// （fitBounds），没有任何选择器——用户能用的场地只有锚点碰巧落在的
+    /// 那一个。issue #6 的「无法选用其他校区田径场」说的就是这个。
+    #[test]
+    fn multi_campus_selector_exists() {
+        assert!(INDEX_HTML.contains("id=\"fenceSel\""), "缺少校区/场地下拉");
+        assert!(
+            INDEX_HTML.contains("function fillFenceSelect"),
+            "缺少填充下拉的函数"
+        );
+        assert!(
+            INDEX_HTML.contains("window.__fences"),
+            "下拉的 change 处理要能拿到围栏数组"
+        );
+        // 选中后必须真的改锚点，否则 select_by_anchor 还是选原来那个
+        assert!(
+            INDEX_HTML.contains("setPickLocation(gl, go, false)"),
+            "选中校区后要把锚点挪过去"
+        );
+    }
+
     #[test]
     fn injection_payload_is_fully_escaped() {
         let payloads = [

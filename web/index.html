@@ -533,6 +533,10 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
         <button id="llPick" class="ghost" type="button">在地图上点选</button>
         <button id="llFetch" class="ghost" type="button"
                 title="只拉围栏和必到点，不生成轨迹">查围栏/点位</button>
+        <label style="margin:0" title="账号下发了多个校区/场地时在这里切换；选中会把定位锚点挪到该围栏中心">
+          <select id="fenceSel" class="coord-input" style="min-width:130px" aria-label="校区/场地">
+            <option value="">校区/场地（先查一次）</option>
+          </select></label>
         <button id="llClear" class="ghost" type="button">清空</button>
         <span id="llInfo" class="hint"></span>
       </div>
@@ -1356,10 +1360,53 @@ function initMap() {
 //
 // 没有围栏的学校（issue #2 那种 geoFences=null）拿不到边界，这时保持全国
 // 视图不动——宁可不缩放，也不要猜一个坐标。
+/// 围栏中心（BD-09 的多边形 → 简单平均）。
+function fenceCenter(f) {
+  const ring = Array.isArray(f && f.ring) ? f.ring : [];
+  if (!ring.length) return null;
+  let la = 0, ln = 0;
+  for (const p of ring) {
+    const a = Array.isArray(p) ? p[0] : p && p[0];
+    const b = Array.isArray(p) ? p[1] : p && p[1];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    la += a; ln += b;
+  }
+  return [la / ring.length, ln / ring.length];
+}
+
+/// 把账号下发的围栏填进「校区/场地」下拉。
+///
+/// 一个学校有多个校区时服务端会下发多个围栏，但界面原来只把它们并成一个
+/// 视野框（fitBounds），没有任何地方能选——用户看到的可用场地就只有锚点
+/// 碰巧落在的那一个。这里列出来，选中就把锚点挪过去，让
+/// `fence::select_by_anchor` 真的换到那个校区。
+function fillFenceSelect(fences) {
+  const sel = $('fenceSel');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">校区/场地（先查一次）</option>';
+  fences.forEach((f, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    const nm = (f.name || '').trim();
+    o.textContent = nm ? `${i + 1}. ${nm}` : `${i + 1}. ${Math.round((f.ring || []).length)} 点多边形`;
+    sel.appendChild(o);
+  });
+  // 只有一个场地时不打扰，直接选中
+  if (fences.length === 1) sel.value = '0';
+  else if (cur && sel.querySelector(`option[value="${cur}"]`)) sel.value = cur;
+  sel.dataset.count = String(fences.length);
+  window.__fences = fences;
+  if (fences.length > 1) {
+    $('llInfo').textContent = `账号下有 ${fences.length} 个校区/场地，可在左上角切换`;
+  }
+}
+
 async function fitToAccountArea() {
   try {
     const r = await api('/api/fences');
     const fences = r.fences || [];
+    fillFenceSelect(fences);
     if (!fences.length || !map) return;
     const g = L.featureGroup();
     let added = 0;
@@ -1377,6 +1424,34 @@ async function fitToAccountArea() {
   }
 }
 
+
+/* 选了校区/场地：把定位锚点挪到该围栏中心。
+ *
+ * 锚点决定 `fence::select_by_anchor` 选哪个围栏——所以这一步等效于
+ * 「换到那个校区的田径场」。围栏是 BD-09，填给输入框要转成 GCJ-02
+ * （底图是高德），否则又会偏几百米。 */
+document.addEventListener('change', (e) => {
+  if (!e.target || e.target.id !== 'fenceSel') return;
+  const idx = e.target.value;
+  if (idx === '') return;
+  const f = (window.__fences || [])[Number(idx)];
+  const c = f && fenceCenter(f);
+  if (!c) return;
+  const bd2gcj = (la, ln) => {
+    // 和后端 bd09_to_gcj02 同一套参数（BD09 → GCJ02 的反算）
+    const x = ln - 0.0065, y = la - 0.006;
+    const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * Math.PI * 3000 / 180);
+    const t = Math.atan2(y, x) - 0.000003 * Math.cos(x * Math.PI * 3000 / 180);
+    return [z * Math.sin(t), z * Math.cos(t)];
+  };
+  const [gl, go] = bd2gcj(c[0], c[1]);
+  setPickLocation(gl, go, false);
+  $('llCoord').value = 'gcj02';
+  $('llInfo').textContent = `已切到「${(f.name || '场地 ' + (Number(idx) + 1)).trim()}」`;
+  if (map && Number.isFinite(gl) && Number.isFinite(go)) {
+    map.setView([gl, go], Math.max(map.getZoom(), 16));
+  }
+});
 
 /* ---------- 校区定位（围栏拿不到时手动指定） ----------
  * 服务端围栏接口对部分学校是空的，没有中心点就规划不了。这里让人自己
