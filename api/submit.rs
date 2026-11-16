@@ -137,6 +137,22 @@ pub const FIXED_POINT_HIT_M: f64 = 10.0;
 /// （服务端 `validPoint` 打分靠点数密度），所以需要知道「落在第几个采样点」。
 /// 它**不是** `fivePointJson` 的 `position`，两者语义不同，不能混用。
 pub fn checkpoint_track_indexes(track: &[TrackPoint], coords: &[(f64, f64)]) -> Vec<usize> {
+    checkpoint_track_indexes_reserved(track, coords, &std::collections::HashSet::new())
+}
+
+/// 同 `checkpoint_track_indexes`，但避开 `reserved` 里的采样下标。
+///
+/// `type` 是按 if-else 顺序赋的，起点（7）、终点（6）、第二个点（5）、
+/// 起步灰点（-1）都排在 `type=2` 前面。打卡点一旦落在这些下标上，
+/// `type=2` 就被抢走——实测起点正好压在第一个打卡点上时，5 个必到点只
+/// 标出 4 个 `type=2`，App 详情页于是少画一个点位。这里让打卡点绕开
+/// 那些下标，取最近一个可用的采样点。
+pub fn checkpoint_track_indexes_reserved(
+    track: &[TrackPoint],
+    coords: &[(f64, f64)],
+    reserved: &std::collections::HashSet<usize>,
+) -> Vec<usize> {
+    let n = track.len();
     coords
         .iter()
         .filter_map(|&pt| {
@@ -146,17 +162,35 @@ pub fn checkpoint_track_indexes(track: &[TrackPoint], coords: &[(f64, f64)]) -> 
             // 半径内：取第一个的话，标记会整体往前挪一个采样点（实测点位在
             // 第 25 点、却被标到第 24 点）。真机是一点一个标记，标到的必须
             // 是真正经过它的那个点。
+            // 第一轮：10 米内、且不在 reserved 里。
             let mut best: Option<(f64, usize)> = None;
             for (i, t) in track.iter().enumerate() {
-                let d = crate::track::geo::distance((t.lat, t.lon), pt);
-                if d >= FIXED_POINT_HIT_M {
+                if i >= n || reserved.contains(&i) {
                     continue;
                 }
-                if best.is_none_or(|(bd, _)| d < bd) {
+                let d = crate::track::geo::distance((t.lat, t.lon), pt);
+                if d < FIXED_POINT_HIT_M && best.is_none_or(|(bd, _)| d < bd) {
                     best = Some((d, i));
                 }
             }
-            best.map(|(_, i)| i)
+            if best.is_some() {
+                return best.map(|(_, i)| i);
+            }
+            // 第二轮：10 米内全被 reserved 占了（起步窗口够长时很常见——
+            // 前十几个采样点都是 -1，而轨迹又正好从第一个打卡点起步）。
+            // 这时候得放开半径，在**所有**非 reserved 下标里取最近的：
+            // 宁可标记点偏几米，也不能整个标记消失（App 会少画一个点位）。
+            let mut near: Option<(f64, usize)> = None;
+            for (i, t) in track.iter().enumerate() {
+                if i >= n || reserved.contains(&i) {
+                    continue;
+                }
+                let d = crate::track::geo::distance((t.lat, t.lon), pt);
+                if near.is_none_or(|(bd, _)| d < bd) {
+                    near = Some((d, i));
+                }
+            }
+            near.map(|(_, i)| i)
         })
         .collect()
 }
@@ -1362,12 +1396,9 @@ pub fn build_points(
     // 经过下标」。现在 `position` 是报文里的连续序号（0..N-1），语义变了，
     // 所以内部这个量改成按坐标现算，而且**只算这一次**：OBS 明细拿到的就是
     // 这里标好的 `type=2`，不再自己按 `fivePointJson` 重算一遍。
-    let cp_idxs: Vec<usize> = checkpoint_track_indexes(
-        track,
-        &fixed.iter().map(|f| (f.lat, f.lon)).collect::<Vec<_>>(),
-    );
     // 起步窗口的点数：按时间戳数一遍（含末点时间戳），点字段、`queueNum`、
     // `segment_json` 首段、几何压缩共用这一个窗口，不再各自按比例估算。
+    // **必须在算打卡下标之前**：这些下标要给 `type` 赋值让路（见下）。
     let startup = {
         let times: Vec<i64> = track.iter().map(|p| p.time_ms).collect();
         let total_sec = times
@@ -1377,6 +1408,31 @@ pub fn build_points(
             .unwrap_or(0);
         crate::track::startup_point_count(&times, start_ms, total_sec)
     };
+    // 这些下标会被 `type` 赋成 7/6/5/-1（起点、终点、第二个点、起步灰点），
+    // 全部排在 `type=2` 之前。打卡点若落在这里就标不出标记，App 少画一个点。
+    let reserved: std::collections::HashSet<usize> = std::iter::once(0)
+        .chain(std::iter::once(1))
+        .chain(std::iter::once(track.len().saturating_sub(1)))
+        .chain(0..startup.min(track.len()))
+        .collect();
+    let cp_idxs: Vec<usize> = checkpoint_track_indexes_reserved(
+        track,
+        &fixed.iter().map(|f| (f.lat, f.lon)).collect::<Vec<_>>(),
+        &reserved,
+    );
+    // 命中下标必须两两不同：`type=2` 只标一个采样点，两个点位落到同一个
+    // 下标就会被 `contains` 合并成一次标记，App 详情页于是少画一个点。
+    {
+        let mut seen = std::collections::HashSet::new();
+        let dup: Vec<usize> = cp_idxs.iter().copied().filter(|i| !seen.insert(*i)).collect();
+        if !dup.is_empty() {
+            eprintln!(
+                "! [points] {} 个必到点只命中 {} 个不同采样点，重复下标 {dup:?}（App 会少画点）",
+                fixed.len(),
+                cp_idxs.len() - dup.len()
+            );
+        }
+    }
     let mut items: Vec<Value> = track
         .iter()
         .enumerate()
@@ -2297,6 +2353,90 @@ mod point_shape_tests {
             (bs - v).abs() <= 3.2,
             "bdS={bs} 与点间速度 v={v:.3}m/s 差得太多（bdS 不是 speed/3.6）"
         );
+    }
+
+    /// 打卡点落在起点上时，`type=2` 不能被起点抢走。
+    ///
+    /// `type` 是 if-else 顺序赋值的：起点 7、终点 6、第二个点 5、起步灰点 -1
+    /// 都排在 `type=2` 前面。实测轨迹从第一个打卡点附近起步时，`idx=0` 直接
+    /// 变成 7，5 个必到点只标出 4 个 `type=2`，App 详情页于是少画一个点位。
+    #[test]
+    fn checkpoint_on_start_point_still_gets_type_2() {
+        let n = 200usize;
+        let lat0 = 31.2304;
+        let pts: Vec<TrackPoint> = (0..n)
+            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 121.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .collect();
+        // 第一个必到点**正好落在起点**（idx=0），其余散布在后面
+        let marks = [0usize, 50, 90, 130, 170];
+        let fixed: Vec<FixedPoint> = marks
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| FixedPoint {
+                lat: pts[i].lat,
+                lon: pts[i].lon,
+                point_name: format!("P{i}"),
+                glat: 0.0,
+                glon: 0.0,
+                is_fixed: if k == 2 { 1 } else { 0 },
+            })
+            .collect();
+        let p0 = params();
+        let sim = test_sim(&p0, &pts);
+        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
+        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
+        assert_eq!(
+            n2, 5,
+            "起点上的打卡点也得标 type=2（绕开 idx=0），实际只有 {n2} 个"
+        );
+        // 起点仍然是 7
+        assert_eq!(sub.points[0]["type"], 7, "起点 type 必须还是 7");
+    }
+
+    /// `type=2` 的数量必须等于「轨迹真的经过的打卡点数」。
+    ///
+    /// App 详情页按 `type=2` 的采样点来认打卡位置：一点一个，少了就少画一个点。
+    /// 这里直接构造 5 个必到点、把轨迹压在它们身上，断言标出来的 `type=2`
+    /// 恰好 5 个，不多不少。
+    #[test]
+    fn type_2_markers_equal_passed_checkpoints() {
+        let n = 240usize;
+        let lat0 = 31.2304;
+        // 一条南北向直线，每点约 6.7m
+        let pts: Vec<TrackPoint> = (0..n)
+            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 121.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .collect();
+        // 5 个必到点直接落在第 40/80/120/160/200 个采样点上
+        let marks = [40usize, 80, 120, 160, 200];
+        let fixed: Vec<FixedPoint> = marks
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| FixedPoint {
+                lat: pts[i].lat,
+                lon: pts[i].lon,
+                point_name: format!("P{i}"),
+                glat: 0.0,
+                glon: 0.0,
+                is_fixed: if k == 4 { 1 } else { 0 },
+            })
+            .collect();
+        let p0 = params();
+        let sim = test_sim(&p0, &pts);
+        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
+
+        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
+        assert_eq!(
+            n2, 5,
+            "5 个必到点都压在轨迹上，type=2 必须正好 5 个（App 按它画打卡点），实际 {n2} 个"
+        );
+
+        // 五个都在 10m 内 → isPass 全 true，且 type=2 与之一一对应
+        let env: serde_json::Value =
+            serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap()).unwrap();
+        let inner: Vec<serde_json::Value> =
+            serde_json::from_str(env["fivePointJson"].as_str().unwrap()).unwrap();
+        let passed = inner.iter().filter(|f| f["isPass"] == true).count();
+        assert_eq!(passed, 5, "五个点都该判成经过，实际 {passed}");
     }
 
     #[test]

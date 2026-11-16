@@ -387,6 +387,17 @@ impl Client {
         if text.trim().is_empty() {
             return Err(format!("HTTP {status} 响应为空"));
         }
+        // 服务端集群故障的**第一道拦截**。
+        //
+        // `expect_ok` 里已经认 `error=-10000` 并给出「跟你无关」的说明，但那
+        // 条路要求响应能正常解密成业务 JSON。实际故障时后端把注册中心的异常
+        // 原样透传，可能是 HTTP 5xx、可能没有加密信封、也可能信封结构不完整
+        // 导致解密失败——三种都会在走到 `expect_ok` 之前就返回，用户看到的就
+        // 只剩「解密失败」「HTTP 500」，然后又去换网络重装（issue #3 那位
+        // 折腾了两天说的就是这个）。所以在这里按原始文本先认一次。
+        if let Some(msg) = server_fault_hint(&text, status) {
+            return Err(msg);
+        }
         // 网关级错误（如 Spring 的 404 页）是明文且无加密信封，直接透出原文
         if text.contains("\"status\":404") || text.contains("No message available") {
             return Err(format!("HTTP {status} 网关错误: {}", truncate(&text, 200)));
@@ -417,6 +428,27 @@ fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// 原始响应文本里能认出的「服务端集群故障」吗？
+///
+/// 认两种特征：`error=-10000` 和注册中心那句 `Forbid consumer ... from
+/// registry`。后者是前者的通常伴随物，单独出现（比如被包在纯文本里）也算。
+/// 认出来就返回统一的说明，认不出返回 `None` 让调用方继续走原有逻辑。
+pub fn server_fault_hint(text: &str, status: u16) -> Option<String> {
+    let code_hit = text.contains("-10000");
+    let reg_hit = text.contains("Forbid consumer") || text.contains("registry access list");
+    if !code_hit && !reg_hit {
+        return None;
+    }
+    Some(format!(
+        "服务端集群故障（error=-10000，HTTP {status}），跟你这边无关，别折腾本地环境：\n\
+         {}\n\n\
+         这条错误是对方后端内部服务调用被注册中心白名单拦下后原样透传的，\n\
+         登录、查记录、拉策略会一起失败。换网络、换账号、重装、重新编译都没有\n\
+         用——等后端恢复即可。",
+        truncate(text, 200)
+    ))
+}
+
 /// 便捷方法：解析业务 JSON 并检查 `error` 字段。
 pub fn expect_ok(body: &str) -> Result<Value, String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("业务响应不是 JSON: {e}"))?;
@@ -438,6 +470,11 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
              换网络、换账号、重装、重新编译都没有用——等后端恢复即可。"
         ));
     }
+    // 有的接口把 -10000 包在别的字段里（`r` / `data` / 纯文本 message），
+    // 走到这儿 code 认不出来，但原始文本认得出来，别再给「业务错误」了。
+    if let Some(hint) = server_fault_hint(msg, 200) {
+        return Err(hint);
+    }
     Err(format!("业务错误 error={code:?} message={msg}"))
 }
 
@@ -445,6 +482,35 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
     use crate::test_support::{assert_isolated, TestDir};
+
+    /// 服务端集群故障要在**解密之前**就认出来。
+    ///
+    /// `expect_ok` 里那条 -10000 的说明要求响应能正常解密成业务 JSON。
+    /// 实际故障时后端把注册中心的异常原样透传，可能是 HTTP 5xx、可能没有
+    /// 加密信封、也可能信封不完整导致解密失败——三种都走不到 `expect_ok`，
+    /// 用户只剩「解密失败 / HTTP 500」可看，然后又去换网络重装。
+    #[test]
+    fn server_fault_recognized_before_decrypt() {
+        let reg = r#"Forbid consumer 10.0.50.83 access service com.iydsj.server.basicuser.service.UserBasicService from registry 10.0.30.34:2181. Please check registry access list (whitelist/blacklist)"#;
+        // 带错误码
+        let h = server_fault_hint(r#"{"error":-10000,"message":"x"}"#, 200);
+        assert!(h.is_some(), "error=-10000 要在解密前被认出");
+        let h = h.unwrap();
+        assert!(h.contains("跟你这边无关"), "要排除本地问题: {h}");
+        // 只有注册中心那句
+        assert!(
+            server_fault_hint(reg, 502).is_some(),
+            "只有 Forbid consumer 那句也要认"
+        );
+        // HTTP 5xx + 那句话，状态码要带进提示
+        let h = server_fault_hint(reg, 503).unwrap();
+        assert!(h.contains("503"), "要带上真实状态码: {h}");
+        // 正常响应不能被误判
+        assert!(server_fault_hint(r#"{"error":10000,"message":"成功"}"#, 200).is_none());
+        assert!(server_fault_hint("plain ok", 200).is_none());
+        // 明文 10000（不带负号）不是故障
+        assert!(server_fault_hint(r#"{"error":10000}"#, 200).is_none());
+    }
 
     #[test]
     fn nonce_is_uuid_v4_format() {

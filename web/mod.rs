@@ -509,9 +509,30 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
 
 fn handle_login(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
     let username = body.get("username").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let password = body.get("password").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    if username.is_empty() || password.is_empty() {
-        return json_err(request, "手机号和密码都要填");
+    let mut password = body.get("password").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if username.is_empty() {
+        return json_err(request, "手机号要填");
+    }
+    // 密码留空 = 用本地存着的那份重新登录。
+    //
+    // 会话被服务端踢掉（token 失效、`/api/me` 回「未登录」）是常事，但密码
+    // 早就加密存盘了，不该让人每次重新敲一遍——尤其登录还要过极验滑块，
+    // 过程本身就容易失败。这里只在**本地已有该账号**时才走这条捷径，
+    // 没存过密码照样要求填。
+    if password.is_empty() {
+        let st = lock_state(&state);
+        let enc = st
+            .book
+            .accounts
+            .iter()
+            .find(|a| a.username == username || a.id == username)
+            .map(|a| a.password_enc.clone())
+            .filter(|e| !e.is_empty());
+        drop(st);
+        match enc.and_then(|e| crate::api::accounts::open_password(&e).ok()) {
+            Some(pw) => password = pw,
+            None => return json_err(request, "手机号和密码都要填（本地没有这个账号的密码）"),
+        }
     }
 
     let mut client = Client::new(DeviceProfile::default());
