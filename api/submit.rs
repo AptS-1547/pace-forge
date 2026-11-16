@@ -311,7 +311,7 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
 ///   那是另一个接口的字段，手里没有真机样本证明它也发 -1，改它等于拿一次
 ///   真实提交去赌。要改得等抓到真机 `save/record` 的 body。
 ///
-/// 真机样本缺这一项、需要发真实 id 做对照实验时设 `PACE_RUN_AREA_ID=real`。
+/// 要退回旧行为（发 -1）做对照实验时设 `PACE_RUN_AREA_ID=-1`。
 pub fn payload_run_area_id(real: i64) -> i64 {
     // 默认发**真实围栏 id**（1668），不是 -1。
     //
@@ -553,9 +553,11 @@ pub fn point_json_full(
     } else {
         0
     };
-    // `startup` 与 `checkpoint_idxs` 仍要传：前者给 `queueNum`/几何压缩用，
-    // 后者给 `fivePointJson` 的 `isPass` 判定用，只是不再参与 `type`。
-    let _ = (startup, &checkpoint_idxs);
+    // `startup` 在本函数里仍然用着（下面算 `in_startup`），只是不再参与 `type`。
+    // `checkpoint_idxs` 现在已经没人用了——`isPass` 改成按坐标命中判定之后，
+    // 「命中了第几个采样点」这个信息就只留在 `hits` 里。参数先留着不改签名
+    // （调用方遍布 flow/submit，改签名是一次纯机械但有风险的改动），注释说清楚。
+    let _ = &checkpoint_idxs;
 
     // GPS 精度半径：真机 1.4~2.3m（众数 1.5~2.0）。早先按 3.6~4.3 生成，
     // 等于「每次定位都差四米」，是明显的机器指纹。
