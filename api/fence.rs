@@ -388,13 +388,31 @@ pub fn geo_fence_json(
             })
         })
         .collect();
-    json!([{
-        "distance": 0.0,
-        "id": fence_id.unwrap_or(run_area_id),
-        "name": name,
-        "points": points,
-    }])
-    .to_string()
+    // 围栏对象只发 `points`，与 `runAreaId` 发真实围栏 id 配套。
+    //
+    // 早先发 `[{"points":[…]}]`，后来照 10-02 那份真机样本（rrid 1328288734）
+    // 补上了 `distance` / `id` / `name`，同时把 `runAreaId` 改成 -1。理由是
+    // 「真机 runAreaId 是 -1，围栏 id 只出现在这里」——可那份样本**从来没配过
+    // App 截图**，没人验证过它显示几个点。
+    //
+    // 而有截图的那条（伊木郎 11-11，App 显示 5 个点）发的是：
+    //   runAreaId = 1668        ← 真实围栏 id
+    //   geoFencesJson[0] = {points: [...]}   ← 只有 points
+    // 改完整结构之后（11-16 起）App 只剩 4 个点。以有截图的那条为准。
+    //
+    // `run_area_id` / `fence_id` / `name` 三个参数留着不动签名，将来要回到
+    // 完整结构时，把下面这行换回注释里那版即可（`PACE_FENCE_FULL=1` 也能切）。
+    let full = std::env::var("PACE_FENCE_FULL").map(|v| v == "1").unwrap_or(false);
+    if full {
+        return json!([{
+            "distance": 0.0,
+            "id": fence_id.unwrap_or(run_area_id),
+            "name": name,
+            "points": points,
+        }])
+        .to_string();
+    }
+    json!([{ "points": points }]).to_string()
 }
 
 /// 点是否在环内（射线法）。
@@ -582,20 +600,18 @@ mod tests {
         assert!(diag.contains("geoFences=1"));
     }
 
-    /// 围栏对象必须带真机那三个顶层字段（`distance` / `id` / `name`）。
+    /// 围栏对象的形状：默认只发 `points`，`PACE_FENCE_FULL=1` 时发完整结构。
     ///
-    /// 真机 `geoFencesJson` 是
-    /// `[{"distance":0.0,"id":1668,"name":"学校","points":[…]}]`；
-    /// 我们早先只发 `[{"points":[…]}]`，围栏 id 就整条丢了——而报文里
-    /// `runAreaId` 是 -1，围栏归属只剩这一个字段能表达。
+    /// 完整结构是照 10-02 那份真机样本（rrid 1328288734）补的，但那份样本
+    /// **没有配过 App 截图**。有截图的那条（伊木郎 11-11，App 显示 5 个点）
+    /// 发的是 `runAreaId=1668` + `[{"points":[…]}]`。所以默认走后者。
     #[test]
     fn geo_fence_json_matches_device_shape() {
         let ring = square(30.5, 104.0, 0.001);
+        // 默认形态：只有 points
         let s = geo_fence_json(1668, Some(1668), "学校", &ring);
         let v: Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v[0]["id"], json!(1668), "围栏 id 必须是真实围栏 id");
-        assert_eq!(v[0]["name"], json!("学校"));
-        assert_eq!(v[0]["distance"], json!(0.0));
+        assert_eq!(v[0].as_object().unwrap().keys().collect::<Vec<_>>(), vec!["points"]);
         let pts = v[0]["points"].as_array().unwrap();
         assert_eq!(pts.len(), 4);
         assert!(pts[0].get("glat").is_some());
@@ -608,10 +624,18 @@ mod tests {
         // 6 位小数：与真机样本的精度一致（≈0.1m）
         let frac = format!("{glat}").split('.').nth(1).map(|f| f.len()).unwrap_or(0);
         assert!(frac <= 6, "围栏坐标应保留 6 位小数，实际 {glat}");
+        // 完整结构：PACE_FENCE_FULL=1 时补上 distance / id / name
+        unsafe { std::env::set_var("PACE_FENCE_FULL", "1") };
+        let full = geo_fence_json(1668, Some(1668), "学校", &ring);
+        let vf: Value = serde_json::from_str(&full).unwrap();
+        assert_eq!(vf[0]["id"], json!(1668), "完整结构里围栏 id 必须是真实围栏 id");
+        assert_eq!(vf[0]["name"], json!("学校"));
+        assert_eq!(vf[0]["distance"], json!(0.0));
         // 围栏响应没有 id 时退回 runAreaId，不能发 null
         let s2 = geo_fence_json(1775, None, "", &ring);
         let v2: Value = serde_json::from_str(&s2).unwrap();
         assert_eq!(v2[0]["id"], json!(1775));
+        unsafe { std::env::remove_var("PACE_FENCE_FULL") };
     }
 
     #[test]

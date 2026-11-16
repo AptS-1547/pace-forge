@@ -302,9 +302,17 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
 ///
 /// 真机样本缺这一项、需要发真实 id 做对照实验时设 `PACE_RUN_AREA_ID=real`。
 pub fn payload_run_area_id(real: i64) -> i64 {
+    // 默认发**真实围栏 id**（1668），不是 -1。
+    //
+    // 改成 -1 的依据是 10-02 那份真机样本（rrid 1328288734），可那份样本
+    // 从来没配过 App 截图。有截图的那条（伊木郎 11-11，App 显示 5 个点）发的是
+    // 1668。两处一起退回那个形态：`runAreaId` 发真实 id，`geoFencesJson`
+    // 只发 `points`（见 `fence::geo_fence_json`）。
+    //
+    // `PACE_RUN_AREA_ID=-1` 能切回旧行为，方便对比。
     match std::env::var("PACE_RUN_AREA_ID").ok().as_deref() {
-        Some("real") => real,
-        _ => -1,
+        Some("-1") | Some("minus1") => -1,
+        _ => real,
     }
 }
 
@@ -3106,14 +3114,14 @@ mod audit_tests {
             "轨迹经过的点 isPass 应为 true"
         );
 
-        // ⑦ runAreaId：envelope 发 -1（真机值），顶层 save_record 保持真实围栏 id。
-        //    真机那份 fixed_point_json 里是 -1，真实 id 只在 geoFencesJson[0].id；
-        //    提交报文顶层那个字段没样本依据，不动。
+        // ⑦ runAreaId：envelope 与顶层都发真实围栏 id。
+        //    早先 envelope 发 -1 是照 10-02 那份没配截图的样本；有截图的
+        //    伊木郎 11-11 记录（App 显示 5 个点）发的是真实 id 1668。
         let env_area = env["runAreaId"].as_i64().unwrap();
         assert_eq!(env_area, payload_run_area_id(p.run_area_id));
-        assert!(
-            env_area == -1 || std::env::var("PACE_RUN_AREA_ID").is_ok(),
-            "envelope 的 runAreaId 默认必须是 -1（真机值），实际 {env_area}"
+        assert_eq!(
+            env_area, p.run_area_id,
+            "envelope 的 runAreaId 默认必须发真实围栏 id（有截图的 11-11 记录就是 1668）"
         );
         assert_eq!(
             sub.save_record["runAreaId"],
