@@ -72,8 +72,20 @@ fn get_str_16(rng: &mut impl Rng) -> String {
     (0..4).map(|_| four_random_chart(rng)).collect()
 }
 
+/// PoW 尝试次数上限：bits=5 时命中概率约 1/256，正常几百次内就能找到；
+/// 异常参数下不能死循环占满一个线程。
+const POW_MAX_ATTEMPTS: u64 = 200_000;
+
 /// 找 nonce（16 个随机 hex 字符）使 sha256(base+nonce) 以 "00" 开头。
-fn get_pow_msg_str_16(pow_msg_base: &str, log: &mut dyn FnMut(&str)) -> String {
+fn get_pow_msg_str_16(pow_msg_base: &str, log: &mut dyn FnMut(&str)) -> Result<String, String> {
+    get_pow_nonce(pow_msg_base, POW_MAX_ATTEMPTS, log)
+}
+
+fn get_pow_nonce(
+    pow_msg_base: &str,
+    max_attempts: u64,
+    log: &mut dyn FnMut(&str),
+) -> Result<String, String> {
     const HEX: &[u8] = b"0123456789abcdef";
     let mut rng = rand::thread_rng();
     let mut attempts = 0u64;
@@ -88,7 +100,10 @@ fn get_pow_msg_str_16(pow_msg_base: &str, log: &mut dyn FnMut(&str)) -> String {
         attempts += 1;
         if hash.starts_with("00") {
             log(&format!("[gt4] PoW 找到 nonce（尝试 {attempts} 次）"));
-            return nonce;
+            return Ok(nonce);
+        }
+        if attempts >= max_attempts {
+            return Err(format!("PoW 超过 {max_attempts} 次仍未找到 nonce"));
         }
     }
 }
@@ -99,7 +114,7 @@ fn get_pow_msg(
     captcha_id: &str,
     lot_number: &str,
     log: &mut dyn FnMut(&str),
-) -> String {
+) -> Result<String, String> {
     let base = format!(
         "{}|{}|{}|{}|{}|{}||",
         pow_detail["version"].as_str().unwrap_or(""),
@@ -109,8 +124,8 @@ fn get_pow_msg(
         captcha_id,
         lot_number
     );
-    let nonce = get_pow_msg_str_16(&base, log);
-    format!("{base}{nonce}")
+    let nonce = get_pow_msg_str_16(&base, log)?;
+    Ok(format!("{base}{nonce}"))
 }
 
 /// pow_sign = sha256(pow_msg) hex。
@@ -145,7 +160,21 @@ fn encrypt_data(pub_key: &rsa::RsaPublicKey, plaintext: &str) -> String {
 }
 
 /// w = hex(AES(plaintext)) + hex(RSA(str16))。
-fn get_w(set_left: usize, lot_number: &str, pow_msg: &str, pow_sign: &str, str16: &str) -> String {
+fn get_w(
+    set_left: usize,
+    lot_number: &str,
+    pow_msg: &str,
+    pow_sign: &str,
+    str16: &str,
+) -> Result<String, String> {
+    // lot_number 要按字节切 [6,14)、[7,11)、[26,30)；短报文直接切片会越界
+    // panic。先校验长度，不够就明确报错交给外层重试。
+    if lot_number.len() < 30 {
+        return Err(format!(
+            "lot_number 长度 {} 不足 30，无法切片",
+            lot_number.len()
+        ));
+    }
     let pk = gee_rsa_public_key();
     let userresponse = set_left as f64 / 1.005_946_666_666_666_5 + 2.0;
     let lf = |a: usize, b: usize| lot_number[a..b].to_string();
@@ -161,7 +190,7 @@ fn get_w(set_left: usize, lot_number: &str, pow_msg: &str, pow_sign: &str, str16
     );
     let r = encrypt_data(&pk, str16);
     let i = aes_o(&plaintext, str16);
-    i + &r
+    Ok(i + &r)
 }
 
 fn jsonp_value(text: &str) -> Result<Value, String> {
@@ -227,10 +256,10 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
         return Err(format!("缺口识别结果异常 distance={dist}，换图重试"));
     }
 
-    let pow_msg = get_pow_msg(&pow_detail, captcha_id, &lot_number, log);
+    let pow_msg = get_pow_msg(&pow_detail, captcha_id, &lot_number, log)?;
     let pow_sign = get_pow_sign(&pow_msg);
     let str16 = get_str_16(&mut rand::thread_rng());
-    let w = get_w(dist, &lot_number, &pow_msg, &pow_sign, &str16);
+    let w = get_w(dist, &lot_number, &pow_msg, &pow_sign, &str16)?;
 
     let cb = format!("geetest_{}", crate::crypto::envelope::now_ms());
     let verify_url = format!(
@@ -316,7 +345,7 @@ mod tests {
             "datetime": "2026-09-09T00:00:00"
         });
         let mut logf = |_s: &str| {};
-        let msg = get_pow_msg(&detail, "cid123", "lot456", &mut logf);
+        let msg = get_pow_msg(&detail, "cid123", "lot456", &mut logf).unwrap();
         assert!(msg.starts_with("v1|5|sha256|2026-09-09T00:00:00|cid123|lot456||"));
         assert_eq!(msg.len() - msg.rfind('|').unwrap() - 1, 16);
         let sign = get_pow_sign(&msg);
@@ -329,9 +358,25 @@ mod tests {
     #[test]
     fn w_parameter_shape() {
         let lot = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
-        let w = get_w(123, lot, "pow|msg||nonce1234567890ab", "sign", "0123456789abcdef");
+        let w = get_w(123, lot, "pow|msg||nonce1234567890ab", "sign", "0123456789abcdef")
+            .unwrap();
         assert!(w.len() > 260, "w len={}", w.len());
         assert!(w.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// 短 lot_number 不能再靠越界切片 panic，要明确报错。
+    #[test]
+    fn get_w_rejects_short_lot_number() {
+        let short = "a1b2c3";
+        assert!(get_w(123, short, "m", "s", "0123456789abcdef").is_err());
+    }
+
+    /// PoW 达到次数上限必须放弃，不能死循环占满线程。
+    #[test]
+    fn pow_nonce_gives_up_after_cap() {
+        let mut logf = |_s: &str| {};
+        // 上限 0 次：必然立刻报错，不进入随机循环
+        assert!(get_pow_nonce("base", 0, &mut logf).is_err());
     }
 
     #[test]
