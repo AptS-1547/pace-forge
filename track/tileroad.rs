@@ -148,10 +148,6 @@ fn cache_dir_in(base: &std::path::Path) -> PathBuf {
     crate::api::session::data_dir_in(base).join("tiles")
 }
 
-fn tile_path(x: i32, y: i32) -> PathBuf {
-    tile_path_in(&crate::api::session::home_dir(), x, y)
-}
-
 fn tile_path_in(base: &std::path::Path, x: i32, y: i32) -> PathBuf {
     cache_dir_in(base).join(format!("{ZOOM}_{x}_{y}.png"))
 }
@@ -159,12 +155,17 @@ fn tile_path_in(base: &std::path::Path, x: i32, y: i32) -> PathBuf {
 /// 拉一张瓦片，失败换子域重试。
 ///
 /// 缓存**不设过期**：底图变化极慢，所以只看文件在不在、长度够不够；空文件
-/// 或损坏的瓦片（`> 512` 字节门槛以下）会被删掉重拉，不会永久毒化缓存。
-/// 若要按天过期，需要在读到可用文件后再查 mtime——目前没有做。
+/// 或过短的文件会被删掉重拉；超过 512B 但解码失败的坏文件同样删除，避免
+/// 坏字节永久留在缓存里毒化该格网。若要按天过期，需要在读到可用文件后再
+/// 查 mtime——目前没有做。
 fn fetch_tile(x: i32, y: i32) -> Result<image::RgbImage, String> {
-    let path = tile_path(x, y);
+    fetch_tile_in(&crate::api::session::home_dir(), x, y)
+}
+
+fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbImage, String> {
+    let path = tile_path_in(base, x, y);
     let bytes = if let Ok(b) = std::fs::read(&path) {
-        // 空文件或坏文件当没有
+        // 空文件或过短文件当没有
         if b.len() > 512 {
             b
         } else {
@@ -205,9 +206,15 @@ fn fetch_tile(x: i32, y: i32) -> Result<image::RgbImage, String> {
         bytes
     };
 
-    let img = image::load_from_memory(&bytes)
-        .map_err(|e| format!("瓦片 {x}/{y} 解码失败: {e}"))?;
-    Ok(img.to_rgb8())
+    match image::load_from_memory(&bytes) {
+        Ok(img) => Ok(img.to_rgb8()),
+        Err(e) => {
+            // 解码失败说明缓存里是坏字节：删掉文件，下次请求重新拉，
+            // 不能让坏文件一直留在缓存里把这一格网毒化。
+            let _ = std::fs::remove_file(&path);
+            Err(format!("瓦片 {x}/{y} 解码失败: {e}"))
+        }
+    }
 }
 
 fn read_all(mut r: impl std::io::Read) -> std::io::Result<Vec<u8>> {
@@ -1390,6 +1397,21 @@ mod tests {
             format!("{ZOOM}_123_456.png")
         );
         assert!(!t.data().exists(), "只算路径不该创建目录");
+    }
+
+    /// 缓存里那份超过 512B 但解码失败的坏瓦片，必须删掉而不是留下毒化缓存：
+    /// 旧实现解码报错后原样保留文件，下次请求还会读到同一份坏字节。
+    #[test]
+    fn corrupt_cached_tile_is_deleted() {
+        let t = TestDir::new("tile-corrupt");
+        let path = tile_path_in(t.home(), 7, 9);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![0xab_u8; 1024]).unwrap();
+        assert!(path.exists());
+
+        let err = fetch_tile_in(t.home(), 7, 9).expect_err("坏瓦片必须解码失败");
+        assert!(err.contains("解码失败"), "错误信息: {err}");
+        assert!(!path.exists(), "解码失败的坏文件应被删除，不能留在缓存里");
     }
 
     #[test]
