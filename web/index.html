@@ -1004,7 +1004,11 @@ function fenceIsGcj(f) {
 
 function drawPreview(coords, fence, checkpoints) {
   if (!map) return;
-  if (checkpoints) lastCheckpoints = checkpoints;
+  // 后端在手绘、操场、部分预览分支返回的是 `checkpoints: []`——空数组在 JS 里
+  // 是 truthy，原来这句会把「查围栏/点位」已经拿到的点位整个覆盖成空，
+  // 图上点位全消失、手绘面板的「点位 N/M」也归零。只有非空点集才算新状态。
+  if (Array.isArray(checkpoints) && checkpoints.length) lastCheckpoints = checkpoints;
+  const cps = lastCheckpoints;
   if (fence) lastFence = fence;
   if (previewLayer) { map.removeLayer(previewLayer); previewLayer = null; }
 
@@ -1031,8 +1035,8 @@ function drawPreview(coords, fence, checkpoints) {
   }
 
   // 打卡点
-  if (checkpoints && checkpoints.length) {
-    for (const c of checkpoints) {
+  if (cps && cps.length) {
+    for (const c of cps) {
       // 高德瓦片是 GCJ-02 网格，所以打点要用 gcjLat/gcjLng（/api/plan 两个
       // 都给了：lat/lng 是 BD-09，gcjLat/gcjLng 是 GCJ-02）。字段名与有效性
       // 统一交给 coordOf，取不到有效坐标就跳过，不拿占位值往图上画。

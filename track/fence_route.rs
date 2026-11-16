@@ -349,6 +349,45 @@ pub fn avoid_blockers(points: &[(f64, f64)], blockers: &[Vec<(f64, f64)>], margi
     out
 }
 
+/// 只把落在多边形内的点推出去，**不插点、不动点数、不改时间戳**。
+///
+/// 给「折线避让 → 沿弧长重新取点」之后的兜底用：重新取的点落在原折线的
+/// 弦上，两条弦的交点会切进多边形角部（实测修好坐标系和预览之后，158 个
+/// 上报点里仍有 2 个在禁区里，最近边界 0.6 m——视觉上就是线还擦着楼角）。
+/// 这里逐点做一次最小位移推出，点数不变，所以后面按索引对时间戳的映射
+/// 依然成立。
+///
+/// 返回被推动的点数。
+pub fn nudge_outside(
+    points: &mut [(f64, f64)],
+    blockers: &[Vec<(f64, f64)>],
+    margin_m: f64,
+) -> usize {
+    if points.is_empty() || blockers.is_empty() {
+        return 0;
+    }
+    let polys: Vec<&Vec<(f64, f64)>> = blockers
+        .iter()
+        .filter(|p| p.len() >= 3 && point_span_m(p) > 4.0)
+        .collect();
+    if polys.is_empty() {
+        return 0;
+    }
+    let mut moved = 0usize;
+    for p in points.iter_mut() {
+        let before = *p;
+        for poly in &polys {
+            if let Some(q) = push_out(poly, *p, margin_m) {
+                *p = q;
+            }
+        }
+        if *p != before {
+            moved += 1;
+        }
+    }
+    moved
+}
+
 /// 蛇形扫描填充多边形，返回折线点。
 ///
 /// `spacing_m` 是相邻扫描线的间距（米）。越小线越密、总长越长。
@@ -1133,6 +1172,62 @@ mod tests {
             (lat0 + dlat, lng0 + dlng),
             (lat0 + dlat, lng0),
         ]
+    }
+
+    /// 三套坐标系混在一个平面上，避让等于白做。
+    ///
+    /// 河源那组实测：GCJ-02 圈出来的禁区，如果不转 BD-09 直接拿去和轨迹
+    /// （BD-09）比，位置会偏 950 米——避让一直在跑，绕的是几百米外另一块地，
+    /// 用户看到的就是「禁区完全没用，挪走也不变」。
+    #[test]
+    fn blockers_must_be_normalized_to_bd09() {
+        use crate::api::coord::gcj02_to_bd09;
+        let gcj = (23.754_392f64, 114.739_237f64);
+        let bd = gcj02_to_bd09(gcj.0, gcj.1);
+        let shift = crate::track::geo::distance(gcj, bd);
+        assert!(
+            shift > 500.0,
+            "华南一带 GCJ-02 → BD-09 应该有几百米偏移，实测 {shift:.0}m"
+        );
+        // 用 GCJ 坐标当禁区、BD 坐标当轨迹点时，点根本不在多边形里；
+        // 转过来之后才落进去。这条就是「不转换 = 绕错了地方」的最小复现。
+        let d = 20.0 / m_per_deg_lat(gcj.0);
+        let poly_gcj = vec![
+            (gcj.0 - d, gcj.1 - d),
+            (gcj.0 - d, gcj.1 + d),
+            (gcj.0 + d, gcj.1 + d),
+            (gcj.0 + d, gcj.1 - d),
+        ];
+        let poly_bd: Vec<(f64, f64)> = poly_gcj.iter().map(|&(a, b)| gcj02_to_bd09(a, b)).collect();
+        assert!(!contains(&poly_gcj, bd.0, bd.1), "BD 点不该落在未转换的 GCJ 多边形里");
+        assert!(contains(&poly_bd, bd.0, bd.1), "转换之后才落进去");
+    }
+
+    /// `nudge_outside` 只推点、不增删，点数必须保持不变。
+    ///
+    /// 它跑在等时间采样之后，后面还有一段「按索引把时间戳贴回点位」的映射；
+    /// 一旦点数变了，时间轴就对不上了。
+    #[test]
+    fn nudge_outside_keeps_point_count() {
+        let lat0 = 31.2300f64;
+        let lng0 = 121.4700f64;
+        let d = 12.0 / m_per_deg_lat(lat0);
+        let clamp_lng = 20.0 / m_per_deg_lng(lat0);
+        let poly = vec![
+            (lat0 - d, lng0 - clamp_lng),
+            (lat0 - d, lng0 + clamp_lng),
+            (lat0 + d, lng0 + clamp_lng),
+            (lat0 + d, lng0 - clamp_lng),
+        ];
+        let mut pts: Vec<(f64, f64)> = (0..=10)
+            .map(|i| (lat0, lng0 - clamp_lng + i as f64 * clamp_lng / 5.0))
+            .collect();
+        let before_len = pts.len();
+        let moved = super::nudge_outside(&mut pts, &[poly.clone()], 2.0);
+        assert_eq!(pts.len(), before_len, "点数必须不变，否则时间戳映射会错位");
+        assert!(moved > 0, "穿过去的点应该被推动");
+        let still_in = pts.iter().filter(|p| contains(&poly, p.0, p.1)).count();
+        assert_eq!(still_in, 0, "推完之后不该还有点在禁区里");
     }
 
     /// 打卡点回钉会撤销避让——这条钉住顺序问题，防止以后有人以为

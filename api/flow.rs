@@ -931,10 +931,21 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         let blockers: Vec<Vec<(f64, f64)>> = {
             let bbox = crate::track::roadnet::bbox_of(&fence_ring, 60.0);
             let mut v: Vec<Vec<(f64, f64)>> = Vec::new();
+            // **三套坐标系必须归一到 BD-09 才能放进同一个几何判断。**
+            // 这里原来是直接 `v.extend(...)`，把三种坐标混在一个平面上：
+            //   OSM 建筑/水体   ← Overpass，WGS84（原始，无转换）
+            //   本地手绘禁区    ← 前端 Leaflet × 高德瓦片，GCJ-02
+            //   轨迹点/围栏环   ← fence.rs 已转成 BD-09
+            // 华南一带 GCJ-02 → BD-09 要偏 900 米以上（实测河源 950 m），
+            // 于是避让一直在执行，只是绕的是几百米外另一块地——看起来就是
+            // 「禁区完全没用，挪走也不变」。
+            let to_bd = |poly: &Vec<(f64, f64)>, f: fn(f64, f64) -> (f64, f64)| -> Vec<(f64, f64)> {
+                poly.iter().map(|&(la, ln)| f(la, ln)).collect()
+            };
             match crate::track::roadnet::fetch_buildings(bbox) {
                 Ok(b) if !b.is_empty() => {
                     log(&format!("[block] 建筑轮廓 {} 栋", b.len()));
-                    v.extend(b);
+                    v.extend(b.iter().map(|p| to_bd(p, crate::api::coord::wgs84_to_bd09)));
                 }
                 Ok(_) => log("[block] 这一带没有建筑数据"),
                 Err(e) => log(&format!("[block] 建筑轮廓没拿到（{e}），本次不避让")),
@@ -942,16 +953,17 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             if let Ok(w) = crate::track::roadnet::fetch_water(bbox) {
                 if !w.is_empty() {
                     log(&format!("[block] 水域 {} 片", w.len()));
-                    v.extend(w);
+                    v.extend(w.iter().map(|p| to_bd(p, crate::api::coord::wgs84_to_bd09)));
                 }
             }
             // 本地手绘禁区。OSM 在国内校园基本是空白（实测某校区整个 bbox
             // 只有 15 个 way、76 个 node，一栋楼都没有），Overpass 拿不到轮廓
             // 时只能靠人自己在地图上圈。这份标注全账号共享，长期有效。
+            // 前端底图是高德瓦片，存下来的多边形是 GCJ-02，读取时转 BD-09。
             let local = crate::track::roadnet::load_local_blockers();
             if !local.is_empty() {
                 log(&format!("[block] 本地标注禁区 {} 块", local.len()));
-                v.extend(local);
+                v.extend(local.iter().map(|p| to_bd(p, crate::api::coord::gcj02_to_bd09)));
             }
             v
         };
@@ -1284,6 +1296,28 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             crate::api::submit::MAX_POINT_SPEED_MPS
         ));
     }
+    // 上报点最后再推一次。
+    //
+    // `sample_by_time` 已经会在弦压到楼上时改用折线顶点，但「区间里没有可用
+    // 顶点」时它只能如实穿过去；而且等时间采样取的点落在原折线的弦上，两条
+    // 弦的交点会切进多边形角部。实测修好坐标系之后，158 个上报点里仍有 2 个
+    // 落在禁区里、最近边界 0.6m——视觉上就是线还擦着楼角。这里逐点做一次
+    // 最小位移推出，**点数不变**，所以下面按索引对时间戳的映射依然成立。
+    if !blockers_used.is_empty() {
+        let mut flat: Vec<(f64, f64)> = track_points.iter().map(|q| (q.lat, q.lon)).collect();
+        let moved = crate::track::fence_route::nudge_outside(&mut flat, &blockers_used, 2.0);
+        if moved > 0 {
+            for (tp, (la, ln)) in track_points.iter_mut().zip(flat.iter()) {
+                tp.lat = *la;
+                tp.lon = *ln;
+            }
+            log(&format!(
+                "√ [block] {} 个上报点擦到禁区边界，已推出 2m",
+                moved
+            ));
+        }
+    }
+
     // 压平后点都落在原折线上，弧长总和几乎不变，但报文的 totalDis 必须
     // 与 `allLocJson` 末点的 totalDis 同源，所以在这里重算一次。
     // 吸附改过坐标，这一次重算同时把吸附引起的几米变化算进去。
