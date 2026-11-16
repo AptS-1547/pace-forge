@@ -126,6 +126,12 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
+      # 必须 checkout：手写发版说明在 `docs/release-notes/<tag>.md`，
+      # 不 checkout 的话工作目录里只有 download-artifact 拉下来的 dist，
+      # `Test-Path` 永远 false，于是每次都退回 --generate-notes。
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           pattern: pace-forge-*-${{ github.sha }}
