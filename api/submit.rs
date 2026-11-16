@@ -247,8 +247,18 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
     order
         .iter()
         .enumerate()
-        .map(|(position, &i)| {
+        .map(|(rank, &i)| {
             let f = &fixed[i];
+            // `position` 填**该点在轨迹里的首次经过下标**，不是 0..N-1 连续序号。
+            //
+            // 11-13 那次（d17f844）把它改成连续序号，理由是「非连续不递增，
+            // App 排序/取下标会错位」——那是推论，没验证过。实际数据正好相反：
+            //
+            //   伊木郎 11-11 那条（App 显示 5 个点）：position = 0 / 30 / 46 / 106 / 189
+            //   改成连续序号之后（11-16 起，App 只显示 4 个）：position = 0 1 2 3 4
+            //
+            // 也就是说 App 要的就是轨迹下标。没经过的点（hits 为 None）退回用
+            // rank 占位，避免 null。
             // glat/glon 缺失（0）时由 BD-09 反算：真机两套坐标都是真值，
             // 发 0 等于告诉服务端「这个点没有 GCJ 坐标」，点位可能被丢掉。
             let (glat, glon) = if f.glat != 0.0 && f.glon != 0.0 {
@@ -262,14 +272,14 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
                 "flag": flag_ms,
                 "glat": glat,
                 "glon": glon,
-                "id": FIXED_POINT_ID_BASE + position as i64,
+                "id": FIXED_POINT_ID_BASE + rank as i64,
                 // 用服务端下发的标记，不再按「排序第一个」猜（见 FixedPoint::is_fixed）
                 "isFixed": f.is_fixed,
                 "isPass": hits[i].is_some(),
                 "lat": f.lat,
                 "lon": f.lon,
                 "pointName": f.point_name,
-                "position": position as i64,
+                "position": hits[i].map(|h| h as i64).unwrap_or(rank as i64),
                 "state": 0,
             })
         })
@@ -3034,9 +3044,19 @@ mod audit_tests {
             serde_json::from_str(env["fivePointJson"].as_str().unwrap()).unwrap();
         assert_eq!(inner.len(), 5, "五个必到点一个都不能少");
 
-        // ① position == [0,1,2,3,4]，且数组下标 == position
+        // ① position 是**该点在轨迹里的首次经过下标**（0..N-1 连续序号是错的）。
+        //
+        // 11-13 那次（d17f844）改成连续序号，理由是「App 排序/取下标会错位」，
+        // 但那是推论。实测伊木郎 11-11 那条（App 显示 5 个点）发的是
+        // 0 / 30 / 46 / 106 / 189 —— 就是轨迹下标；改成 0..4 之后 App 只剩 4 个。
+        // 夹具的必到点打乱传在 220/30/290/90/150，按途经顺序排完是
+        // 30/90/150/220/290，所以 position 应等于这五个轨迹下标本身。
         let positions: Vec<i64> = inner.iter().map(|f| f["position"].as_i64().unwrap()).collect();
-        assert_eq!(positions, vec![0, 1, 2, 3, 4], "position 必须是 0..N-1 连续序号");
+        assert_eq!(
+            positions,
+            vec![29, 89, 149, 219, 289],
+            "position 必须是该点的首次经过轨迹下标，不是 0..N-1"
+        );
 
         // ② 数组顺序 = 途经顺序（按首次经过下标升序）
         let got: Vec<&str> = inner.iter().map(|f| f["pointName"].as_str().unwrap()).collect();
