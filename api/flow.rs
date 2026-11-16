@@ -1318,10 +1318,37 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             ));
         }
     }
+    // 拐角补位是把点**挪走**，挪完间距可能又超了——上面那次 `clamp_sample_gaps`
+    // 跑在补位之前，管不到这里。实测有一条轨迹补位后第 130 点间距 50.1m，
+    // 本地体检直接把它判成「不像走出来的」拦掉提交。补位后再压一次。
+    let clamped_after_corner =
+        crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
+    let clamped = clamped + clamped_after_corner;
     if clamped > 0 {
         log(&format!(
-            "√ [snap] 吸附后 {clamped} 处相邻间距超过 {max_gap:.1}m（{:.1} m/s 上限），已压回",
+            "√ [snap] 吸附/补位后 {clamped} 处相邻间距超过 {max_gap:.1}m（{:.1} m/s 上限），已压回",
             crate::api::submit::MAX_POINT_SPEED_MPS
+        ));
+    }
+    // 压完再核一遍：`clamp_sample_gaps` 对「两端都是打卡点」的段会跳过（钉住动不了），
+    // 那种段仍可能超限，明确打出来，别让本地体检替它背锅。
+    if let Some((i, gap)) = track_points
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| {
+            (
+                i,
+                crate::track::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)),
+            )
+        })
+        .filter(|(_, g)| *g > max_gap * 1.05)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+    {
+        log(&format!(
+            "! [snap] 第 {} 点间距仍有 {:.1}m（上限 {:.1}m）——这一段的端点被钉住了，压不动",
+            i + 1,
+            gap,
+            max_gap
         ));
     }
     // 上报点最后再推一次。
