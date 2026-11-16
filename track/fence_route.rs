@@ -1223,7 +1223,7 @@ mod tests {
             .map(|i| (lat0, lng0 - clamp_lng + i as f64 * clamp_lng / 5.0))
             .collect();
         let before_len = pts.len();
-        let moved = super::nudge_outside(&mut pts, &[poly.clone()], 2.0);
+        let moved = super::nudge_outside(&mut pts, std::slice::from_ref(&poly), 2.0);
         assert_eq!(pts.len(), before_len, "点数必须不变，否则时间戳映射会错位");
         assert!(moved > 0, "穿过去的点应该被推动");
         let still_in = pts.iter().filter(|p| contains(&poly, p.0, p.1)).count();
