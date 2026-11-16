@@ -274,18 +274,23 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
             };
             // 键序按真机那样字母序排（serde_json 开了 preserve_order，顺序
             // 由宏里的书写次序决定），与真机样本逐字节一致。
+            // 键序照 11-11 那版（`lon` 开头），不是字母序。
+            //
+            // 字母序是照真机样本 1328288734 排的；但实测能画全 5 个点的是
+            // 11-11 那版，它发的是 lon/lat/isFixed/pointName/glon/glat/
+            // position/flag/id/isPass/state。`preserve_order` 开着，键序直接
+            // 决定序列化字节，App 若按位置解析就会差一个字段。
             json!({
-                "flag": flag_ms,
-                "glat": glat,
-                "glon": glon,
-                "id": FIXED_POINT_ID_BASE + rank as i64,
-                // 用服务端下发的标记，不再按「排序第一个」猜（见 FixedPoint::is_fixed）
-                "isFixed": f.is_fixed,
-                "isPass": hits[i].is_some(),
-                "lat": f.lat,
                 "lon": f.lon,
+                "lat": f.lat,
+                "isFixed": f.is_fixed,
                 "pointName": f.point_name,
+                "glon": glon,
+                "glat": glat,
                 "position": hits[i].map(|h| h as i64).unwrap_or(rank as i64),
+                "flag": flag_ms,
+                "id": FIXED_POINT_ID_BASE + rank as i64,
+                "isPass": hits[i].is_some(),
                 "state": 0,
             })
         })

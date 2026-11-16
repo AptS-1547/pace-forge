@@ -1810,6 +1810,23 @@ fn handle_run(
     let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
     let sport_type = body["sportType"].as_i64().unwrap_or(1) as i32;
 
+    // 提交前核对当前会话账号。
+    //
+    // 出过两次事：为了对比登录过另一个号，回来忘了切，记录落到别人账号下，
+    // 本地没有删除接口，只能去 App 里手动删。调用方给了 `expectUid` 就核对，
+    // 对不上直接拒。**注意这个校验必须落在 `handle_run` 里**——上一版误加到了
+    // `handle_batch`，那条入口根本没人走，等于没加。
+    if let Some(want) = body["expectUid"].as_str().filter(|v| !v.is_empty()) {
+        let now = { lock_state(&state).current.clone() };
+        let now_str = now.clone().unwrap_or_else(|| "（未登录）".into());
+        if now.as_deref() != Some(want) {
+            return json_err(
+                request,
+                &format!("当前登录的是 {now_str}，不是 expectUid 指定的 {want}，已拒绝提交"),
+            );
+        }
+    }
+
     if distance_km <= 0.0 || distance_km > 42.0 {
         return json_err(request, "距离需在 0~42 公里之间");
     }
