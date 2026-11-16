@@ -147,7 +147,17 @@ jobs:
           $assets = @($archives.FullName) + @((Resolve-Path dist/SHA256SUMS).Path)
           gh release view $env:RELEASE_TAG --json isDraft 2>$null
           if ($LASTEXITCODE -ne 0) {
-            $releaseArgs = @('release', 'create', $env:RELEASE_TAG, '--verify-tag', '--title', $env:RELEASE_TAG, '--generate-notes', '--draft')
+            # 优先用手写的说明：`--generate-notes` 只看得见 PR，而本仓绝大多数
+            # 提交是直接 push 到 main，自动生成的说明基本只剩零星几个 PR，
+            # 连仓库 owner 自己都不会出现在 Contributors 里。
+            # 约定路径：docs/release-notes/<tag>.md，存在就整份采用。
+            $notesFile = "docs/release-notes/$($env:RELEASE_TAG).md"
+            $releaseArgs = @('release', 'create', $env:RELEASE_TAG, '--verify-tag', '--title', $env:RELEASE_TAG, '--draft')
+            if (Test-Path $notesFile) {
+              $releaseArgs += @('--notes-file', $notesFile)
+            } else {
+              $releaseArgs += '--generate-notes'
+            }
             if ($env:RELEASE_TAG -match '^v\d+\.\d+\.\d+-') { $releaseArgs += '--prerelease' }
             gh @releaseArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
