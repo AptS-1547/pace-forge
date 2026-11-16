@@ -499,31 +499,34 @@ pub fn point_json_full(
     // 真机分布：{0: 89, -1: 17, 2: 5, 5: 1, 6: 1, 7: 1}（共 114 点）。
     // 和老实现的三处差异：起点是 7 不是 0、第二个点是 5；起步段（GPS 刚
     // 锁定、位移被过滤）整段是 **-1**；全程不出现 1，打卡位置改用 2 承载。
+    // 类型只认最新一份真机实测（账号 实测账号，rrid 1362483656 / 1366096492，
+    // 104 个采样点）：`{0: 101, 3: 1, 5: 1, 6: 1}`。
+    //
+    //   5  起点（第 1 个点）
+    //   3  倒数第二个点
+    //   6  终点
+    //   0  其余全部
+    //
+    // 早先这套是照 10-02 那份老样本（`{0:89, -1:17, 2:5, 5:1, 6:1, 7:1}`）写的：
+    // 起点 7、第二个点 5、起步段整段 -1、打卡点撒 type=2。可新样本里 **没有
+    // -1、没有 2、没有 7**，起点是 5，还多出一个 3。两份样本对不上，说明
+    // 服务端或 App 改过口径，以新的为准。
+    //
+    // 打卡点标记（type=2）一起删掉：新真机压根不发它，App 详情页也不靠它——
+    // 实测真实记录的 5 个点位全靠 `fivePointJson` 渲染，`allLocJson` 里一个
+    // 打卡标记都没有。发出去只会多一个「这不是真机」的特征。
     let ptype = if idx == 0 {
-        7
+        5
     } else if idx + 1 == n {
         6
-    } else if idx == 1 {
-        5
-    } else if idx < startup {
-        // 起步灰点：真机第 3~18 个点全是 -1，对应 86 秒 GPS 漂移段
-        -1
-    } else if checkpoint_idxs.contains(&idx) {
-        // 打卡点**只标命中的那一个采样点**，不撒窗口。
-        //
-        // 真机 114 个点里 type=2 恰好 5 个，而记录里有 5 个打卡点——
-        // 一点一个，没有 `idx±2` 那种连续标记。早先按 ±2 撒窗口，5 个点位
-        // 能撒出 31 个 type=2（实测），是真机的 6 倍，等于自己给自己加了一组
-        // 说明「这不是真机」的特征。
-        //
-        // 撒窗口的初衷是「怕服务端按范围找点时密度太低」，但那是拿猜测压过
-        // 实测：真机样本本身就是一点一个，服务端认它。
-        2
+    } else if idx + 2 == n {
+        3
     } else {
-        // 普通采样点一律 0。真机的 {0: 89} 里没有任何随机 2，
-        // 早先按 5% 撒 2 会把 type=2 的总数顶到真机的两倍。
         0
     };
+    // `startup` 与 `checkpoint_idxs` 仍要传：前者给 `queueNum`/几何压缩用，
+    // 后者给 `fivePointJson` 的 `isPass` 判定用，只是不再参与 `type`。
+    let _ = (startup, &checkpoint_idxs);
 
     // GPS 精度半径：真机 1.4~2.3m（众数 1.5~2.0）。早先按 3.6~4.3 生成，
     // 等于「每次定位都差四米」，是明显的机器指纹。
@@ -2310,10 +2313,21 @@ mod point_shape_tests {
         // 真机点里没有 steps 字段（步数只在 segment_json / laps_json 里）
         assert!(p0.get("steps").is_none(), "真机没有 steps 字段，不该多发");
 
-        // 起点与终点的 type：真机首点是 7（灰点）、第二个点 5、末点 6
-        assert_eq!(arr[0]["type"], 7, "真机起点 type=7");
-        assert_eq!(arr[1]["type"], 5, "真机第二个点 type=5");
-        assert_eq!(arr[2]["type"], 6, "终点 type=6");
+        // type 只认最新真机（账号 实测账号，104 点）：起点 5、倒数第二 3、末点 6，
+        // 其余全 0。老样本那套 7 / -1 / 2 已经不对了，见 `ptype` 处的注释。
+        assert_eq!(arr[0]["type"], 5, "真机起点 type=5");
+        let last = arr.len() - 1;
+        assert_eq!(arr[last]["type"], 6, "终点 type=6");
+        assert_eq!(arr[last - 1]["type"], 3, "倒数第二个点 type=3");
+        // 中间那些必须是 0，不能再冒出 -1 / 2 / 7
+        for (i, q) in arr.iter().enumerate().take(last - 1).skip(1) {
+            assert_eq!(
+                q["type"].as_i64(),
+                Some(0),
+                "第 {i} 点 type 应为 0，实际 {:?}",
+                q["type"]
+            );
+        }
 
         // 累计量递增
         let d0 = arr[0]["totalDis"].as_f64().unwrap();
@@ -2355,89 +2369,7 @@ mod point_shape_tests {
         );
     }
 
-    /// 打卡点落在起点上时，`type=2` 不能被起点抢走。
-    ///
-    /// `type` 是 if-else 顺序赋值的：起点 7、终点 6、第二个点 5、起步灰点 -1
-    /// 都排在 `type=2` 前面。实测轨迹从第一个打卡点附近起步时，`idx=0` 直接
-    /// 变成 7，5 个必到点只标出 4 个 `type=2`，App 详情页于是少画一个点位。
-    #[test]
-    fn checkpoint_on_start_point_still_gets_type_2() {
-        let n = 200usize;
-        let lat0 = 31.2304;
-        let pts: Vec<TrackPoint> = (0..n)
-            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 121.4737, 1_790_000_000_000 + i as i64 * 5000))
-            .collect();
-        // 第一个必到点**正好落在起点**（idx=0），其余散布在后面
-        let marks = [0usize, 50, 90, 130, 170];
-        let fixed: Vec<FixedPoint> = marks
-            .iter()
-            .enumerate()
-            .map(|(k, &i)| FixedPoint {
-                lat: pts[i].lat,
-                lon: pts[i].lon,
-                point_name: format!("P{i}"),
-                glat: 0.0,
-                glon: 0.0,
-                is_fixed: if k == 2 { 1 } else { 0 },
-            })
-            .collect();
-        let p0 = params();
-        let sim = test_sim(&p0, &pts);
-        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
-        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
-        assert_eq!(
-            n2, 5,
-            "起点上的打卡点也得标 type=2（绕开 idx=0），实际只有 {n2} 个"
-        );
-        // 起点仍然是 7
-        assert_eq!(sub.points[0]["type"], 7, "起点 type 必须还是 7");
-    }
 
-    /// `type=2` 的数量必须等于「轨迹真的经过的打卡点数」。
-    ///
-    /// App 详情页按 `type=2` 的采样点来认打卡位置：一点一个，少了就少画一个点。
-    /// 这里直接构造 5 个必到点、把轨迹压在它们身上，断言标出来的 `type=2`
-    /// 恰好 5 个，不多不少。
-    #[test]
-    fn type_2_markers_equal_passed_checkpoints() {
-        let n = 240usize;
-        let lat0 = 31.2304;
-        // 一条南北向直线，每点约 6.7m
-        let pts: Vec<TrackPoint> = (0..n)
-            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 121.4737, 1_790_000_000_000 + i as i64 * 5000))
-            .collect();
-        // 5 个必到点直接落在第 40/80/120/160/200 个采样点上
-        let marks = [40usize, 80, 120, 160, 200];
-        let fixed: Vec<FixedPoint> = marks
-            .iter()
-            .enumerate()
-            .map(|(k, &i)| FixedPoint {
-                lat: pts[i].lat,
-                lon: pts[i].lon,
-                point_name: format!("P{i}"),
-                glat: 0.0,
-                glon: 0.0,
-                is_fixed: if k == 4 { 1 } else { 0 },
-            })
-            .collect();
-        let p0 = params();
-        let sim = test_sim(&p0, &pts);
-        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
-
-        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
-        assert_eq!(
-            n2, 5,
-            "5 个必到点都压在轨迹上，type=2 必须正好 5 个（App 按它画打卡点），实际 {n2} 个"
-        );
-
-        // 五个都在 10m 内 → isPass 全 true，且 type=2 与之一一对应
-        let env: serde_json::Value =
-            serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap()).unwrap();
-        let inner: Vec<serde_json::Value> =
-            serde_json::from_str(env["fivePointJson"].as_str().unwrap()).unwrap();
-        let passed = inner.iter().filter(|f| f["isPass"] == true).count();
-        assert_eq!(passed, 5, "五个点都该判成经过，实际 {passed}");
-    }
 
     #[test]
     fn point_types_cover_realistic_mix() {
@@ -2455,18 +2387,17 @@ mod point_shape_tests {
         for p in &arr {
             types.insert(p["type"].as_i64().unwrap());
         }
-        // 真机分布 {0: 89, -1: 17, 2: 5, 5: 1, 6: 1, 7: 1}：类型要有变化
-        assert!(types.len() >= 3, "点位类型要有变化，实际 {types:?}");
-        // -1（灰点）必须出现：真机起步段整段都是 -1，是我们漏掉的取值
-        assert!(types.contains(&-1), "真机起步段有 -1 灰点，实际 {types:?}");
-        // 真机全程没有 type=1，我们也不该再发
-        assert!(!types.contains(&1), "真机 114 点里 type=1 出现 0 次");
-        // 1 / 7 / 5 这些也得在合法集合里
+        // 新版真机（账号 实测账号，104 点）分布 {0: 101, 3: 1, 5: 1, 6: 1}
+        assert!(types.len() >= 2, "点位类型要有变化，实际 {types:?}");
         for t in &types {
             assert!(
-                [0, -1, 2, 5, 6, 7].contains(t),
-                "type={t} 不在真机出现过的取值集合里"
+                [0, 3, 5, 6].contains(t),
+                "type={t} 不在新版真机取值集合里（老样本的 -1/2/7 已废弃）"
             );
+        }
+        // 老样本那套必须彻底不出现
+        for gone in [-1, 1, 2, 7] {
+            assert!(!types.contains(&gone), "type={gone} 是老样本口径，新版真机不发");
         }
     }
 }
@@ -3843,7 +3774,7 @@ mod parity_regression_tests {
             assert!([1, 2, 3].contains(&st), "第 {i} 点 state={st} 不在真机三态里");
             let ty = q["type"].as_i64().unwrap();
             assert!(
-                [0, -1, 2, 5, 6, 7].contains(&ty),
+                [0, 3, 5, 6].contains(&ty),
                 "第 {i} 点 type={ty} 不在真机取值集合里"
             );
         }
@@ -3909,10 +3840,11 @@ mod parity_regression_tests {
         for (i, q) in pts.iter().take(su).enumerate().skip(1) {
             assert!(q["speed"].as_f64().unwrap() > 0.0, "第 {i} 点 speed 为 0，配速图会断线");
             assert_eq!(q["stepDistance"].as_f64().unwrap(), 0.0, "第 {i} 点 stepDistance 应为 0");
-            // 起步段里除首点(7)/第二点(5) 之外都是 -1 灰点
-            assert!(
-                q["type"].as_i64().unwrap_or(0) < 0 || i < 2,
-                "第 {i} 点：起步段中段应是 -1 灰点，实际 type={}",
+            // 新版真机起步段没有 -1 灰点，窗口内除首点(5)外一律 0
+            assert_eq!(
+                q["type"].as_i64(),
+                Some(0),
+                "第 {i} 点：新版真机起步段是 0，不该再有 -1，实际 {:?}",
                 q["type"]
             );
         }
@@ -3928,7 +3860,10 @@ mod parity_regression_tests {
             *types.entry(q["type"].as_i64().unwrap()).or_insert(0) += 1;
             *states.entry(q["state"].as_i64().unwrap()).or_insert(0) += 1;
         }
-        assert!(types.get(&-1).copied().unwrap_or(0) >= 10, "起步灰点太少: {types:?}");
+        // 新版真机（104 点）{0: 101, 3: 1, 5: 1, 6: 1}：没有 -1 灰点
+        assert_eq!(types.get(&-1).copied().unwrap_or(0), 0, "新版真机不发 -1 灰点: {types:?}");
+        assert_eq!(types.get(&2).copied().unwrap_or(0), 0, "新版真机不发 type=2: {types:?}");
+        assert_eq!(types.get(&7).copied().unwrap_or(0), 0, "新版真机不发 type=7: {types:?}");
         assert!(states.get(&3).copied().unwrap_or(0) >= pts.len() / 5, "收尾段太少: {states:?}");
         assert!(
             states.get(&1).copied().unwrap_or(0) > states.get(&3).copied().unwrap_or(0),

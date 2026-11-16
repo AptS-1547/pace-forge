@@ -1499,25 +1499,31 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         log(&format!("  {line}"));
     }
 
-    // 自检校验的点位必须带打卡标记。
+    // 自检与上传必须共用同一份点位。
     //
-    // `fixed` 一旦传空（早先 probe 就是这样），`checkpoint_track_indexes` 得到
-    // 空列表，点位里一个 `type=2` 都不会有，而上传那份有——这正是「自检守 A、
-    // 上传发 B」的入口（A4）。放在 preflight 之后：真的没经过点位时由
-    // preflight 报 CP_MISS，这里只兜「参数传空」这一种。
-    let marked = probe_sub
-        .points
-        .iter()
-        .filter(|q| q.get("type").and_then(|v| v.as_i64()) == Some(2))
-        .count();
-    if !fixed.is_empty() && marked == 0 {
-        return Err("自检点位里没有任何打卡标记（type=2）：probe 的 fixed 传空了".into());
+    // 早先这里是数 `type=2` 打卡标记的个数，用来兜「`fixed` 传空」——
+    // 但新版真机（账号 实测账号，rrid 1362483656）压根不发 `type=2`，
+    // 104 个点全是 `{0: 101, 3: 1, 5: 1, 6: 1}`，5 个必经点完全靠
+    // `fivePointJson` 渲染。所以改成直接数必到点数组，不再依赖采样点类型。
+    let n_fixed = probe_sub
+        .save_record
+        .get("fivePointJson")
+        .and_then(|v| v.as_str())
+        .and_then(|x| serde_json::from_str::<Value>(x).ok())
+        .and_then(|v| v.get("fivePointJson").cloned())
+        .and_then(|v| v.as_str().and_then(|x| serde_json::from_str::<Vec<Value>>(x).ok()))
+        .map(|v| v.len())
+        .unwrap_or(0);
+    if !fixed.is_empty() && n_fixed != fixed.len() {
+        return Err(format!(
+            "自检点位里必到点数量对不上（报文 {n_fixed} 个，应有 {} 个）：probe 的 fixed 传空了？",
+            fixed.len()
+        ));
     }
     log(&format!(
-        "√ [points] 自检与上传共用同一份点位：{} 点 / {} 个打卡标记（{} 个必到点）",
+        "√ [points] 自检与上传共用同一份点位：{} 点 / {} 个必到点",
         probe_sub.points.len(),
-        marked,
-        fixed.len()
+        n_fixed
     ));
 
     // 服务端「经过点位」到底比哪套坐标？BD-09 的 lat/lon 与 GCJ-02 的
@@ -2616,13 +2622,21 @@ mod fixed_point_payload_tests {
         let loc: Vec<serde_json::Value> =
             serde_json::from_str(run["allLocJson"].as_str().unwrap()).unwrap();
 
+        // 新版真机（账号 实测账号，rrid 1362483656）的 allLocJson 里
+        // **没有任何打卡标记**：104 个点全是 {0: 101, 3: 1, 5: 1, 6: 1}，
+        // 5 个必经点完全靠 `fivePointJson` 渲染。早先要求 type=2 是照
+        // 10-02 老样本写的，那套口径服务端已经不用了。
         let marked: Vec<usize> = loc
             .iter()
             .enumerate()
             .filter(|(_, q)| q["type"].as_i64() == Some(2))
             .map(|(i, _)| i)
             .collect();
-        assert!(!marked.is_empty(), "打卡点必须被标成 type=2，否则服务端 density 打分不够");
+        assert!(
+            marked.is_empty(),
+            "新版真机不撒 type=2 打卡标记（App 靠 fivePointJson 渲染），实际撒了 {} 个: {marked:?}",
+            marked.len()
+        );
         // 命中判定半径 10m、采样间距 5m，所以「首次命中」可能是第 24 个点，
         // 加上 ±2 的标记窗口，形成一段连续标记。
         //
@@ -2631,14 +2645,23 @@ mod fixed_point_payload_tests {
         // 这里不断言「全部标记都落在窗口内」——只断言**打卡点本身**被标到：
         // 第 25 个点必须在标记集合里，且标记不能整体跑到轨迹开头（那样就是
         // 又把 `position` 当轨迹下标用了）。
-        assert!(
-            marked.contains(&25),
-            "第 25 个采样点必须被标成打卡点，实际 {marked:?}"
-        );
-        assert!(
-            !marked.iter().any(|&i| i < 20),
-            "打卡标记不该出现在轨迹开头（`position` 又被当成轨迹下标了）：{marked:?}"
-        );
+        // 新版真机不发 type=2，上面已断言 marked 为空；这里保留「position 不能
+        // 被当成轨迹下标」的另一半检查：fivePointJson 的 position 必须是 0..N-1
+        // 连续序号，一旦又变成轨迹下标（0/71/88/170/51 那种），App 会少画点位。
+        let fps: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&five)
+            .ok()
+            .and_then(|v| v.get("fivePointJson").cloned())
+            .and_then(|v| v.as_str().and_then(|x| serde_json::from_str(x).ok()))
+            .unwrap_or_default();
+        assert!(!fps.is_empty(), "fivePointJson 不能为空");
+        for (i, f) in fps.iter().enumerate() {
+            assert_eq!(
+                f["position"].as_i64(),
+                Some(i as i64),
+                "第 {i} 个必到点的 position 必须是连续序号，实际 {:?}",
+                f["position"]
+            );
+        }
     }
 }
 
@@ -2961,13 +2984,13 @@ mod single_point_source_tests {
             "必到点必须带 isFixed/isPass 标记：{fa:?}"
         );
 
-        // 点位里必须真的带上了打卡点标记（`type=2`），修复前自检那份一个都没有
+        // 新版真机不发 type=2（见 `ptype` 处注释），这里改成断言「一份里也不该有」
         let marked = probe
             .points
             .iter()
             .filter(|p| p["type"].as_i64() == Some(2))
             .count();
-        assert!(marked > 0, "自检那份点位缺 type=2 打卡标记（probe 传了空 fixed）");
+        assert_eq!(marked, 0, "新版真机不发 type=2，实际 {marked} 个");
 
         // envelope 层：差异只允许出现在白名单里
         assert_envelope_diff_allowlisted(&probe.save_record, &submission.save_record);
