@@ -1294,6 +1294,24 @@ fn handle_batch(
     let run_mode = body["runMode"].as_i64().unwrap_or(1);
     let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
     let sport_type = body["sportType"].as_i64().unwrap_or(1) as i32;
+    // 跑之前必须确认「当前会话是谁」。
+    //
+    // 出过事：中途登录过另一个号做对比，回来忘了切，三条记录落到别人账号下，
+    // 本地又没有删除接口，只能去 App 里手动删。提交是不可撤销的操作，宁可在
+    // 这里多问一句——调用方明确给了 `expectUid` 就核对，对不上直接拒。
+    if let Some(want) = body["expectUid"].as_str().filter(|v| !v.is_empty()) {
+        let now = {
+            let st = lock_state(&state);
+            st.current.clone()
+        };
+        let now_str = now.clone().unwrap_or_else(|| "（未登录）".into());
+        if now.as_deref() != Some(want) {
+            return json_err(
+                request,
+                &format!("当前登录的是 {now_str}，不是 expectUid 指定的 {want}，已拒绝提交"),
+            );
+        }
+    }
     let dry = body["dry"].as_bool().unwrap_or(false);
     // 账号间隔（毫秒），默认 8 秒，避免同 IP 高频
     let gap_ms = body["gapMs"].as_u64().unwrap_or(8000);
