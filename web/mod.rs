@@ -2211,6 +2211,65 @@ fn respond_html(request: tiny_http::Request, html: &str) -> Result<(), String> {
 const INDEX_HTML: &str = include_str!("index.html");
 
 #[cfg(test)]
+mod index_html_tests {
+    use super::INDEX_HTML;
+
+    /// 与前端 esc() 同一套实体表的镜像，用来跑注射样例回归：
+    /// 样例里的尖括号/引号必须全部变成实体，不留可解析成标签的裸 `<`。
+    fn esc_mirror(s: &str) -> String {
+        s.chars()
+            .map(|c| match c {
+                '&' => "&amp;".to_string(),
+                '<' => "&lt;".to_string(),
+                '>' => "&gt;".to_string(),
+                '"' => "&quot;".to_string(),
+                '\'' => "&#39;".to_string(),
+                _ => c.to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn injection_payload_is_fully_escaped() {
+        let payloads = [
+            "<img src=x onerror=alert(1)>",
+            "\"><svg onload=alert(1)>",
+            "a'><script>alert(1)</script>",
+        ];
+        for p in payloads {
+            let out = esc_mirror(p);
+            assert!(!out.contains('<'), "残留裸尖括号: {out}");
+            assert!(!out.contains('>'), "残留裸尖括号: {out}");
+            assert!(!out.contains("<script"));
+        }
+    }
+
+    #[test]
+    fn upstream_sinks_are_wrapped_by_esc() {
+        // 转义函数本体必须在页面里，且实体映射齐全
+        assert!(INDEX_HTML.contains("const esc ="));
+        for ent in ["&amp;", "&lt;", "&gt;", "&quot;", "&#39;"] {
+            assert!(INDEX_HTML.contains(ent), "esc 实体映射缺失: {ent}");
+        }
+        // 上游可控字段进入 innerHTML / 弹窗的拼接点必须走 esc()，漏包任一即红
+        for sink in [
+            "esc(r.fence.name)",
+            "esc(c.name)",
+            "esc(a.label)",
+            "esc(a.username)",
+            "esc(a.school",
+            "esc(x.error)",
+            "esc(r.issueSummary)",
+            "esc(r.logs.join('\\n'))",
+            "esc(sm.sname",
+            "esc(e.message)",
+        ] {
+            assert!(INDEX_HTML.contains(sink), "缺少转义包裹: {sink}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod origin_tests {
     use super::origin_matches_host;
 

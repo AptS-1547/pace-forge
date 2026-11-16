@@ -817,7 +817,7 @@ $('planBtn').onclick = async () => {
     const issueHtml = (r.issues && r.issues.length)
       ? r.issues.map(t => {
           const cls = t.includes('致命') ? 'err' : (t.includes('警告') ? 'warn' : '');
-          return `<div class="msg ${cls}" style="margin-top:4px">${t}</div>`;
+          return `<div class="msg ${cls}" style="margin-top:4px">${esc(t)}</div>`;
         }).join('')
       : '<div class="msg" style="margin-top:6px">自检全部通过</div>';
     const policyHtml = r.policy
@@ -825,7 +825,7 @@ $('planBtn').onclick = async () => {
          <div class="kv"><span>规则有效时长</span><b>${r.policy.validTime} s</b></div>`
       : '';
     const fenceHtml = r.fence
-      ? `<div class="kv"><span>围栏</span><b class="${r.fence.fallback ? 'warn' : 'ok'}">${r.fence.name}${r.fence.fallback ? `（兜底 ${Math.round(r.fence.distance)}m）` : ''}</b></div>`
+      ? `<div class="kv"><span>围栏</span><b class="${r.fence.fallback ? 'warn' : 'ok'}">${esc(r.fence.name)}${r.fence.fallback ? `（兜底 ${Math.round(r.fence.distance)}m）` : ''}</b></div>`
       : '<div class="kv"><span>围栏</span><b class="warn">未取到</b></div>';
     const cpHtml = r.checkpointTotal != null
       ? `<div class="kv"><span>打卡点</span><b class="${r.checkpointPassed === r.checkpointTotal ? 'ok' : 'err'}">${r.checkpointPassed || 0} / ${r.checkpointTotal} 经过</b></div>`
@@ -846,12 +846,12 @@ $('planBtn').onclick = async () => {
         if (!r.trackMode) return '';
         const m = { stadium: '操场绕圈', route: '围栏路线', draw: '手绘轨迹' }[r.trackMode] || r.trackMode;
         const warn = r.stadiumFallback;
-        return `<div class="kv"><span>实际路线</span><b class="${warn ? 'err' : 'ok'}">${m}${warn ? '（操场判定失败，已退回路线规划）' : ''}</b></div>`;
+        return `<div class="kv"><span>实际路线</span><b class="${warn ? 'err' : 'ok'}">${esc(m)}${warn ? '（操场判定失败，已退回路线规划）' : ''}</b></div>`;
       })()}
-      <div class="kv"><span>自检</span><b class="${r.blocked ? 'err' : 'ok'}">${r.issueSummary}</b></div>
+      <div class="kv"><span>自检</span><b class="${r.blocked ? 'err' : 'ok'}">${esc(r.issueSummary)}</b></div>
       ${issueHtml}
-      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim)">流程日志（${r.logs.length} 条）</summary><pre class="mono" style="font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}
-      <div class="note">${r.note}</div>`;
+      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim)">流程日志（${r.logs.length} 条）</summary><pre class="mono" style="font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap">${esc(r.logs.join('\n'))}</pre></details>` : ''}
+      <div class="note">${esc(r.note)}</div>`;
     drawPreview(r.coords, r.fence, r.checkpoints);
   } catch (e) {
     setOut(e.message, true);
@@ -867,7 +867,7 @@ $('semBtn').onclick = async () => {
   try {
     const r = await api('/api/semester');
     if (r.summaryError) {
-      $('semOut').innerHTML = `<div class="msg err">${r.summaryError}</div>`;
+      $('semOut').innerHTML = `<div class="msg err">${esc(r.summaryError)}</div>`;
       return;
     }
     const sm = r.summary || {};
@@ -876,7 +876,7 @@ $('semBtn').onclick = async () => {
     const target = g.targetDis || 0;
     const pct = target > 0 ? Math.min(100, done / target * 100) : 0;
     $('semOut').innerHTML = `
-      <div class="kv"><span>学期</span><b>${sm.sname || '—'}</b></div>
+      <div class="kv"><span>学期</span><b>${esc(sm.sname || '—')}</b></div>
       <div class="kv"><span>有效里程</span><b>${(done/1000).toFixed(2)} km</b></div>
       <div class="kv"><span>累计里程</span><b>${((sm.semesterDis||0)/1000).toFixed(2)} km</b></div>
       <div class="kv"><span>有效次数</span><b>${sm.semesterValidCount || 0} 次</b></div>
@@ -891,9 +891,9 @@ $('semBtn').onclick = async () => {
         </div>
         <div class="hint" style="margin-top:6px">完成 ${pct.toFixed(1)}%</div>
       ` : '<div class="hint" style="margin-top:8px">未取到学期目标</div>'}
-      ${r.goalError ? `<div class="msg warn" style="margin-top:6px">${r.goalError}</div>` : ''}`;
+      ${r.goalError ? `<div class="msg warn" style="margin-top:6px">${esc(r.goalError)}</div>` : ''}`;
   } catch (e) {
-    $('semOut').innerHTML = `<div class="msg err">${e.message}</div>`;
+    $('semOut').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   } finally {
     btn.disabled = false;
   }
@@ -940,16 +940,16 @@ $('runBtn').onclick = async () => {
     $('planOut').innerHTML = `
       <div class="msg ok" style="font-size:15px;font-weight:600">
         ${r.submitted ? '✓ 提交成功' : '未提交'}</div>
-      <div class="kv"><span>记录 id</span><b>${r.recordId ?? '—'}</b></div>
+      <div class="kv"><span>记录 id</span><b>${esc(r.recordId ?? '—')}</b></div>
       <div class="kv"><span>里程</span><b>${r.distance} m</b></div>
       <div class="kv"><span>步数</span><b>${r.steps}</b></div>
       <div class="kv"><span>步频</span><b>${(r.cadence||0).toFixed(1)} 步/分</b></div>
       <div class="kv"><span>明细 key</span><b>${r.obsKeys || 0} 个已上传</b></div>
-      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim)">流程日志</summary><pre class="mono" style="font-size:11px;max-height:240px;overflow:auto;white-space:pre-wrap">${r.logs.join('\n')}</pre></details>` : ''}`;
+      ${r.logs && r.logs.length ? `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim)">流程日志</summary><pre class="mono" style="font-size:11px;max-height:240px;overflow:auto;white-space:pre-wrap">${esc(r.logs.join('\n'))}</pre></details>` : ''}`;
     loadRecords();
   } catch (e) {
     setOut(e.message, true);
-    $('planOut').innerHTML = `<div class="msg err">提交失败</div><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">${e.message}</pre>`;
+    $('planOut').innerHTML = `<div class="msg err">提交失败</div><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">${esc(e.message)}</pre>`;
   } finally {
     busy(btn, false);
   }
@@ -957,7 +957,8 @@ $('runBtn').onclick = async () => {
 
 function setOut(t, err) {
   const o = $('planOut');
-  o.innerHTML = t ? `<div class="msg ${err ? 'err' : ''}">${t}</div>` : '';
+  // 入参都是纯文本（静态提示或异常文案），在这里统一转义，避免调用方漏包
+  o.innerHTML = t ? `<div class="msg ${err ? 'err' : ''}">${esc(t)}</div>` : '';
 }
 let lastCheckpoints = [];
 let lastFence = null;
@@ -997,7 +998,7 @@ function drawPreview(coords, fence, checkpoints) {
   if (fring.length >= 3) {
     const poly = L.polygon(fring, {
       color: tok('--warn'), weight: 2, fillOpacity: 0.05, dashArray: '6 4'
-    }).bindPopup('围栏：' + fence.name +
+    }).bindPopup('围栏：' + esc(fence.name) +
       (fenceIsGcj(fence) ? '' : '<br><span style="color:var(--danger)">坐标系未转换，可能整体偏移</span>'));
     group.addLayer(poly);
   }
@@ -1032,7 +1033,7 @@ function drawPreview(coords, fence, checkpoints) {
         // 没有轨迹时用虚线圈，跟「已判定」的点在图上区分开
         dashArray: known ? null : '3 3',
       }).bindPopup(
-        `打卡点 #${c.index}${c.name ? ' ' + c.name : ''}<br>${state}`
+        `打卡点 #${c.index}${c.name ? ' ' + esc(c.name) : ''}<br>${state}`
       ));
     }
   }
@@ -1066,7 +1067,7 @@ async function loadAccounts() {
     renderAccounts(r);
     return r;
   } catch (e) {
-    $('accList').innerHTML = `<div class="msg err">${e.message}</div>`;
+    $('accList').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   }
 }
 
@@ -1081,17 +1082,17 @@ function renderAccounts(r) {
     const dot = a.loggedIn ? 'var(--ok)' : (a.enabled ? 'var(--warn)' : 'var(--dim)');
     const state = a.loggedIn ? '已登录'
       : (a.hasPassword ? (a.enabled ? '待登录' : '已停用') : '无密码');
-    return `<div class="accrow" data-id="${a.id}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft)${a.current ? ';background:var(--panel2);border-radius:6px;padding-left:8px' : ''}">
+    return `<div class="accrow" data-id="${esc(a.id)}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft)${a.current ? ';background:var(--panel2);border-radius:6px;padding-left:8px' : ''}">
       <span style="width:8px;height:8px;border-radius:50%;background:${dot};flex:none"></span>
       <div class="accname" style="flex:1;min-width:0">
-        <b style="font-size:13px">${a.label}${a.current ? ' <span style="color:var(--accent);font-size:11px">当前</span>' : ''}</b>
-        <div class="hint" style="font-size:11px">${a.username} · ${a.school || '—'} · ${state}</div>
+        <b style="font-size:13px">${esc(a.label)}${a.current ? ' <span style="color:var(--accent);font-size:11px">当前</span>' : ''}</b>
+        <div class="hint" style="font-size:11px">${esc(a.username)} · ${esc(a.school || '—')} · ${state}</div>
       </div>
-      <button class="ghost mini" data-act="switch"  data-id="${a.id}" ${a.current ? 'disabled' : ''}>切换</button>
-      <button class="ghost mini" data-act="login"   data-id="${a.id}" ${a.hasPassword ? '' : 'disabled'}>重登</button>
-      <button class="ghost mini" data-act="logout"  data-id="${a.id}" ${a.loggedIn ? '' : 'disabled'}>退出</button>
-      <button class="ghost mini" data-act="toggle"  data-id="${a.id}">${a.enabled ? '停用' : '启用'}</button>
-      <button class="ghost mini" data-act="del"     data-id="${a.id}" style="color:var(--danger)">删除</button>
+      <button class="ghost mini" data-act="switch"  data-id="${esc(a.id)}" ${a.current ? 'disabled' : ''}>切换</button>
+      <button class="ghost mini" data-act="login"   data-id="${esc(a.id)}" ${a.hasPassword ? '' : 'disabled'}>重登</button>
+      <button class="ghost mini" data-act="logout"  data-id="${esc(a.id)}" ${a.loggedIn ? '' : 'disabled'}>退出</button>
+      <button class="ghost mini" data-act="toggle"  data-id="${esc(a.id)}">${a.enabled ? '停用' : '启用'}</button>
+      <button class="ghost mini" data-act="del"     data-id="${esc(a.id)}" style="color:var(--danger)">删除</button>
     </div>`;
   }).join('');
 
@@ -1256,9 +1257,9 @@ $('accBatch').onclick = async () => {
       })
     });
     const lines = (r.results || []).map(x => {
-      if (x.ok && x.submitted) return `✓ ${x.id} → 记录 #${x.recordId}`;
-      if (x.ok) return `· ${x.id} 未提交`;
-      return `✗ ${x.id} → ${x.error}`;
+      if (x.ok && x.submitted) return `✓ ${esc(x.id)} → 记录 #${esc(x.recordId)}`;
+      if (x.ok) return `· ${esc(x.id)} 未提交`;
+      return `✗ ${esc(x.id)} → ${esc(x.error)}`;
     });
     m.innerHTML = `<b>完成：${r.submitted}/${r.total} 个已提交</b><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:240px;overflow:auto;margin-top:6px">${lines.join('\n')}</pre>`;
     m.className = r.submitted === r.total ? 'msg ok' : 'msg warn';
@@ -1974,7 +1975,7 @@ function recHtml(r, i) {
       <span>${fmtDur(secs)}</span>
       <span>${pace(dist, secs)}</span>
     </div>
-    ${rid ? `<div class="rid" data-rrid="${rid}" title="点击复制 rrid">rrid ${rid}</div>` : ''}
+    ${rid ? `<div class="rid" data-rrid="${esc(rid)}" title="点击复制 rrid">rrid ${esc(rid)}</div>` : ''}
   </div>`;
 }
 
@@ -2314,9 +2315,9 @@ function showPicker(list, r) {
       <h1>选择账号</h1>
       <p class="sub">库里存了 ${list.length} 个账号，点一下直接登录</p>
       ${list.map(a => `
-        <button class="ghost pick-item" data-id="${a.id}">
-          <b>${a.label}</b>
-          <span class="sub2">${a.username} · ${a.school || '—'}</span>
+        <button class="ghost pick-item" data-id="${esc(a.id)}">
+          <b>${esc(a.label)}</b>
+          <span class="sub2">${esc(a.username)} · ${esc(a.school || '—')}</span>
         </button>`).join('')}
       <button class="ghost" id="pickOther" style="width:100%;margin-top:6px">用其他账号登录</button>
       <div class="msg" id="pickMsg"></div>
