@@ -11,8 +11,12 @@
 pub const JITTER_MARGIN_MS: i64 = 5_000;
 /// 最多往前补 3 天。
 pub const MAX_DAYS_AGO: i64 = 3;
-/// `ago` 分钟数上限：与 3 天上限一致。
-pub const MAX_AGO_MIN: i64 = (MAX_DAYS_AGO + 1) * 24 * 60;
+/// `ago` 分钟数上限：与 3 天上限一致（= 4320，不是 4 天）。
+///
+/// 旧值是 `(MAX_DAYS_AGO + 1) * 24 * 60`，即 5760 分钟 = 4 天，与同模块
+/// `check_days_ago` 的 0-3 天口径、以及 `specified` 通道的判定直接打架：
+/// 填 2881~4320 分钟能发出 3~4 天前的记录。
+pub const MAX_AGO_MIN: i64 = MAX_DAYS_AGO * 24 * 60;
 /// 默认随机窗口下界：30 分钟前。
 pub const DEFAULT_AGO_MIN: i64 = 30;
 /// 默认随机窗口上界：300 分钟前。
@@ -166,7 +170,7 @@ pub fn specified(
     Ok(clamp(start_ms, now_ms, dur_s))
 }
 
-/// `ago N`：N 分钟前开跑（1 ≤ N ≤ 5760）。
+/// `ago N`：N 分钟前开跑（1 ≤ N ≤ 4320，即最多 3 天）。
 pub fn ago(now_ms: i64, ago_min: i64, dur_s: i64) -> Result<StartTime, String> {
     if !(1..=MAX_AGO_MIN).contains(&ago_min) {
         return Err(format!("分钟数应为 1-{MAX_AGO_MIN}，收到 {ago_min}"));
@@ -294,6 +298,13 @@ mod tests {
         assert!(!st.clamped);
         assert!(ago(now(), 0, 600).is_err());
         assert!(ago(now(), MAX_AGO_MIN + 1, 600).is_err());
+        // 上限必须与 check_days_ago 的 3 天口径一致：4320 分钟 = 3 天整可以，
+        // 4321 分钟（3 天零 1 分）必须拒，否则会发出 3~4 天前的记录。
+        assert_eq!(MAX_AGO_MIN, 4320, "上限必须是 3 天 = 4320 分钟");
+        assert!(ago(now(), MAX_AGO_MIN, 600).is_ok());
+        assert!(ago(now(), MAX_AGO_MIN + 1, 600).is_err());
+        assert!(check_days_ago(3).is_ok(), "天数与分钟两条通道必须同口径");
+        assert!(check_days_ago(4).is_err());
     }
 
     #[test]

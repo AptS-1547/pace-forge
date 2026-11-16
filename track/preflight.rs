@@ -125,7 +125,19 @@ pub struct Check<'a> {
 }
 
 /// 执行全部检查。
+///
+/// 不知道「服务器现在」时，`TIME_FUTURE` 这一项跳过——本机时钟自己跟自己比
+/// 永远发现不了偏差，只有调用方把校时后的 `server_now` 传进来才查得出来。
 pub fn inspect(c: &Check) -> Report {
+    inspect_at(c, None)
+}
+
+/// 带服务器当前时刻的检查：多查一条「记录结束时间不得在服务器未来」。
+///
+/// 服务端硬判据是「开始时间 + 时长 ≤ 服务器当前时间」（`api/gmttime.rs` 模块
+/// 文档有记载）。早先的检查只比对 stop 与 start、跨度与 totalTime，全是同一
+/// 条时间轴内部的相对关系，`stopTime` 整条落到未来也查不出来。
+pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
     let mut issues = Vec::new();
 
     // ── 一、时间轴 ──
@@ -143,6 +155,18 @@ pub fn inspect(c: &Check) -> Report {
                 "TIME_SPAN",
                 format!("时间跨度 {span}s 与 totalTime {}s 不一致", c.total_time_sec),
             ));
+        }
+        // 与服务器当前时刻比：留 2 秒容差吸收网络往返与毫秒抖动。
+        if let Some(now) = now_ms {
+            if c.stop_time_ms > now + 2_000 {
+                issues.push(Issue::fatal(
+                    "TIME_FUTURE",
+                    format!(
+                        "stopTime 比服务器现在晚 {}s：记录结束时间落在未来，服务端会驳回",
+                        (c.stop_time_ms - now) / 1000
+                    ),
+                ));
+            }
         }
     }
 
@@ -457,6 +481,45 @@ mod tests {
         };
         let sim = simulate(&pts, &sp).unwrap();
         (t.points, sim, sp)
+    }
+
+    /// 「记录结束时间不得在服务器未来」必须由 `inspect_at` 真的拦下来。
+    ///
+    /// 早先自检只比 stop/start、跨度/totalTime，全是同一条时间轴内部的相对
+    /// 关系，「现在跑」把整条时间窗放到未来也全绿。这条钉住新增的 TIME_FUTURE。
+    #[test]
+    fn stop_time_in_server_future_is_fatal() {
+        let (base, sim, sp) = sample();
+        let start = base[0].time_ms;
+        let c = Check {
+            points: &base,
+            sim: &sim,
+            params: &sp,
+            checkpoints: &[],
+            total_distance_m: sim.actual_length_m.round() as i64,
+            total_time_sec: 720,
+            total_steps: 2300,
+            start_time_ms: start,
+            stop_time_ms: start + 720_000,
+            pace_range: None,
+            step_range: None,
+            expected_interval_sec: Some(crate::track::SAMPLE_INTERVAL_SEC),
+        };
+        // 服务器时间停在「开始时刻」上 → 结束时间晚了整整 720 秒
+        let r = inspect_at(&c, Some(start));
+        assert!(
+            r.issues
+                .iter()
+                .any(|i| i.code == "TIME_FUTURE" && i.level == Level::Fatal),
+            "结束时间在未来必须报 TIME_FUTURE，实际 {:?}",
+            r.lines()
+        );
+        // 不知道服务器当前时间时跳过这一项，其余检查不受影响
+        let r2 = inspect(&c);
+        assert!(!r2.issues.iter().any(|i| i.code == "TIME_FUTURE"));
+        // 结束时刻在过去（服务器现在 = stop + 10s）→ 不报
+        let r3 = inspect_at(&c, Some(start + 720_000 + 10_000));
+        assert!(!r3.issues.iter().any(|i| i.code == "TIME_FUTURE"));
     }
 
     /// `SAMPLE_RATE` 必须是**真的在拦**。

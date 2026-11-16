@@ -721,6 +721,28 @@ pub fn route_on_roads_with(
         return Err("路网上没走出有效路线".into());
     }
 
+    // 文档承诺「经过所有 must 点」，实现却只在轨迹经过 30m 内时把点从
+    // pending 里摘掉，循环结束从不检查是否摘干净 —— 漏打卡照样返回 Ok，
+    // 下游 `resample_with_checkpoints` 会把漏掉的 must 当弦钉进路径兜底，
+    // 那条弦线可能直接穿楼穿水。这里补上契约校验：还剩点就明确失败，
+    // 由调用方退回几何规划（`flow::pick_road_route` 的 Err 分支）。
+    if !pending.is_empty() {
+        let worst = pending
+            .iter()
+            .map(|&m| {
+                points
+                    .iter()
+                    .map(|&p| distance(p, m))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0f64, f64::max);
+        return Err(format!(
+            "路网规划漏了 {} 个打卡点（最近点距 {:.0}m，要求 <30m）",
+            pending.len(),
+            worst
+        ));
+    }
+
     Ok(RoadRoute {
         points,
         length_m: total,
@@ -794,6 +816,42 @@ mod tests {
             kind: "path".into(),
         });
         RoadNet { segments: segs, source: "test".into(), mask: None }
+    }
+
+    /// 必经点在够不着的另一段路上时，必须返回 Err，不能给一条「漏打卡」的 Ok。
+    ///
+    /// 旧实现只在 30m 内把点从 pending 摘掉，循环结束不校验 pending 是否空：
+    /// 两段相距 500m、must 在第二段上（max_hop 250m 跳不过去）时照样 Ok。
+    #[test]
+    fn must_point_unreachable_returns_err() {
+        let lat0 = 31.2304;
+        let lon0 = 121.4737;
+        let mlng = m_per_deg_lng(lat0);
+        let mlat = m_per_deg_lat(lat0);
+        // 第一段：东西向 100m，起点区域
+        let a: Vec<(f64, f64)> = (0..=10)
+            .map(|i| (lat0, lon0 + i as f64 * 10.0 / mlng))
+            .collect();
+        // 第二段：正北 500m 之外，同样 100m 长，与第一段完全不连通
+        let b: Vec<(f64, f64)> = (0..=10)
+            .map(|i| (lat0 + 500.0 / mlat, lon0 + i as f64 * 10.0 / mlng))
+            .collect();
+        let net = RoadNet {
+            segments: vec![
+                RoadSegment { points: a, kind: "footway".into() },
+                RoadSegment { points: b, kind: "footway".into() },
+            ],
+            source: "test".into(),
+            mask: None,
+        };
+        // 必经点放在第二段中间，离第一段 ~500m
+        let must = vec![(lat0 + 500.0 / mlat, lon0 + 50.0 / mlng)];
+        let err = route_on_roads(&net, (lat0, lon0), &must, 120.0, 7)
+            .expect_err("漏打卡必须报错，不能静默 Ok");
+        assert!(
+            err.contains("漏了") && err.contains("打卡点"),
+            "错误信息要说清是漏点，实际: {err}"
+        );
     }
 
     #[test]

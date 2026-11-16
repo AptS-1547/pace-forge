@@ -19,7 +19,7 @@ pub use stadium::{campus_oval_track, lap_length, lane_radius, looks_like_stadium
 pub use biomech::{cadence_for, fatigue_from_km, gait, ou_cadence_series, speed_from, stride_for, Gait};
 pub use buckets::{make_jitter, speed_buckets, step_buckets, SpeedBucket, StepBucket};
 pub use kinematics::{arc_and_curvature, pace_profile, speed_limit_ahead, turn_speed_limit, KinParams};
-pub use preflight::{inspect, Check, Issue, Level, Report};
+pub use preflight::{inspect, inspect_at, Check, Issue, Level, Report};
 pub use simulate::{retime, simulate, validate, SimParams, SimResult};
 pub use geo::{distance, path_length, sample_along, scale_to_length};
 pub use planner::{assign_times, plan, Checkpoint, PlanRequest, PlanResult, TrackPoint};
@@ -239,7 +239,12 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
         // 下限用 min_per_point：收敛的目标是「首段里程 1.1%」，但它会把
         // cluster 一路压回 ~8m，窗口内每点又只剩 0.36m，配速图开头重新断线。
         // 两个目标冲突时，用户看得见的那条线优先——首段里程是内部指标。
-        let next = (cluster + err).clamp(min_per_point, total_len * 0.05);
+        //
+        // 上界必须取 max，不能直接用 total_len*0.05：短而密的轨迹（平均点距
+        // <2.79m）会让 min_per_point 大于 0.05*total_len，而 f64::clamp 在
+        // min > max 时是 panic 而不是饱和截断，整条链路直接崩。
+        let hi = (total_len * 0.05).max(min_per_point);
+        let next = (cluster + err).clamp(min_per_point, hi);
         if (next - cluster).abs() < 1e-6 {
             break;
         }
@@ -2311,6 +2316,34 @@ mod sample_rate_tests {
     /// 一条 60m 直行 → 90° 右转 → 60m 直行的折线（密采样 1m，与生产同构）。
     fn lat0_of(_path: &[(f64, f64)]) -> f64 {
         47.38
+    }
+
+    /// 短而密的轨迹不能把 `compress_startup` 的 clamp 打成 panic。
+    ///
+    /// `min_per_point` 随点数增长（`k*0.9`），上界却是 `total_len*0.05`；平均点距
+    /// 小于 2.79m 时下限会顶到上限之上，而 `f64::clamp` 的约定是 panic 而不是
+    /// 饱和截断 —— 整条生成链路在这里崩掉。2km/555s（点距 ~14.9m）不触发，
+    /// 所以一直是测试盲区。
+    #[test]
+    fn compress_startup_survives_short_dense_track() {
+        let lat0 = 47.38f64;
+        let lng0 = 123.95f64;
+        let mlat = geo::M_PER_DEG_LAT;
+        // 100m / 40 点 = 平均点距 2.5m，落在 min_per_point > 0.05*total_len 的区间
+        let n = 40usize;
+        let step_m = 100.0 / (n - 1) as f64;
+        let mut pts: Vec<TrackPoint> = (0..n)
+            .map(|i| TrackPoint {
+                lat: lat0 + i as f64 * step_m / mlat,
+                lon: lng0,
+                time_ms: START_MS + (i as i64 * 555_000 / (n as i64 - 1)),
+            })
+            .collect();
+        // 不 panic 即为通过；压完还要保住首末点与时长
+        compress_startup(&mut pts, START_MS, 555);
+        assert_eq!(pts.len(), n);
+        assert_eq!(pts.first().unwrap().time_ms, START_MS);
+        assert_eq!(pts.last().unwrap().time_ms, START_MS + 555_000);
     }
 
     fn l_path() -> ((f64, f64), Vec<(f64, f64)>) {

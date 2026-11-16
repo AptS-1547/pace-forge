@@ -204,6 +204,11 @@ fn check_auth(request: &tiny_http::Request, path: &str, query: &str) -> Result<(
     if path == "/" || path == "/index.html" {
         return Ok(());
     }
+    // 版本探测不拦：它只吐一个版本号，页面靠它显示构建号，
+    // 拦掉的话远程模式下页脚永远显示「本地控制台」。
+    if path == "/api/health" {
+        return Ok(());
+    }
     match auth_token() {
         Some(want) => {
             let from_header = request
@@ -305,6 +310,15 @@ pub fn serve(addr: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Origin 与 Host 是否同源。浏览器跨站发写请求时一定带 Origin，
+/// 而请求行里的 Host 是真实目标地址；两者对不上就是别人家的页面在打我们。
+fn origin_matches_host(origin: Option<&str>, host: Option<&str>) -> bool {
+    let Some(o) = origin else { return true }; // curl / 脚本不带 Origin
+    let Some(h) = host else { return false };
+    let oh = o.split("//").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    oh.eq_ignore_ascii_case(h.trim())
+}
+
 fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> {
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/").to_string();
@@ -315,12 +329,36 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         if let Err(msg) = check_auth(&request, &path, &query) {
             return json_err(request, &msg);
         }
+        // 没设口令时再挡一层跨站写：任何网页都能盲打 POST /api/run 或删账号，
+        // 不需要读响应也能造成后果。读接口不拦，免得把正常浏览器访问误杀。
+        let mutating = !matches!(method, Method::Get | Method::Head | Method::Options);
+        if mutating && auth_token().is_none() {
+            let origin = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Origin"))
+                .map(|h| h.value.as_str().to_string());
+            let host = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Host"))
+                .map(|h| h.value.as_str().to_string());
+            if !origin_matches_host(origin.as_deref(), host.as_deref()) {
+                return json_err(request, "拒绝跨站写请求：控制台默认只接受本机页面调用");
+            }
+        }
     }
 
     match (method.clone(), path.as_str()) {
         (Method::Get, "/") => respond_html(request, INDEX_HTML),
         (Method::Post, "/api/login") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_login(request, state, &body)
         }
         (Method::Get, "/api/me") => {
@@ -363,23 +401,47 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             json_ok(request, json!({"ok": true, "remoteLogout": remote}))
         }
         (Method::Post, "/api/plan") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_plan(request, state, &body)
         }
         (Method::Get, "/api/accounts") => handle_accounts(request, state),
         (Method::Get, "/api/starttimes") => handle_starttimes(request),
         (Method::Post, "/api/accounts") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_add_account(request, state, &body)
         }
         (Method::Post, "/api/accounts/login-all") => handle_login_all(request, state),
         (Method::Post, "/api/batch") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_batch(request, state, &body)
         }
         (Method::Get, "/api/semester") => handle_semester(request, state),
         (Method::Post, "/api/run") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_run(request, state, &body)
         }
         (Method::Get, "/api/fences") => handle_fences(request, state, &query),
@@ -387,15 +449,33 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Get, "/api/records") => handle_records(request, state, &query),
         (Method::Get, "/api/blockers") => handle_blockers_get(request),
         (Method::Post, "/api/blockers") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_blockers_put(request, &body)
         }
         (Method::Post, "/api/obs/fetch") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_obs_fetch(request, state, &body)
         }
         (Method::Post, "/api/raw") => {
-            let body = read_json(&mut request)?;
+            // body 坏掉是客户端问题，必须回 400 + 具体原因；早先经 `?` 上抛
+            // 到 serve 只写 stderr，tiny_http 兜底回空体 500，调用方无法区分
+            // 「请求写错了」和「服务器崩了」。
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
             handle_raw(request, state, &body)
         }
         (Method::Get, "/api/health") => json_ok(request, json!({"ok": true, "version": crate::VERSION})),
@@ -418,7 +498,10 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
                 };
             }
             if let Some(rest) = path.strip_prefix("/api/record/") {
-                let rrid: i64 = rest.parse().map_err(|_| "rrid 不是数字")?;
+                let rrid: i64 = match rest.parse() {
+                    Ok(v) => v,
+                    Err(_) => return json_err_code(request, 400, "rrid 不是数字"),
+                };
                 return handle_record_detail(request, state, rrid);
             }
             json_err_code(request, 404, "not found")
@@ -2051,6 +2134,24 @@ fn respond_html(request: tiny_http::Request, html: &str) -> Result<(), String> {
 }
 
 const INDEX_HTML: &str = include_str!("index.html");
+
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_matches_host;
+
+    #[test]
+    fn same_origin_passes_and_cross_site_is_blocked() {
+        // 本机页面自己的写请求
+        assert!(origin_matches_host(Some("http://127.0.0.1:9999"), Some("127.0.0.1:9999")));
+        assert!(origin_matches_host(Some("http://localhost:8899"), Some("localhost:8899")));
+        // curl / 脚本不带 Origin
+        assert!(origin_matches_host(None, Some("127.0.0.1:9999")));
+        // 恶意网页盲打 127.0.0.1：Origin 是它自己，Host 才是目标
+        assert!(!origin_matches_host(Some("https://evil.example"), Some("127.0.0.1:9999")));
+        // 有 Origin 却没有 Host —— 不认
+        assert!(!origin_matches_host(Some("http://127.0.0.1:9999"), None));
+    }
+}
 
 #[cfg(test)]
 mod device_scope_tests {

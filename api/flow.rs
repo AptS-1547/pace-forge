@@ -26,7 +26,7 @@ use super::obs;
 use super::points::{self, PointsContext};
 use super::policy::{self, PolicyInfo};
 use crate::track::{
-    inspect, plan, simulate, Check, Checkpoint, KinParams, PlanRequest, PlanResult, Report,
+    inspect_at, plan, simulate, Check, Checkpoint, KinParams, PlanRequest, PlanResult, Report,
     SimParams, TrackPoint,
 };
 
@@ -519,6 +519,16 @@ pub struct RunOutcome {
     pub stadium_fallback: bool,
 }
 
+/// 「现在跑」这一档的起跑时刻：按「刚跑完」处理。
+///
+/// 结束时刻 = `server_now - margin_ms`，起跑时刻再倒推一整个时长，所以
+/// `stop = start + duration*1000 <= now - margin` 恒成立（只要时间合同时长
+/// 与时长一致）。抽成纯函数是为了能直接单测这条不等式——它原来藏在
+/// `dry_run` 里，只能靠读代码发现 `+` 号写反了。
+fn start_for_immediate_run(server_now: i64, duration_sec: i64, margin_ms: i64) -> i64 {
+    server_now - duration_sec * 1000 - margin_ms
+}
+
 /// 只做到自检为止（不发任何写请求）。
 ///
 /// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
@@ -544,11 +554,18 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             let mut r = rand::thread_rng();
             t + r.gen_range(0..4_000i64)
         }
-        // 现在开跑：加 0~4 秒偏移，每次都整秒开始太规律
+        // 「现在跑」= 补一条**刚跑完**的记录，不是「从现在开始跑」。
+        //
+        // 早先这里取 `server_now + 0~5s`，而 `stop = start + duration*1000`，
+        // 于是整条记录的时间窗必然落在服务器未来——服务端按「开始 + 时长 ≤
+        // 服务器当前时间」判据会驳回，且失败计入错误次数。现在把结束时刻压到
+        // 服务器现在之前的 5~9 秒（留余量吸收往返延迟与毫秒抖动），
+        // 起跑时刻随之倒推一整个时长。
         None => {
             use rand::Rng;
             let mut r = rand::thread_rng();
-            server_now + r.gen_range(0..5_000i64)
+            // 5~9 秒余量：吸收提交往返延迟与服务端毫秒级抖动
+            start_for_immediate_run(server_now, p.duration_sec, 5_000 + r.gen_range(0..4_000i64))
         }
     };
 
@@ -1329,7 +1346,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         step_range: pol.step_range,
         expected_interval_sec: Some(p.sample_interval_sec),
     };
-    let report = inspect(&check);
+    let report = inspect_at(&check, Some(server_now));
     if report.blocked() {
         for line in report.lines() {
             log(&format!("  {line}"));
@@ -1976,6 +1993,22 @@ mod obs_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 「现在跑」生成的记录必须**整条落在过去**：服务端判据是
+    /// 「开始 + 时长 ≤ 服务器当前时间」，早先这里写成 `now + 0~5s`，
+    /// 导致 stopTime 必然在未来、自检还查不出来。
+    #[test]
+    fn immediate_run_lands_entirely_in_the_past() {
+        let now = 1_790_913_882_164i64;
+        for dur in [1i64, 60, 600, 3600, 11_000] {
+            for margin in [5_000i64, 9_000] {
+                let start = start_for_immediate_run(now, dur, margin);
+                let stop = start + dur * 1000;
+                assert_eq!(stop, now - margin, "时长 {dur}s 时 stop 应为 now-margin");
+                assert!(stop < now, "时长 {dur}s：stopTime 落到了未来");
+            }
+        }
+    }
 
     /// 四角围成跑道外框 → 认成操场，生成的椭圆首尾闭合。
     #[test]

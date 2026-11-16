@@ -120,16 +120,45 @@ pub(crate) fn write_file_private(path: &Path, data: &[u8]) -> Result<(), String>
             ensure_dir(parent)?;
         }
     }
+    // 先写同目录临时文件、fsync、再 rename 覆盖目标 —— 这样断电/崩溃时
+    // 要么是旧内容，要么是新内容，不会留下「截断到一半」的文件。
+    //
+    // 早先这里是 `File::create(path)` 直接截断目标再写：`session.json` 走这条
+    // 路径，写一半断电就把本地会话写坏，而 `load` 对损坏文件 `unwrap_or_default()`
+    // 静默返回空会话 —— 服务端会话还活着，本地 token 却没了，下次重登直接
+    // 撞 10121 锁一小时。`accounts.json` 自己包了一层 tmp+rename，这里补上之后
+    // 所有落盘都同一套语义。
+    let tmp = temp_sibling(path);
     let mut f =
-        std::fs::File::create(path).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+        std::fs::File::create(&tmp).map_err(|e| format!("写入 {} 失败: {e}", tmp.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
     }
     use std::io::Write;
-    f.write_all(data)
-        .map_err(|e| format!("写入 {} 失败: {e}", path.display()))
+    let write_res = f.write_all(data).and_then(|_| f.sync_all());
+    drop(f);
+    if let Err(e) = write_res {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("写入 {} 失败: {e}", tmp.display()));
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("替换 {} 失败: {e}", path.display()));
+    }
+    Ok(())
+}
+
+/// 目标文件同目录下的临时文件名（带 pid，避免并发写互相覆盖）。
+fn temp_sibling(path: &Path) -> std::path::PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("pf");
+    let mut p = path.to_path_buf();
+    p.set_file_name(format!("{name}.tmp{}", std::process::id()));
+    p
 }
 
 fn read_json_below<T: serde::de::DeserializeOwned>(dir: &Path, name: &str) -> Option<T> {
@@ -221,6 +250,42 @@ mod tests {
     impl Drop for TestDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// 落盘必须是「写临时文件 → fsync → rename」：中途崩溃只能是旧内容，
+    /// 不能留下截断到一半的 JSON，也不能残留临时文件。
+    ///
+    /// 早先 `write_file_private` 直接 `File::create(目标)` 截断再写，而
+    /// `session.json` 走的正是这条路径：写一半断电就把本地会话写坏，
+    /// `load` 对损坏文件 `unwrap_or_default()` 静默成空会话。
+    #[test]
+    fn private_write_is_atomic_and_leaves_no_temp() {
+        let t = TestDir::new("atomic");
+        let dir = t.data();
+        ensure_dir(&dir).unwrap();
+        let p = dir.join("session.json");
+
+        write_file_private(&p, b"{\"v\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"v\":1}");
+
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "残留临时文件: {leftovers:?}");
+
+        // 覆盖写：旧内容整体替换，不会新旧混合
+        write_file_private(&p, b"{\"v\":2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"v\":2}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "会话文件必须 0600");
         }
     }
 

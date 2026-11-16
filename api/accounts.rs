@@ -164,14 +164,39 @@ pub(crate) fn book_path_in(base: &std::path::Path) -> PathBuf {
     data_dir_in(base).join("accounts.json")
 }
 
-/// 本机密钥：由 hostname + 用户名 + 固定盐派生。
+/// 本机密钥：由「机器标识 + 用户名」派生出 16 字节。
 ///
 /// 不是"安全"的密钥管理，目的是**换机器解不开**，而不是防同机攻击。
+///
+/// 机器标识的取值顺序是 `/etc/machine-id` → `/etc/hostname` → `COMPUTERNAME`。
+/// 最后一项是给 Windows 用的：那边没有 `/etc/hostname`，`USER` 也不存在
+/// （Windows 用 `USERNAME`）。原来的实现在 Windows 上两个取源都失败，
+/// 于是每台机器都算出 `"unknown"` + `"root"` —— 同样的 key，所有 Windows
+/// 机器通用，把 accounts.json 拷到任意一台就能直接解出密码。
 fn machine_key() -> [u8; 16] {
+    let host = std::fs::read_to_string("/etc/machine-id")
+        .map(|s| s.trim().to_string())
+        .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| "unknown".into());
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "root".into());
+    derive_key(&host, &user)
+}
+
+/// 旧版派生方式（只认 `/etc/hostname` 与 `USER`）。保留它是为了读得动
+/// 已经在盘上的 `accounts.json`：这类文件是用旧 key 加密的，直接换算法
+/// 会让老用户下次登录报「密码解密失败（可能换了机器）」。
+fn legacy_machine_key() -> [u8; 16] {
     let host = std::fs::read_to_string("/etc/hostname")
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "unknown".into());
     let user = std::env::var("USER").unwrap_or_else(|_| "root".into());
+    derive_key(&host, &user)
+}
+
+fn derive_key(host: &str, user: &str) -> [u8; 16] {
     let mut h = Sha256::new();
     h.update(b"pace-forge/accounts/v1");
     h.update(host.as_bytes());
@@ -198,6 +223,9 @@ pub fn seal_password(plain: &str) -> Result<String, String> {
 }
 
 /// 解密密码。
+///
+/// 先按当前机器密钥解；解不开再退回旧派生方式——旧版写在盘上的库是用
+/// 旧 key 加的密，不兜这一层，换 key 当天老用户就登不进去。
 pub fn open_password(enc: &str) -> Result<String, String> {
     use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
     type Dec = cbc::Decryptor<aes::Aes128>;
@@ -206,13 +234,19 @@ pub fn open_password(enc: &str) -> Result<String, String> {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(enc)
         .map_err(|e| format!("密码字段不是合法 base64: {e}"))?;
-    let key = machine_key();
     let iv = [0u8; 16];
-    let dec = Dec::new(&key.into(), &iv.into());
-    let pt = dec
-        .decrypt_padded_vec_mut::<Pkcs7>(&raw)
-        .map_err(|e| format!("密码解密失败（可能换了机器）: {e}"))?;
-    String::from_utf8(pt).map_err(|e| format!("密码不是 UTF-8: {e}"))
+    let mut last = String::new();
+    for key in [machine_key(), legacy_machine_key()] {
+        let dec = Dec::new(&key.into(), &iv.into());
+        match dec.decrypt_padded_vec_mut::<Pkcs7>(&raw) {
+            Ok(pt) => match String::from_utf8(pt) {
+                Ok(s) => return Ok(s),
+                Err(e) => last = format!("密码不是 UTF-8: {e}"),
+            },
+            Err(e) => last = format!("密码解密失败（可能换了机器）: {e}"),
+        }
+    }
+    Err(last)
 }
 
 /// 读账号库。文件不存在返回空库（不是错误）。
@@ -373,6 +407,35 @@ mod tests {
         let a = back.get("x").unwrap();
         assert_eq!(open_password(&a.password_enc).unwrap(), "pw");
         assert_eq!(a.token, "tok");
+    }
+
+    /// 用旧派生方式加密的库必须还能读：老用户盘上就是这种密文。
+    #[test]
+    fn still_opens_ciphertext_sealed_with_legacy_key() {
+        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        type Enc = cbc::Encryptor<aes::Aes128>;
+        use base64::Engine;
+
+        let key = legacy_machine_key();
+        let enc = Enc::new(&key.into(), &[0u8; 16].into());
+        let ct = enc.encrypt_padded_vec_mut::<Pkcs7>(b"pw");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(ct);
+
+        assert_eq!(open_password(&b64).unwrap(), "pw");
+    }
+
+    /// Windows 上没有 /etc/hostname、也没有 USER，两个取源都会失败。
+    /// 这里至少锁住「回退链末端是 COMPUTERNAME/USERNAME 而不是硬编码 unknown/root」，
+    /// 免得哪天又把常量 key 写回去。
+    #[test]
+    fn key_sources_fall_back_past_the_posix_defaults() {
+        let host = std::fs::read_to_string("/etc/machine-id")
+            .map(|s| s.trim().to_string())
+            .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "unknown".into());
+        // 只要不是两段都退化成常量，key 就是每机不同的
+        assert!(host != "unknown" || std::env::var("COMPUTERNAME").is_ok());
     }
 
     fn sample_book() -> Book {

@@ -1611,6 +1611,24 @@ pub fn build_from_points(
 mod tests {
     use super::*;
 
+    /// 四条高频驳回码必须有针对性提示，其余码不能瞎编。
+    ///
+    /// 这条同时钉住可达性：`expect_ok` 对 11016 直接返回 Err（所以早先
+    /// `if err != 0 && err != 10000` 的 match 是死代码），现在由 Err 分支里
+    /// 的 `reject_hint` 接手。
+    #[test]
+    fn reject_hints_are_reachable_and_specific() {
+        for code in [11016i64, 10003, 10121, 10603] {
+            assert!(!reject_hint(code).is_empty(), "错误码 {code} 缺针对性提示");
+        }
+        assert_eq!(reject_hint(10000), "", "成功码不该有提示");
+        assert_eq!(reject_hint(0), "");
+        assert_eq!(reject_hint(-1), "");
+        assert_eq!(reject_hint(-10000), "", "集群故障走 expect_ok 的长文案");
+        // 反面证据：11016 在 expect_ok 处就已经是 Err，拿不到 Value
+        assert!(crate::api::client::expect_ok(r#"{"error":11016,"message":"x"}"#).is_err());
+    }
+
     /// 给旧测试造一份 sim，桶用确定值（不依赖 OU 随机）。
     pub(super) fn test_sim(p: &SubmitParams, pts: &[TrackPoint]) -> crate::track::SimResult {
         let _ = p;
@@ -1859,6 +1877,20 @@ mod tests {
 /// 成功码是 **10000**，不是 0。这一点很容易踩：接口在顶层 `error` 里回
 /// `{"error":10000,"message":"成功"}`，照「err != 0 就是失败」判断就会把
 /// 一次成功的提交当成驳回，用户看到「提交被驳回 error=10000: 成功」。
+/// 高频驳回码对应的引导文案。空串表示没有针对性提示，沿用原错误文案。
+///
+/// 抽成独立函数是为了能单测：这段逻辑早先被 `?` 之后恒假的条件挡在外面，
+/// 四条提示一行都执行不到（`expect_ok` 只放行 10000）。
+fn reject_hint(code: i64) -> &'static str {
+    match code {
+        11016 => "（不在有效跑步时段，记分跑有固定时段限制，等等再来）",
+        10003 => "（签名错误，检查 device_id 是否被重置）",
+        10121 => "（账号已在其他设备登录，先退出或等 1 小时）",
+        10603 => "（请求过于频繁，被限流）",
+        _ => "",
+    }
+}
+
 pub fn save_record(
     client: &Client,
     body: &Value,
@@ -1876,23 +1908,25 @@ pub fn save_record(
         Some(body),
         &[("runes", runes), ("runef", runef)],
     )?;
-    let v = crate::api::client::expect_ok(&raw)?;
-    let err = v.get("error").and_then(|e| e.as_i64()).unwrap_or(0);
-    // 10000 是成功码（和 HTTP 的 200 一个道理，别拿 0 当成功）
-    if err != 0 && err != 10000 {
-        let msg = v
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("未知错误");
-        let hint = match err {
-            11016 => "（不在有效跑步时段，记分跑有固定时段限制，等等再来）",
-            10003 => "（签名错误，检查 device_id 是否被重置）",
-            10121 => "（账号已在其他设备登录，先退出或等 1 小时）",
-            10603 => "（请求过于频繁，被限流）",
-            _ => "",
-        };
-        return Err(format!("提交被驳回 error={err}: {msg}{hint}"));
-    }
+    // 注意：`expect_ok` 只放行 10000，失败时**直接返回 Err**，所以拿到 `v`
+    // 的时候 `error` 必然是 10000 或缺失。早先这里还写了一段
+    // `if err != 0 && err != 10000 { …hint… }`，条件恒假，四条针对性提示
+    // （时段限制 / 签名错 / 挤号 / 限流）永远走不到。
+    //
+    // 现在改成从原始响应里取错误码：先自己解析出 `error`，失败时把它附在
+    // `expect_ok` 的报错后面，既有原来的详细文案（含 -10000 集群故障的长说明），
+    // 又补回这四条高频驳回的引导。
+    let v = match crate::api::client::expect_ok(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            let code = serde_json::from_str::<Value>(&raw)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|x| x.as_i64()))
+                .unwrap_or(0);
+            let hint = reject_hint(code);
+            return Err(if hint.is_empty() { e } else { format!("{e}{hint}") });
+        }
+    };
     Ok(v.get("data").cloned().unwrap_or(Value::Null))
 }
 

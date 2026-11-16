@@ -463,7 +463,8 @@ fn do_run(dist_km: f64, dur_min: f64, yes: bool) {
     run_with_start(dist_km, dur_min, None, yes);
 }
 
-/// 通用提交：`start_at` 为 `None` 就是现在开跑。
+/// 通用提交：`start_at` 为 `None` 表示补一条**刚跑完**的记录
+///（结束时刻 = 服务器现在，起跑时刻倒推一整个时长）。
 fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool) {
     use pace_forge::api::{flow, session};
 
