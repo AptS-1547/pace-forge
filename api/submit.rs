@@ -31,7 +31,7 @@ fn bearing_deg(from: (f64, f64), to: (f64, f64)) -> f64 {
 ///
 /// 日历换算复用 [`civil_from_days`]，时区复用 [`tz_offset_sec`]，两处都不再
 /// 各自实现一份——时区规则要改的时候只改一个地方。
-fn fmt_run_time(ms: i64) -> String {
+pub(crate) fn fmt_run_time(ms: i64) -> String {
     let secs = ms / 1000 + tz_offset_sec();
     let days = secs.div_euclid(86_400);
     let tod = secs.rem_euclid(86_400);
@@ -1891,40 +1891,72 @@ fn reject_hint(code: i64) -> &'static str {
     }
 }
 
+/// 一次提交的失败，带上「能不能确定没入账」这个关键区分。
+#[derive(Debug)]
+pub struct SubmitFailure {
+    pub message: String,
+    /// `true` = 服务端明确驳回（有业务错误码），可以确定没有入账；
+    /// `false` = 网络错误 / HTTP 层异常 / 响应看不懂，**结果未知**。
+    ///
+    /// 这个区分决定了提交台账怎么写：明确驳回可以释放时间段，让用户重来；
+    /// 未知必须留着 pending，因为「查不到」不等于「没入账」。
+    pub rejected: bool,
+}
+
 pub fn save_record(
     client: &Client,
     body: &Value,
     runes: &str,
     runef: &str,
 ) -> Result<Value, String> {
+    save_record_detailed(client, body, runes, runef).map_err(|f| f.message)
+}
+
+/// 同 [`save_record`]，但把「明确驳回」和「结果未知」分开回报。
+pub fn save_record_detailed(
+    client: &Client,
+    body: &Value,
+    runes: &str,
+    runef: &str,
+) -> Result<Value, SubmitFailure> {
     // 真机提交会额外带 runes / runef 两个关联头：
     //   runes = 策略时间戳 + uid      （这条记录基于哪一次策略下发）
     //   runef = 运行 uuid + startTime （这份轨迹属于哪一次运行）
     // 缺了它们提交照样能成，但风控侧少了把「策略→运行→成绩」串起来的
     // 线索，关联性更弱。见 Miempire src/api/submit.rs:228-237。
-    let raw = client.request_with_headers(
-        "POST",
-        &format!("{}/api/v70260/runnings/save/record", crate::crypto::consts::hosts::RUN),
-        Some(body),
-        &[("runes", runes), ("runef", runef)],
-    )?;
-    // 注意：`expect_ok` 只放行 10000，失败时**直接返回 Err**，所以拿到 `v`
-    // 的时候 `error` 必然是 10000 或缺失。早先这里还写了一段
-    // `if err != 0 && err != 10000 { …hint… }`，条件恒假，四条针对性提示
-    // （时段限制 / 签名错 / 挤号 / 限流）永远走不到。
-    //
-    // 现在改成从原始响应里取错误码：先自己解析出 `error`，失败时把它附在
-    // `expect_ok` 的报错后面，既有原来的详细文案（含 -10000 集群故障的长说明），
-    // 又补回这四条高频驳回的引导。
+    // 网络层失败一律算「未知」：请求可能已经到达服务端并入了账，
+    // 只是响应没回来。这种时候自动重试就是制造重复记录。
+    let raw = client
+        .request_with_headers(
+            "POST",
+            &format!("{}/api/v70260/runnings/save/record", crate::crypto::consts::hosts::RUN),
+            Some(body),
+            &[("runes", runes), ("runef", runef)],
+        )
+        .map_err(|e| SubmitFailure {
+            message: e,
+            rejected: false,
+        })?;
+    // 业务层：`expect_ok` 只放行 10000，失败时直接给 Err。为了同时拿到
+    // 「明确驳回 / 结果未知」这个区分和四条高频驳回提示，这里自己回读原始
+    // 响应取错误码 —— 早先那段 `if err != 0 && err != 10000 { …hint… }`
+    // 在 `?` 之后恒假，提示一行都执行不到，而且明确的业务驳回会被当成「未知」。
     let v = match crate::api::client::expect_ok(&raw) {
         Ok(v) => v,
         Err(e) => {
             let code = serde_json::from_str::<Value>(&raw)
                 .ok()
-                .and_then(|v| v.get("error").and_then(|x| x.as_i64()))
-                .unwrap_or(0);
-            let hint = reject_hint(code);
-            return Err(if hint.is_empty() { e } else { format!("{e}{hint}") });
+                .and_then(|v| v.get("error").and_then(|x| x.as_i64()));
+            let hint = match code {
+                Some(c) => reject_hint(c),
+                None => "",
+            };
+            return Err(SubmitFailure {
+                message: if hint.is_empty() { e } else { format!("{e}{hint}") },
+                // 正数业务码 = 服务端明确驳回，可以释放时间段；
+                // -10000 集群故障、解析不出码 = 结果未知，台账留 pending
+                rejected: matches!(code, Some(c) if c > 0),
+            });
         }
     };
     Ok(v.get("data").cloned().unwrap_or(Value::Null))

@@ -1111,6 +1111,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         }
         None => (1.0, 8.0),
     };
+    // ⓹.4 主体配速预检（判定逻辑见 `body_pace_note`）。
+    if let Some(note) = body_pace_note(p.distance_m, p.duration_sec, pol.pace_range) {
+        log(&note);
+    }
+
     let xy: Vec<(f64, f64)> = track.points.iter().map(|q| (q.lat, q.lon)).collect();
     // 采样点在弧长空间就对齐到打卡点（详见 `track::sample_by_time`）：
     // 5 秒网格的相邻点可以差 20m 以上，事后再靠吸附瞬移会扯出大间隔。
@@ -1199,6 +1204,46 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     let pinned: Vec<usize> = snap.items.iter().filter(|s| s.shifted).map(|s| s.index).collect();
     let max_gap = crate::api::submit::MAX_POINT_SPEED_MPS * crate::track::SAMPLE_INTERVAL_SEC;
     let clamped = crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
+    // ⓹.6 拐角补位：把跨过拐角的上报点挪到拐角上（插点会被 SAMPLE_RATE_SHORT 拦）。
+    //
+    // 5 秒一采，相邻点隔 15~31m，中间的拐角全被直线抹掉——画出来就是斜着
+    // 切过楼角。这里只在「密折线偏离直线超过 12m」时移动那一个点，绝大多数
+    // 段落不动，`ΔtotalTime` 一个都不改。
+    //
+    // 挪点会改变折线里程，而里程自检比的是「折线 vs 报文声明」——两边一起变
+    // 就拦不住。所以这里再加一道兜底：挪完量一次总长，偏差超 1.5% 就整段
+    // 回退。实测没有兜底时 2km/12min 会被顶到 2.64km。
+    let len_of = |p: &[crate::track::TrackPoint]| -> f64 {
+        p.windows(2)
+            .map(|w| {
+                crate::track::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon))
+            })
+            .sum()
+    };
+    let len_before = len_of(&track_points);
+    let snapshot = track_points.clone();
+    let nudged = crate::track::nudge_to_corners(&mut track_points, &xy, 12.0);
+    if nudged > 0 {
+        let len_after = len_of(&track_points);
+        let drift = if len_before > 0.0 {
+            (len_after - len_before).abs() / len_before
+        } else {
+            0.0
+        };
+        if drift > 0.015 {
+            track_points = snapshot;
+            log(&format!(
+                "[track] 拐角补位会改里程 {:.2}%（{} 个点），已整段回退",
+                drift * 100.0,
+                nudged
+            ));
+        } else {
+            log(&format!(
+                "[track] 拐角补位：{nudged} 个上报点挪到拐角上（里程变 {:.2}%）",
+                drift * 100.0
+            ));
+        }
+    }
     if clamped > 0 {
         log(&format!(
             "√ [snap] 吸附后 {clamped} 处相邻间距超过 {max_gap:.1}m（{:.1} m/s 上限），已压回",
@@ -1479,6 +1524,62 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
 /// 完整流程：自检通过后上传明细并提交成绩。
 ///
 /// `confirm` 返回 false 时在提交前中止，已上传的 OBS 对象保留（不影响）。
+/// 主体配速提示。返回 `None` 表示不用提示。
+///
+/// **为什么要单独算主体配速**：起步窗口是「占时长但不产里程」的——
+/// `startup_sec` 秒里几乎不动，剩下的时间必须把全部里程跑完。所以真正
+/// 发出去的逐点配速是**主体配速**，不是「距离/时长」那个平均值，两者能
+/// 差半分钟以上。
+///
+/// 这个差别决定一条记录看起来红不红：学校区间 5'00"~10'00" 时，平均
+/// 5'47" 听着合规，主体却是 4'57" —— 已经在上界外面，整条线全红。生成
+/// 过程里原本没有任何地方会把这件事说出来。
+///
+/// 只提示，不改参数：距离和时长是用户选的，主体配速是它们的数学结果。
+pub fn body_pace_note(
+    distance_m: f64,
+    duration_sec: i64,
+    pace_range: Option<(f64, f64)>,
+) -> Option<String> {
+    let (pa, pb) = pace_range?;
+    if !distance_m.is_finite() || distance_m <= 0.0 || duration_sec <= 0 {
+        return None;
+    }
+    let (fast, slow) = (pa.min(pb), pa.max(pb));
+    if !(fast.is_finite() && slow.is_finite()) || slow <= 0.0 {
+        return None;
+    }
+    let startup = crate::track::startup_sec(duration_sec).max(0) as f64;
+    let run_sec = (duration_sec as f64 - startup).max(1.0);
+    let body_pace = 1_000.0 / (60.0 * (distance_m / run_sec));
+    let fmt = |m: f64| {
+        let mm = m.floor() as i64;
+        let ss = ((m - mm as f64) * 60.0).round() as i64;
+        format!("{mm}'{ss:02}\"")
+    };
+    // 距边界的余量（秒/公里）；负数是已经越界。
+    let margin_fast = (body_pace - fast) * 60.0;
+    let margin_slow = (slow - body_pace) * 60.0;
+    let worst = margin_fast.min(margin_slow);
+    if worst < 0.0 {
+        let side = if margin_fast < 0.0 { "快于下界" } else { "慢于上界" };
+        return Some(format!(
+            "! [pace] 主体配速 {} {}（区间 {}~{}，起步窗口 {}s 不产里程）——逐点几乎全部会标红，建议把时长调长或距离调短。",
+            fmt(body_pace), side, fmt(fast), fmt(slow), startup as i64
+        ));
+    }
+    if worst < 40.0 {
+        return Some(format!(
+            "! [pace] 主体配速 {} 距区间边界只有 {:.0} 秒（区间 {}~{}）——正常的逐点波动就会越过边界标红，建议留出 1 分钟以上余量。",
+            fmt(body_pace), worst, fmt(fast), fmt(slow)
+        ));
+    }
+    Some(format!(
+        "[pace] 主体配速 {}（区间 {}~{}，余量 {:.0} 秒）",
+        fmt(body_pace), fmt(fast), fmt(slow), worst
+    ))
+}
+
 pub fn run_full(
     client: &Client,
     p: &RunParams,
@@ -1557,6 +1658,31 @@ pub fn run_full(
         .unwrap_or_default();
     let uuid = super::client::uuid_v4().to_uppercase();
     let stop_ms = start_ms + p.duration_sec * 1000;
+
+    // ❼.7 提交台账：**发请求之前**先把「要提交这个时间段」落盘。
+    //
+    // 顺序不能反过来。先发后记的话，进程在请求发出后崩掉就没有任何痕迹，
+    // 下次启动会认为这段时间没提交过，再跑一次就是同一时间段两条记录——
+    // 那是服务端最容易判定异常的形态（一个人不可能同时跑两次）。
+    //
+    // 三道拦截见 `guard::Guard::check`：上次结果未知 → 拦；时间段重叠 →
+    // 拦；不同账号 → 各记各的。
+    let mut guard = super::guard::Guard::open(&super::session::data_dir(), &uid)?;
+    // 有别的时段的未知结果时放行（它不影响这一段的判重），但要说一声：
+    // 那条记录可能已经在服务端，用户该去核对。
+    if let Some((ps, pe)) = guard.pending_range() {
+        log(&format!(
+            "! [guard] 另有 {} ~ {} 的提交结果未知（与本次不重叠，不影响提交）。\
+             建议到运动记录页核对那条是否入账。",
+            super::guard::fmt_ms(ps),
+            super::guard::fmt_ms(pe)
+        ));
+    }
+    guard.begin(&uuid, start_ms, stop_ms)?;
+    log(&format!(
+        "[guard] 台账已记 pending（{} ~ {}），提交中…",
+        start_ms, stop_ms
+    ));
 
     // 必到点直接复用 `dry_run` 那一份（`out.fixed`）：它是点位里 `type=2`
     // 标记与 `fivePointJson` 的由来，自检和提交必须是同一份输入。
@@ -1678,9 +1804,29 @@ pub fn run_full(
     // runes/runef 关联头：策略下发时刻+uid、运行uuid+开始时刻
     let runes = format!("{}{}", out.policy.timestamp, uid);
     let runef = format!("{}{}", uuid, start_ms);
-    let data = super::submit::save_record(client, &body, &runes, &runef)?;
+    let data = match super::submit::save_record_detailed(client, &body, &runes, &runef) {
+        Ok(d) => d,
+        Err(f) => {
+            // 只有「服务端明确驳回」才释放时间段。网络错误、HTTP 异常、
+            // 响应解析失败一律留着 pending —— 请求可能已经入账，只是我们
+            // 没看到回执。这条区分是整套台账的立足点。
+            if f.rejected {
+                guard.rejected(&uuid)?;
+                log("[guard] 服务端明确驳回，已释放该时间段");
+            } else {
+                log("[guard] 提交结果未知，台账保留 pending（不会自动重试）");
+            }
+            return Err(f.message);
+        }
+    };
     out.submitted = true;
     out.record_id = super::submit::extract_record_id(&data);
+    if let Some(rrid) = out.record_id {
+        // 台账落账失败不该让整次提交失败（记录已经入账了），但要说出来。
+        if let Err(e) = guard.accepted(&uuid, rrid) {
+            log(&format!("[guard] 警告：台账写 accepted 失败（记录已提交）: {e}"));
+        }
+    }
     log(&format!("√ [submit] 提交成功，记录 id={:?}", out.record_id));
 
     // ⑨ OBS：用 rrid 重算桶 id 和 objectKey
@@ -1927,6 +2073,63 @@ pub fn upload_detail(
     }
     log(&format!("√ [obs] {ok}/{} 个 key 上传成功", keys.len()));
     Ok(keys)
+}
+
+#[cfg(test)]
+mod body_pace_tests {
+    use super::body_pace_note;
+
+    /// 已经越界：2km/11min 的主体配速约 4'35"，快于 5'00" 下界。
+    #[test]
+    fn too_fast_body_is_flagged() {
+        let note = body_pace_note(2000.0, 660, Some((5.0, 10.0))).unwrap();
+        assert!(note.contains("快于下界"), "{note}");
+    }
+
+    /// 2km/16min：主体 7'12"，落在区间中央，不该报警。
+    #[test]
+    fn central_body_is_not_warned() {
+        let note = body_pace_note(2000.0, 960, Some((5.0, 10.0))).unwrap();
+        assert!(note.starts_with("[pace] 主体配速"), "{note}");
+        assert!(!note.starts_with('!'), "不该是警告：{note}");
+    }
+
+    /// 贴边：2km/12min 的主体配速是 5'04"，距 5'00" 下界只有 4 秒。
+    /// 这就是用户那张图「在 5' 线上反复穿越」的直接成因。
+    #[test]
+    fn hugging_the_edge_warns() {
+        let note = body_pace_note(2000.0, 720, Some((5.0, 10.0))).unwrap();
+        assert!(note.starts_with("! [pace]"), "{note}");
+        assert!(note.contains("距区间边界只有"), "{note}");
+        assert!(note.contains("5'04"), "应报出主体配速，实际 {note}");
+    }
+
+    /// 太慢：主体超过上界。
+    #[test]
+    fn too_slow_body_is_flagged() {
+        let note = body_pace_note(2000.0, 1500, Some((5.0, 10.0))).unwrap();
+        assert!(note.contains("慢于上界"), "{note}");
+    }
+
+    #[test]
+    fn no_policy_means_no_note() {
+        assert!(body_pace_note(2000.0, 720, None).is_none());
+    }
+
+    #[test]
+    fn degenerate_inputs_are_silent() {
+        assert!(body_pace_note(0.0, 720, Some((5.0, 10.0))).is_none());
+        assert!(body_pace_note(2000.0, 0, Some((5.0, 10.0))).is_none());
+        assert!(body_pace_note(2000.0, 720, Some((0.0, 0.0))).is_none());
+    }
+
+    /// 区间上下界写反了也要能认（`speedTop` / `speedBottom` 语义不保证）。
+    #[test]
+    fn reversed_range_is_normalized() {
+        let a = body_pace_note(2000.0, 720, Some((5.0, 10.0))).unwrap();
+        let b = body_pace_note(2000.0, 720, Some((10.0, 5.0))).unwrap();
+        assert_eq!(a, b);
+    }
 }
 
 #[cfg(test)]
