@@ -1135,6 +1135,51 @@ mod tests {
         ]
     }
 
+    /// 打卡点回钉会撤销避让——这条钉住顺序问题，防止以后有人以为
+    /// 「先避让再重采样」就够了。
+    ///
+    /// 实测：`avoid_blockers` 之后 0 个点在楼里，`resample_with_checkpoints`
+    /// 打完打卡点变回 6 个。`pin_checkpoints` 是无条件 `insert`，不看禁区。
+    /// 所以 `flow` 那边在重采样前先把「禁区盖住打卡点」这件事喊出来。
+    #[test]
+    fn pin_checkpoints_overrides_blocker_avoidance() {
+        let lat0 = 31.2300f64;
+        let lng0 = 121.4700f64;
+        let mlat = m_per_deg_lat(lat0);
+        let mlng = m_per_deg_lng(lat0);
+
+        let path: Vec<(f64, f64)> = (0..=40)
+            .map(|i| (lat0, lng0 + (i as f64 * 5.0) / mlng))
+            .collect();
+
+        let (b0, b1) = (lng0 + 100.0 / mlng, lng0 + 140.0 / mlng);
+        let d = 12.0 / mlat;
+        let blocker = vec![
+            (lat0 - d, b0),
+            (lat0 - d, b1),
+            (lat0 + d, b1),
+            (lat0 + d, b0),
+        ];
+        // 打卡点正好被禁区盖住
+        let must = vec![(lat0, lng0 + 120.0 / mlng)];
+
+        let in_block = |p: &&(f64, f64)| p.0 > lat0 - d && p.0 < lat0 + d && p.1 > b0 && p.1 < b1;
+
+        let avoided = avoid_blockers(&path, &[blocker], 3.0);
+        assert_eq!(avoided.iter().filter(in_block).count(), 0, "避让本身有效");
+
+        let sampled = resample_with_checkpoints(&avoided, 5.0, &must, 15.0);
+        let back = sampled.iter().filter(in_block).count();
+        assert!(
+            back > 0,
+            "打卡点回钉必然把轨迹拖回禁区；哪天这里变成 0，说明 pin_checkpoints \\
+             开始考虑禁区了，flow 里那条警告可以改回「已绕行」"
+        );
+        // 而且被拖回去的必须包含打卡点本身
+        assert!(sampled.iter().any(|p| (p.0 - must[0].0).abs() < 1e-9 && (p.1 - must[0].1).abs() < 1e-9),
+            "打卡点必须真的在结果里，否则打卡会失败");
+    }
+
     #[test]
     fn shrink_pulls_inward() {
         let f = rect_fence();

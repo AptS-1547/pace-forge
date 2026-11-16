@@ -1044,6 +1044,25 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             }
             avoided
         };
+        // 打卡点回钉会撤销上面的避让：`pin_checkpoints` 是无条件
+        // `insert(best_i+1, m)`，不管路径有没有刚绕过楼。所以只要有一块
+        // 禁区盖住了打卡点，绕行必然被钉回去——实测「避让后 0 点在楼里，
+        // 钉完 6 点在楼里」。这不是能两边都满足的事：打卡点必须经过，
+        // 禁区不该穿。与其静默失效，不如把话说清楚。
+        if !blockers.is_empty() && !must.is_empty() {
+            for (i, &m) in must.iter().enumerate() {
+                for poly in &blockers {
+                    if crate::track::fence_route::contains(poly, m.0, m.1) {
+                        log(&format!(
+                            "! [block] 第 {} 个打卡点落在某块禁区内部——这个点必须经过，\
+                             那块禁区的避让对它无效（把禁区缩小或挪开才能绕）",
+                            i + 1
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
         let sampled = crate::track::fence_route::resample_with_checkpoints(
             &wandered,
             p.sample_step_m,

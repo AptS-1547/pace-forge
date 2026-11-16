@@ -1809,6 +1809,28 @@ function initBlockers() {
   $('blockSave').onclick = async () => {
     const btn = $('blockSave');
     if (btn.disabled) return;
+    // 打卡点回钉会撤销避让（`pin_checkpoints` 无条件把点插回路径），所以
+    // 一块盖住打卡点的禁区等于对那个点无效——绕出去又被钉回来。审计链是
+    // 「先推再钉」三步互相打架，参考项目（该实现）的做法是
+    // 路图求解时就把必经点当输入，做不到就直接报错，不留静默穿墙。
+    // 这里至少在保存那一刻就把话说清楚，别等生成完才发现墙上有个洞。
+    if (lastCheckpoints.length && localBlockers.length) {
+      const covered = [];
+      lastCheckpoints.forEach((c, i) => {
+        const ll = coordOf(c);
+        if (!ll) return;
+        if (localBlockers.some(poly => pointInPoly(poly, ll[0], ll[1]))) {
+          const name = (c.pointName || c.name || '').trim();
+          covered.push(name ? `#${i + 1} ${name}` : `#${i + 1}`);
+        }
+      });
+      if (covered.length && !confirm(
+        `${covered.length} 个打卡点落在你要保存的禁区里：\n\n${covered.join('\n')}\n\n` +
+        `这些点必须经过（服务端按轨迹是否到过点位判定），而绕行会被打卡点回钉撤销——` +
+        `所以这几块禁区对它们无效，轨迹仍会穿过去。\n\n` +
+        `想真正绕开就把禁区缩小、或者挪开不要压住打卡点。\n\n仍然保存？`
+      )) return;
+    }
     busy(btn, true);
     try {
       const r = await api('/api/blockers', {
@@ -2242,6 +2264,21 @@ function coordNum(v) {
 ///   ④ lat/lng、lat/lon、latitude/longitude   兜底（多为 BD-09，且常是占位）
 /// 必须成对取：gLat 是 GCJ-02、lat 是 BD-09，跨套拼出来的点会差几百米。
 /// 一对都过不了 valid()（比如全是 -1）就返回 null——这个点没有坐标。
+/// 点是否在多边形内（射线法）。和 Rust 那边 `fence_route::contains`
+/// 同一套判定，用于在**保存禁区时**就发现「这块盖住了打卡点」。
+function pointInPoly(poly, lat, lng) {
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const yi = poly[i][0], xi = poly[i][1];
+    const yj = poly[j][0], xj = poly[j][1];
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 function coordOf(p) {
   if (!p || typeof p !== 'object') return null;
   const pairs = [

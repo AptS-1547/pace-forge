@@ -221,10 +221,53 @@ pub fn bbox(points: &[(f64, f64)]) -> Option<(f64, f64, f64, f64)> {
 ///
 /// 服务端限流：同一个 runAreaId 5 分钟内最多取 3 次，超了返回 10603。
 /// 规划一次要拉点位，重试一次就撞墙，所以按围栏 id 缓存 5 分钟。
-static CACHE: std::sync::Mutex<Option<(String, std::time::Instant, PointsContext)>> =
-    std::sync::Mutex::new(None);
+///
+/// **多槽而不是单槽。** 早先这里是个 `Option`——只留最后一次的结果。
+/// 只要切一次围栏（或者改一次锚点/目标距离），另一份就被顶掉，切回去必然
+/// 重拉上游；而上游对同一个位置每次可能给出不同的点位集合，用户看到的就是
+/// 「一生成路线点位就变了」。参考项目 该实现 按
+/// 账号/学校/区域/位置分别缓存，这里至少做到按 key 各留一份。
+static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
 
 const CACHE_TTL_SECS: u64 = 300;
+/// 槽位上限。key 里带围栏 id 和四位小数的锚点，正常一个账号十来个围栏
+/// 就到头了；给 64 是防「手动点地图到处试」把表撑大，超了先清过期项。
+const CACHE_MAX_ENTRIES: usize = 64;
+
+struct Cache {
+    map: std::collections::HashMap<String, (std::time::Instant, PointsContext)>,
+}
+
+impl Cache {
+    fn new() -> Self {
+        Self { map: std::collections::HashMap::new() }
+    }
+
+    fn get(&self, k: &str) -> Option<PointsContext> {
+        self.map
+            .get(k)
+            .filter(|(at, _)| at.elapsed().as_secs() < CACHE_TTL_SECS)
+            .map(|(_, ctx)| ctx.clone())
+    }
+
+    fn put(&mut self, k: &str, ctx: &PointsContext) {
+        if self.map.len() >= CACHE_MAX_ENTRIES && !self.map.contains_key(k) {
+            // 先丢过期的；还有满的才动刀丢最早过期的那个，绝不整表清空
+            self.map.retain(|_, (at, _)| at.elapsed().as_secs() < CACHE_TTL_SECS);
+            if self.map.len() >= CACHE_MAX_ENTRIES {
+                if let Some(oldest) = self
+                    .map
+                    .iter()
+                    .min_by_key(|(_, (at, _))| *at)
+                    .map(|(k, _)| k.clone())
+                {
+                    self.map.remove(&oldest);
+                }
+            }
+        }
+        self.map.insert(k.to_string(), (std::time::Instant::now(), ctx.clone()));
+    }
+}
 
 /// 带缓存的点位拉取。同一围栏 5 分钟内只打一次接口。
 pub fn fetch_points_cached(
@@ -250,19 +293,11 @@ pub fn fetch_points_cached_at(
 ) -> Result<PointsContext, String> {
     let key = |d: i64| format!("{}:{lat:.4},{lng:.4}:d{d}", run_area_id.unwrap_or("-"));
     let read = |k: &str| -> Option<PointsContext> {
-        CACHE.lock().ok().and_then(|g| {
-            g.as_ref().and_then(|entry| {
-                if entry.0 == k && entry.1.elapsed().as_secs() < CACHE_TTL_SECS {
-                    Some(entry.2.clone())
-                } else {
-                    None
-                }
-            })
-        })
+        CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|c| c.get(k)))
     };
     let write = |k: &str, ctx: &PointsContext| {
         if let Ok(mut g) = CACHE.lock() {
-            *g = Some((k.to_string(), std::time::Instant::now(), ctx.clone()));
+            g.get_or_insert_with(Cache::new).put(k, ctx);
         }
     };
 
@@ -291,10 +326,12 @@ pub fn fetch_points_cached_at(
     Ok(ctx2)
 }
 
-/// 手动清缓存（换围栏时用）。
+/// 手动清缓存（换围栏时用，或者排查「点位怎么和上次不一样」）。
 pub fn clear_cache() {
     if let Ok(mut g) = CACHE.lock() {
-        *g = None;
+        if let Some(c) = g.as_mut() {
+            c.map.clear();
+        }
     }
 }
 
@@ -322,6 +359,47 @@ pub fn span_m(points: &[(f64, f64)]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 换围栏再换回来，缓存不能互相顶掉。
+    ///
+    /// 早先 CACHE 是单槽 `Option`，存一个 key 就把上一个挤掉：A 围栏规划完
+    /// 去看 B，再切回 A 必然重拉上游，而上游对同一位置每次给的点位可能不同，
+    /// 用户看到的就是「一生成路线点位就变了」。
+    #[test]
+    fn cache_keeps_multiple_fences() {
+        let mut c = Cache::new();
+        let mk = |name: &str| PointsContext {
+            points: vec![serde_json::json!({"pointName": name})],
+            coords: vec![(30.5, 104.0)],
+            gcj_coords: vec![(30.5, 104.0)],
+        };
+        c.put("fenceA:d1", &mk("A"));
+        c.put("fenceB:d1", &mk("B"));
+        assert!(c.get("fenceA:d1").is_some(), "A 不该被 B 顶掉");
+        assert!(c.get("fenceB:d1").is_some());
+        // 命中值也要对得上，别串了槽
+        let a = c.get("fenceA:d1").unwrap();
+        assert_eq!(a.points[0]["pointName"], "A");
+    }
+
+    /// 槽位满了要淘汰，但不能把不在上限内的有效项整表清掉。
+    #[test]
+    fn cache_evicts_without_clearing_everything() {
+        let mut c = Cache::new();
+        let ctx = PointsContext {
+            points: vec![serde_json::json!({"pointName": "x"})],
+            coords: vec![(30.5, 104.0)],
+            gcj_coords: vec![(30.5, 104.0)],
+        };
+        for i in 0..CACHE_MAX_ENTRIES {
+            c.put(&format!("k{i}"), &ctx);
+        }
+        assert_eq!(c.map.len(), CACHE_MAX_ENTRIES);
+        // 再加一个：先清过期的（这里没有），再丢最老的一个
+        c.put("overflow", &ctx);
+        assert!(c.map.len() <= CACHE_MAX_ENTRIES, "不能无限增长");
+        assert!(c.get("overflow").is_some(), "新写入的要能读到");
+    }
 
     #[test]
     fn url_sign_uses_http() {
