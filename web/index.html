@@ -583,7 +583,17 @@ const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const PF_TOKEN = (() => {
   try {
     const q = new URLSearchParams(location.search).get('token');
-    if (q) { sessionStorage.setItem('pf_token', q); return q; }
+    if (q) {
+      sessionStorage.setItem('pf_token', q);
+      // 存好就从地址栏抹掉：`?token=` 会进浏览器历史、Referer、以及用户
+      // 随手复制的链接里。已经进 sessionStorage 了，留着只有坏处。
+      try {
+        const u = new URL(location.href);
+        u.searchParams.delete('token');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+      } catch (_) {}
+      return q;
+    }
     return sessionStorage.getItem('pf_token') || '';
   } catch (_) { return ''; }
 })();
@@ -593,7 +603,13 @@ const api = async (url, opt) => {
     ...(opt || {}),
     headers: { ...authHeaders(), ...((opt && opt.headers) || {}) }
   });
-  const j = await r.json();
+  // 非 JSON 响应（网关错误页、空体、被代理截断）不能让 `r.json()` 抛
+  // SyntaxError——那句 "Unexpected token u in JSON at position 0" 用户看不懂。
+  // 把状态码和 content-type 带出来，至少能判断是「服务挂了」还是「路由错了」。
+  const j = await r.json().catch(() => null);
+  if (!j) {
+    throw new Error(`HTTP ${r.status}：响应不是 JSON（${r.headers.get('content-type') || '无 content-type'}）`);
+  }
   if (!j.ok) throw new Error(j.error || '请求失败');
   return j.data;
 };

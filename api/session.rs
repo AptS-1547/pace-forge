@@ -129,13 +129,24 @@ pub(crate) fn write_file_private(path: &Path, data: &[u8]) -> Result<(), String>
     // 撞 10121 锁一小时。`accounts.json` 自己包了一层 tmp+rename，这里补上之后
     // 所有落盘都同一套语义。
     let tmp = temp_sibling(path);
+    // 权限必须**在创建时**就是 0600，不能建完再 chmod：
+    // `File::create` 走 umask（常见 0644），从建好到 `set_permissions` 之间有
+    // 一个微秒级窗口，此时同机其他用户能读到 `session.json` 里的 token 和
+    // `accounts.json` 里的密文。Uni x 上直接用 `OpenOptions::mode` 一次到位。
+    #[cfg(unix)]
+    let mut f = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| format!("写入 {} 失败: {e}", tmp.display()))?
+    };
+    #[cfg(not(unix))]
     let mut f =
         std::fs::File::create(&tmp).map_err(|e| format!("写入 {} 失败: {e}", tmp.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
-    }
     use std::io::Write;
     let write_res = f.write_all(data).and_then(|_| f.sync_all());
     drop(f);

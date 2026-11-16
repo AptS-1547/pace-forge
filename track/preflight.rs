@@ -396,7 +396,12 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
     }
 
     let avg_cad = c.total_steps as f64 * 60.0 / c.total_time_sec.max(1) as f64;
-    let (cad_lo, cad_hi) = c.step_range.unwrap_or((100, 230));
+    // fallback 必须跟服务端实发口径一致（60~250）。这里原来是 (100, 230)——
+    // 和上面 `step_range` 字段的注释直接打架：注释写着「服务端实发 60~250，
+    // 拿更窄的假尺子量自己会误拦合法步频」，结果 `None` 时自己还在用窄尺子。
+    // 策略里缺 stepTop/stepBottom 时，合法步频 60~99 或 231~250 会被本地
+    // 自检拦死，等于自己把好单挡在门外。`policy.rs` 的兜底就是 (60, 250)。
+    let (cad_lo, cad_hi) = c.step_range.unwrap_or((60, 250));
     if !((cad_lo as f64)..=(cad_hi as f64)).contains(&avg_cad) {
         issues.push(Issue::fatal(
             "CADENCE_OUT",
@@ -481,6 +486,36 @@ mod tests {
         };
         let sim = simulate(&pts, &sp).unwrap();
         (t.points, sim, sp)
+    }
+
+    /// 策略里没给步频区间时，fallback 必须跟服务端实发口径一致（60~250）。
+    ///
+    /// 原来 fallback 是 `(100, 230)`，比服务端窄——`step_range` 字段的注释
+    /// 自己就写着「服务端实发 60~250，拿更窄的假尺子量自己会误拦合法步频」，
+    /// 结果 `None` 时还在用窄尺子。策略缺字段时，合法步频 70 会被本地自检
+    /// 拦死，等于自己把好单挡在门外。
+    #[test]
+    fn missing_step_range_falls_back_to_server_bounds() {
+        let (base, sim, sp) = sample();
+        let start = base[0].time_ms;
+        // 步频 70：在服务端 60~250 内，在旧的 (100,230) 外
+        let sim70 = SimResult { avg_cadence: 70.0, ..sim.clone() };
+        let c = Check {
+            points: &base,
+            sim: &sim70,
+            params: &sp,
+            checkpoints: &[],
+            total_distance_m: 2000,
+            total_time_sec: 720,
+            total_steps: 2300,
+            start_time_ms: start,
+            stop_time_ms: start + 720_000,
+            pace_range: None,
+            step_range: None,
+            expected_interval_sec: None,
+        };
+        let txt = inspect_at(&c, None).lines().join("\n");
+        assert!(!txt.contains("CADENCE"), "步频 70 在服务端口径内，不该被拦：{txt}");
     }
 
     /// 「记录结束时间不得在服务器未来」必须由 `inspect_at` 真的拦下来。

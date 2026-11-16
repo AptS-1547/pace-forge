@@ -258,8 +258,10 @@ pub fn fetch_points_cached_at(
         return Ok(c);
     }
     let ctx = fetch_points_at_distance(client, lat, lng, run_area_id, 1)?;
-    write(&k1, &ctx);
+    // 只缓存非空结果。上游瞬时空响应（限流、灰度、后端抖动）也写进去的话，
+    // 接下来 5 分钟全命中这个空缓存不再重试，用户只会看到「这个围栏没点位」。
     if !ctx.points.is_empty() {
+        write(&k1, &ctx);
         return Ok(ctx);
     }
     let Some(d) = fallback_distance_m.filter(|d| *d > 1) else {
@@ -270,7 +272,9 @@ pub fn fetch_points_cached_at(
         return Ok(c);
     }
     let ctx2 = fetch_points_at_distance(client, lat, lng, run_area_id, d)?;
-    write(&k2, &ctx2);
+    if !ctx2.points.is_empty() {
+        write(&k2, &ctx2);
+    }
     Ok(ctx2)
 }
 

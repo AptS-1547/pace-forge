@@ -134,12 +134,23 @@ fn verify_signature(plaintext: &[u8], sig_b64: &str) -> Result<bool, String> {
         return Ok(false);
     }
     let recovered_digest = &recovered_bytes[sep + 1..];
-    let expected = {
-        let mut h = Md5::new();
-        h.update(plaintext);
-        format!("{:x}", h.finalize())
-    };
-    Ok(recovered_digest == expected.as_bytes())
+    let mut h = Md5::new();
+    h.update(plaintext);
+    let expected = h.finalize();
+
+    // 原来是拿 `recovered_digest`（原始字节，16 或 34 字节）去比
+    // `format!("{:x}", ...)`（32 字符的 hex **字符串** 的字节）——长度必然不等，
+    // 这个 `==` 恒为 false。也就是说验签从来没通过过，只是 `require_signature`
+    // 默认 false 把结果丢掉了，所以一直没暴露。一旦有人按字面把它打开，
+    // 全部合法响应都会被拒（fail-closed 反而是"全拒"）。
+    //
+    // PKCS#1 v1.5 里 `T` 有两种合法形态：
+    //   - DigestInfo：18 字节前缀（30 20 30 0C 06 08 2A 86 48 86 F7 0D 02 05
+    //     05 00 04 10）+ 16 字节 MD5
+    //   - 裸 MD5：16 字节
+    // 取末尾 16 字节比较，两种都成立，也不依赖服务端到底用哪种。
+    Ok(recovered_digest.len() >= expected.len()
+        && recovered_digest[recovered_digest.len() - expected.len()..] == expected[..])
 }
 
 fn right_pad_to(v: &[u8], size: usize) -> Vec<u8> {

@@ -128,10 +128,7 @@ impl State {
 fn remote_logout(state: &Shared, id: &str) -> bool {
     let mut tmp: Option<Client> = None;
     {
-        let mut st = match state.lock() {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
+        let mut st = lock_state(state);
         if let Some(c) = st.clients.get_mut(id) {
             return crate::api::login::logout(c).unwrap_or(false);
         }
@@ -362,7 +359,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             handle_login(request, state, &body)
         }
         (Method::Get, "/api/me") => {
-            let st = state.lock().map_err(|e| e.to_string())?;
+            let st = lock_state(&state);
             match st.current_account() {
                 Some(a) => json_ok(request, json!({
                     "id": a.id, "uid": a.uid, "unid": a.unid,
@@ -378,7 +375,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 顺序不能反：只清本地的话服务端会话还活着，账号被标记为已登录，
             // 再登录会拿到 10121（已在其他设备登录），而且锁一小时。
             let remote = {
-                let mut st = state.lock().map_err(|e| e.to_string())?;
+                let mut st = lock_state(&state);
                 let id = st.current.clone();
                 match id.and_then(|i| st.clients.get_mut(&i)) {
                     Some(c) => crate::api::login::logout(c).unwrap_or(false),
@@ -386,7 +383,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
                 }
             };
             {
-                let mut st = state.lock().map_err(|e| e.to_string())?;
+                let mut st = lock_state(&state);
                 if let Some(id) = st.current.clone() {
                     if let Some(a) = st.book.get_mut(&id) {
                         a.token.clear();
@@ -520,7 +517,7 @@ fn handle_login(request: tiny_http::Request, state: Shared, body: &Value) -> Res
     let mut client = Client::new(DeviceProfile::default());
     match login(&mut client, &username, &password) {
         Ok(LoginOutcome::Ok(profile)) => {
-            let mut st = state.lock().map_err(|e| e.to_string())?;
+            let mut st = lock_state(&state);
             let id = if profile.uid.is_empty() {
                 username.clone()
             } else {
@@ -607,7 +604,7 @@ fn handle_plan(
         },
         _ => {
             let client = {
-                let st = state.lock().map_err(|e| e.to_string())?;
+                let st = lock_state(&state);
                 st.client().cloned()
             };
             let Some(client) = client else {
@@ -638,7 +635,7 @@ fn handle_plan(
     // ---- 已登录：走真实流程拿围栏和打卡点 ----
     {
         let maybe_client = {
-            let st = state.lock().map_err(|e| e.to_string())?;
+            let st = lock_state(&state);
             if !st.logged_in() {
                 None
             } else {
@@ -1017,7 +1014,7 @@ fn account_view(a: &crate::api::accounts::Account, current: bool) -> Value {
 }
 
 fn handle_accounts(request: tiny_http::Request, state: Shared) -> Result<(), String> {
-    let st = state.lock().map_err(|e| e.to_string())?;
+    let st = lock_state(&state);
     let cur = st.current.clone().unwrap_or_default();
     let list: Vec<Value> = st
         .book
@@ -1048,7 +1045,7 @@ fn handle_add_account(
     let mut client = Client::new(DeviceProfile::for_account(&username));
     match login(&mut client, &username, &password) {
         Ok(LoginOutcome::Ok(profile)) => {
-            let mut st = state.lock().map_err(|e| e.to_string())?;
+            let mut st = lock_state(&state);
             let id = if profile.uid.is_empty() { username.clone() } else { profile.uid.clone() };
             let enc = crate::api::accounts::seal_password(&password).unwrap_or_default();
             let mut acc = crate::api::accounts::Account {
@@ -1092,7 +1089,7 @@ fn handle_del_account(
     // 这件事交给了运气。现在有存盘 token 且退出没成功时**先不删**，把后果
     // 交给用户确认（`?force=1` 才跳过），这样「删完锁一小时」不会再意外发生。
     let had_token = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         st.book
             .get(id)
             .map(|a| !a.token.is_empty())
@@ -1113,7 +1110,7 @@ fn handle_del_account(
         );
     }
 
-    let mut st = state.lock().map_err(|e| e.to_string())?;
+    let mut st = lock_state(&state);
     let ok = st.book.remove(id);
     st.clients.remove(id);
     if st.current.as_deref() == Some(id) {
@@ -1138,7 +1135,7 @@ fn handle_logout_one(
 ) -> Result<(), String> {
     let remote = remote_logout(&state, id);
 
-    let mut st = state.lock().map_err(|e| e.to_string())?;
+    let mut st = lock_state(&state);
     if st.book.get(id).is_none() {
         return json_err(request, "账号不存在");
     }
@@ -1162,7 +1159,7 @@ fn handle_switch(
     state: Shared,
     id: &str,
 ) -> Result<(), String> {
-    let mut st = state.lock().map_err(|e| e.to_string())?;
+    let mut st = lock_state(&state);
     if st.book.get(id).is_none() {
         return json_err(request, "账号不存在");
     }
@@ -1175,7 +1172,7 @@ fn handle_toggle(
     state: Shared,
     id: &str,
 ) -> Result<(), String> {
-    let mut st = state.lock().map_err(|e| e.to_string())?;
+    let mut st = lock_state(&state);
     let enabled = match st.book.get_mut(id) {
         Some(a) => {
             a.enabled = !a.enabled;
@@ -1194,7 +1191,7 @@ fn handle_login_one(
     id: &str,
 ) -> Result<(), String> {
     let (username, password) = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         match st.book.get(id) {
             Some(a) => {
                 if a.password_enc.is_empty() {
@@ -1212,7 +1209,7 @@ fn handle_login_one(
     let mut client = Client::new(DeviceProfile::default());
     match login(&mut client, &username, &password) {
         Ok(LoginOutcome::Ok(profile)) => {
-            let mut st = state.lock().map_err(|e| e.to_string())?;
+            let mut st = lock_state(&state);
             st.apply_login(id, &profile);
             json_ok(request, json!({"id": id, "name": profile.name, "uid": profile.uid}))
         }
@@ -1224,7 +1221,7 @@ fn handle_login_one(
 /// 批量登录所有账号。
 fn handle_login_all(request: tiny_http::Request, state: Shared) -> Result<(), String> {
     let todo: Vec<(String, String, String)> = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         st.book
             .accounts
             .iter()
@@ -1250,7 +1247,7 @@ fn handle_login_all(request: tiny_http::Request, state: Shared) -> Result<(), St
         let mut client = Client::new(DeviceProfile::default());
         match login(&mut client, user, pass) {
             Ok(LoginOutcome::Ok(profile)) => {
-                let mut st = state.lock().map_err(|e| e.to_string())?;
+                let mut st = lock_state(&state);
                 st.apply_login(id, &profile);
                 results.push(json!({"id": id, "ok": true, "name": profile.name}));
             }
@@ -1293,7 +1290,7 @@ fn handle_batch(
 
     // 挑出要跑的账号
     let targets: Vec<String> = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         st.book
             .ready()
             .iter()
@@ -1313,7 +1310,7 @@ fn handle_batch(
 
         // 每个账号自己一份 client 快照
         let client = {
-            let st = state.lock().map_err(|e| e.to_string())?;
+            let st = lock_state(&state);
             st.client_of(id).cloned()
         };
         let Some(client) = client else {
@@ -1323,7 +1320,7 @@ fn handle_batch(
 
         // 静默窗口
         let since = {
-            let st = state.lock().map_err(|e| e.to_string())?;
+            let st = lock_state(&state);
             st.book
                 .get(id)
                 .map(|a| a.since_submit_sec(crate::crypto::envelope::now_ms() as i64))
@@ -1362,7 +1359,7 @@ fn handle_batch(
         match outcome {
             Ok(o) => {
                 if o.submitted {
-                    let mut st = state.lock().map_err(|e| e.to_string())?;
+                    let mut st = lock_state(&state);
                     if let Some(a) = st.book.get_mut(id) {
                         a.last_submit_ms = crate::crypto::envelope::now_ms() as i64;
                     }
@@ -1470,7 +1467,7 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -1569,7 +1566,7 @@ fn handle_points(
     query: &str,
 ) -> Result<(), String> {
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -1682,7 +1679,7 @@ fn handle_fences(
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -1784,7 +1781,7 @@ fn handle_run(
     // 先克隆 client 再放锁——后面 fetch_fences 是网络请求，持着 Mutex
     // 做 IO 会让 /api/accounts 之类的请求全部排队，页面看起来像服务死了。
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -1862,7 +1859,8 @@ fn handle_run(
             // 恒成立，客户端这边等于完全不拦；连续点几下全发给服务端，
             // 每次都要等它回 10603 才知道太频繁。
             if o.submitted {
-                if let Ok(mut st) = state.lock() {
+                {
+                    let mut st = lock_state(&state);
                     if let Some(id) = st.current.clone() {
                         let now = crate::crypto::envelope::now_ms() as i64;
                         if let Some(a) = st.book.get_mut(&id) {
@@ -1956,7 +1954,7 @@ fn handle_obs_fetch(
         _ => return json_err(request, "key 参数缺失或格式不对"),
     };
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -1990,7 +1988,7 @@ fn handle_raw(
     };
 
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -2037,7 +2035,7 @@ fn handle_cheat(request: tiny_http::Request, state: Shared, query: &str) -> Resu
         .unwrap_or(1i64);
     // 先克隆 client 再放锁：网络请求几十秒，持锁做 IO 会让整个面板假死。
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -2086,7 +2084,7 @@ fn handle_records(request: tiny_http::Request, state: Shared, query: &str) -> Re
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -2110,7 +2108,7 @@ fn handle_record_detail(
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
     let client = {
-        let st = state.lock().map_err(|e| e.to_string())?;
+        let st = lock_state(&state);
         if !st.logged_in() {
             return json_err(request, "请先登录");
         }
@@ -2127,10 +2125,22 @@ fn handle_record_detail(
 
 // ---------- HTTP 小工具 ----------
 
+/// 请求体上限。控制台最长的报文是轨迹 JSON，实测 2 MB 的请求体对应约
+/// 40 万个点，远超任何真实用例；给 8 MB 是留足余量又不至于让一次误发
+/// 就把进程内存打满。
+const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
+
 fn read_json(request: &mut tiny_http::Request) -> Result<Value, String> {
+    // `read_to_string` 原来不带上限：客户端声明 `Content-Length: 1000000000`
+    // 却只发一个字节，这行会一直读下去把线程钉住；真发满就直接吃光内存。
+    // 用 `take` 卡住上限，超出的明确报错而不是硬读。
+    use std::io::Read as _;
     let mut s = String::new();
-    let r = request.as_reader();
+    let mut r = std::io::Read::take(request.as_reader(), MAX_BODY_BYTES + 1);
     r.read_to_string(&mut s).map_err(|e| e.to_string())?;
+    if s.len() as u64 > MAX_BODY_BYTES {
+        return Err(format!("请求体超过 {MAX_BODY_BYTES} 字节上限"));
+    }
     serde_json::from_str(&s).map_err(|e| format!("请求体不是 JSON: {e}"))
 }
 
@@ -2160,6 +2170,19 @@ fn respond_json(
         .with_status_code(status)
         .with_header(header("Content-Type", "application/json; charset=utf-8"));
     request.respond(resp).map_err(|e| e.to_string())
+}
+
+/// 取全局状态锁，**中毒也恢复**。
+///
+/// 默认的 `lock()` 在某次持锁线程 panic 之后会永久返回 `Err`——`PoisonError`
+/// 是粘的，之后每一个请求都跟着失败，整个控制台只能重启。对一个本机单进程
+/// 控制台来说，"数据可能不一致" 远好过 "必须重启"，所以这里强制取回内层值
+/// 并留一行日志，至少让现象可见。
+fn lock_state(state: &Shared) -> std::sync::MutexGuard<'_, State> {
+    state.lock().unwrap_or_else(|e| {
+        eprintln!("! [state] 状态锁已中毒（有线程持锁时 panic 过），强制恢复继续");
+        e.into_inner()
+    })
 }
 
 fn json_ok(request: tiny_http::Request, body: Value) -> Result<(), String> {

@@ -197,8 +197,14 @@ pub fn logout(client: &mut Client) -> Result<bool, String> {
     let _ = &token;
     match client.request("POST", &url, Some(&body)) {
         Ok(raw) => {
-            let v: serde_json::Value =
-                serde_json::from_str(&raw).unwrap_or(serde_json::json!({}));
+            // 解析失败时**不能**退化成 `{}`：那样后面「没有 error 字段就
+            // 当成功」（`unwrap_or(true)`）会把一段 HTML 错误页、空响应、
+            // 被网关截断的内容全当成「登出成功」，而服务端会话其实还活着。
+            // 不是 JSON 就明确回「没确认成功」。
+            let v: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(_) => return Ok(false),
+            };
             // 服务端可能直接返回明文，也可能包在信封里
             let inner = v.get("r").and_then(|r| {
                 serde_json::from_str::<serde_json::Value>(r.as_str().unwrap_or("{}")).ok()

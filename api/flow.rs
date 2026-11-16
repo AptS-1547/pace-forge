@@ -548,11 +548,16 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         None => log("· [clock] 校时失败，按本机时钟继续"),
     }
     let start_ms = match p.start_at_ms {
-        // 补跑：时间是外部算好的，直接用它，但照样加抖动让秒数不整齐
+        // 补跑：时间是外部算好的，但**必须搬到服务器时间轴上**再发。
+        //
+        // `start_time` 模块用的是本机时钟（它没有服务器时间），算出来的 `t`
+        // 带本机误差。校时拿到的 `skew` 原来只写进日志就丢了——本机快 10 分钟
+        // 时，补跑记录会原样落到服务器未来轴，同样被「开始 + 时长 ≤ 现在」
+        // 驳回。`skew = 服务器 - 本机`，所以是加。
         Some(t) => {
             use rand::Rng;
             let mut r = rand::thread_rng();
-            t + r.gen_range(0..4_000i64)
+            t + skew.unwrap_or(0) + r.gen_range(0..4_000i64)
         }
         // 「现在跑」= 补一条**刚跑完**的记录，不是「从现在开始跑」。
         //
