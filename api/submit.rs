@@ -411,7 +411,6 @@ pub fn point_json_full(
     prev_v: &mut f64,
     _total_steps: i64,
     seed: u64,
-    checkpoint_idxs: &[usize],
     alt_range: Option<(f64, f64)>,
 ) -> Value {
     // BD-09 → GCJ-02（原点是 BD-09，服务端要 gcj02）
@@ -553,12 +552,6 @@ pub fn point_json_full(
     } else {
         0
     };
-    // `startup` 在本函数里仍然用着（下面算 `in_startup`），只是不再参与 `type`。
-    // `checkpoint_idxs` 现在已经没人用了——`isPass` 改成按坐标命中判定之后，
-    // 「命中了第几个采样点」这个信息就只留在 `hits` 里。参数先留着不改签名
-    // （调用方遍布 flow/submit，改签名是一次纯机械但有风险的改动），注释说清楚。
-    let _ = &checkpoint_idxs;
-
     // GPS 精度半径：真机 1.4~2.3m（众数 1.5~2.0）。早先按 3.6~4.3 生成，
     // 等于「每次定位都差四米」，是明显的机器指纹。
     //
@@ -1381,7 +1374,7 @@ pub fn build(
     fixed: &[FixedPoint],
     sim: &crate::track::SimResult,
 ) -> Result<Submission, String> {
-    let loc_items = build_points(points, fixed, params.start_time_ms, params.alt_range)?;
+    let loc_items = build_points(points, params.start_time_ms, params.alt_range)?;
     build_from_points(params, points, fixed, sim, loc_items)
 }
 
@@ -1403,13 +1396,11 @@ pub fn build(
 /// 谁都不许自己再拼一遍。入参就是点位的全部输入：
 ///
 /// - `track`：几何 + 时间戳（坐标、`totalDis`/`totalTime`、速度三兄弟、`bdA` 相位）；
-/// - `fixed`：打卡点（`type=2` 标记靠它算 `cp_idxs`）；
 /// - `start_ms`：seed（`id`/`count`/`radius`/`type`/`bdA` 的相位）、`flag`、
 ///   `stepDistance`、起步窗口；
 /// - `alt_range`：`bdA` 区间。
 pub fn build_points(
     track: &[TrackPoint],
-    fixed: &[FixedPoint],
     start_ms: i64,
     alt_range: Option<(f64, f64)>,
 ) -> Result<Vec<Value>, String> {
@@ -1424,15 +1415,8 @@ pub fn build_points(
     let mut prev_time = track[0].time_ms;
     // `bdS` 要「上一拍的点间速度」，逐点状态跟着 prev/precum 一起往前推。
     let mut prev_v = 0.0f64;
-    // 打卡点落在轨迹的哪几个采样点上（首次经过下标）。
-    //
-    // 早先这里读 `f.position`——那时候 `position` 表达「该点在轨迹里的首次
-    // 经过下标」。现在 `position` 是报文里的连续序号（0..N-1），语义变了，
-    // 所以内部这个量改成按坐标现算，而且**只算这一次**：OBS 明细拿到的就是
-    // 这里标好的 `type=2`，不再自己按 `fivePointJson` 重算一遍。
     // 起步窗口的点数：按时间戳数一遍（含末点时间戳），点字段、`queueNum`、
     // `segment_json` 首段、几何压缩共用这一个窗口，不再各自按比例估算。
-    // **必须在算打卡下标之前**：这些下标要给 `type` 赋值让路（见下）。
     let startup = {
         let times: Vec<i64> = track.iter().map(|p| p.time_ms).collect();
         let total_sec = times
@@ -1442,31 +1426,6 @@ pub fn build_points(
             .unwrap_or(0);
         crate::track::startup_point_count(&times, start_ms, total_sec)
     };
-    // 这些下标会被 `type` 赋成 7/6/5/-1（起点、终点、第二个点、起步灰点），
-    // 全部排在 `type=2` 之前。打卡点若落在这里就标不出标记，App 少画一个点。
-    let reserved: std::collections::HashSet<usize> = std::iter::once(0)
-        .chain(std::iter::once(1))
-        .chain(std::iter::once(track.len().saturating_sub(1)))
-        .chain(0..startup.min(track.len()))
-        .collect();
-    let cp_idxs: Vec<usize> = checkpoint_track_indexes_reserved(
-        track,
-        &fixed.iter().map(|f| (f.lat, f.lon)).collect::<Vec<_>>(),
-        &reserved,
-    );
-    // 命中下标必须两两不同：`type=2` 只标一个采样点，两个点位落到同一个
-    // 下标就会被 `contains` 合并成一次标记，App 详情页于是少画一个点。
-    {
-        let mut seen = std::collections::HashSet::new();
-        let dup: Vec<usize> = cp_idxs.iter().copied().filter(|i| !seen.insert(*i)).collect();
-        if !dup.is_empty() {
-            eprintln!(
-                "! [points] {} 个必到点只命中 {} 个不同采样点，重复下标 {dup:?}（App 会少画点）",
-                fixed.len(),
-                cp_idxs.len() - dup.len()
-            );
-        }
-    }
     let mut items: Vec<Value> = track
         .iter()
         .enumerate()
@@ -1475,7 +1434,7 @@ pub fn build_points(
             // （点位里没有 steps 字段），这里传 0 以免让调用方以为它影响点位。
             point_json_full(
                 p, i, track.len(), startup, start_ms, start_pt, &mut prev, &mut cum,
-                &mut prev_time, &mut prev_v, 0, seed, &cp_idxs, alt_range,
+                &mut prev_time, &mut prev_v, 0, seed, alt_range,
             )
         })
         .collect();

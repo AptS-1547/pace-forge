@@ -2294,7 +2294,7 @@ mod obs_tests {
             actual_length_m: 1000.0,
         };
         // 点位走唯一构造点（`build_points`），与提交报文同一份来源
-        let loc = crate::api::submit::build_points(&pts, &[], start_ms, None).expect("points");
+        let loc = crate::api::submit::build_points(&pts, start_ms, None).expect("points");
         let v = detail_payload_rrid(&sim, "123", 99, start_ms, "U", "[]", &loc);
 
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
@@ -2626,18 +2626,10 @@ mod fixed_point_payload_tests {
         })
         .to_string();
 
-        // 点位由 `build_points` 造一次（打卡点按坐标匹配），OBS 明细原样复用。
-        // `position` 是连续序号 0..N-1，与轨迹下标毫无关系——真按 position 去标
-        // 就会落到开头几个点上。
-        let fixed = [crate::api::submit::FixedPoint {
-            lat: target.lat,
-            lon: target.lon,
-            point_name: "P25".into(),
-            glat: 0.0,
-            glon: 0.0,
-            is_fixed: 1,
-        }];
-        let loc = crate::api::submit::build_points(&pts, &fixed, start_ms, None).expect("points");
+        // 点位由 `build_points` 造一次，OBS 明细原样复用。它不再接收必到点：
+        // `allLocJson` 里不撒打卡标记（见下面 marked 的断言），`isPass` 由
+        // `fixed_point_items` 按坐标命中算进 `fivePointJson`，两条路径互不依赖。
+        let loc = crate::api::submit::build_points(&pts, start_ms, None).expect("points");
         let obj = detail_payload_rrid(&sim, "123", 99, start_ms, "U", &five, &loc);
         let raw = obj["run_data"].as_str().expect("run_data 是 gzip+base64 字符串");
         let bytes = base64::engine::general_purpose::STANDARD
