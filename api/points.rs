@@ -136,7 +136,7 @@ pub fn fetch_points_at_distance(
 /// 解析点位响应。
 pub fn parse_points(v: &Value) -> Result<PointsContext, String> {
     let payload = v.get("data").unwrap_or(v);
-    let points = extract_points(payload);
+    let points = extract_points(payload)?;
     let coords = points.iter().filter_map(point_xy).collect();
     let gcj_coords = points
         .iter()
@@ -145,8 +145,18 @@ pub fn parse_points(v: &Value) -> Result<PointsContext, String> {
     Ok(PointsContext { points, coords, gcj_coords })
 }
 
+/// 嵌套下钻的最大层数。
+///
+/// 上游若回传 `data.result.data.result…` 的深层畸形链，逐层下钻会耗尽调用栈；
+/// 超过这个深度就明确报错中止，不再继续递归。
+const EXTRACT_MAX_DEPTH: usize = 5;
+
 /// 从响应里找点位数组。
-fn extract_points(payload: &Value) -> Vec<Value> {
+fn extract_points(payload: &Value) -> Result<Vec<Value>, String> {
+    extract_points_depth(payload, 0)
+}
+
+fn extract_points_depth(payload: &Value, depth: usize) -> Result<Vec<Value>, String> {
     // 优先显式的打卡点字段名
     for name in [
         "pointsResModels",
@@ -157,25 +167,28 @@ fn extract_points(payload: &Value) -> Vec<Value> {
     ] {
         let Some(val) = payload.get(name) else { continue };
         match val {
-            Value::Array(a) => return a.clone(),
+            Value::Array(a) => return Ok(a.clone()),
             // 有些版本把数组序列化成字符串
             Value::String(s) => {
                 if let Ok(Value::Array(a)) = serde_json::from_str::<Value>(s) {
-                    return a;
+                    return Ok(a);
                 }
             }
             _ => {}
         }
     }
+    if depth >= EXTRACT_MAX_DEPTH {
+        return Err("点位响应嵌套过深，已按畸形响应中止解析".into());
+    }
     // 再试一层嵌套
     for wrapper in ["result", "data"] {
         if let Some(inner) = payload.get(wrapper) {
             if inner.get("pointsResModels").is_some() {
-                return extract_points(inner);
+                return extract_points_depth(inner, depth + 1);
             }
         }
     }
-    Vec::new()
+    Ok(Vec::new())
 }
 
 /// 点位中心（BD-09）。
@@ -358,6 +371,18 @@ mod tests {
         let v = json!({ "data": {} });
         let ctx = parse_points(&v).unwrap();
         assert!(ctx.points.is_empty());
+    }
+
+    #[test]
+    fn deeply_nested_response_is_rejected_not_stack_overflown() {
+        // 畸形响应：data 里再套 data，逐层下钻。深度受限后必须明确报错，
+        // 而不是一路递归到栈溢出。
+        let mut v = json!({"pointsResModels": {}, "data": json!({"pointsResModels": []})});
+        for _ in 0..60 {
+            v = json!({"pointsResModels": {}, "data": v});
+        }
+        let r = parse_points(&v);
+        assert!(r.is_err(), "嵌套超过深度上限必须报错: {r:?}");
     }
 
     #[test]
