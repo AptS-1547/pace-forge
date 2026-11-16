@@ -174,15 +174,35 @@ pub(crate) fn book_path_in(base: &std::path::Path) -> PathBuf {
 /// 于是每台机器都算出 `"unknown"` + `"root"` —— 同样的 key，所有 Windows
 /// 机器通用，把 accounts.json 拷到任意一台就能直接解出密码。
 fn machine_key() -> [u8; 16] {
-    let host = std::fs::read_to_string("/etc/machine-id")
-        .map(|s| s.trim().to_string())
-        .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "unknown".into());
+    let host = pick_host(
+        std::fs::read_to_string("/etc/machine-id").ok(),
+        std::fs::read_to_string("/etc/hostname").ok(),
+        std::env::var("COMPUTERNAME").ok(),
+    );
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "root".into());
     derive_key(&host, &user)
+}
+
+/// 机器标识三源取第一个非空、非纯空白的；三源全失才退化成 `"unknown"`。
+///
+/// 早先某一源存在但内容是空串/纯空白时，`read_to_string` 是 `Ok`，`.or_else`
+/// 不会继续往下一个源走，空白值直接参与派生；三源都空时就退化成常量
+/// `"unknown" + "root"`，所有这样的机器算出同一把 key。
+fn pick_host(
+    machine_id: Option<String>,
+    hostname: Option<String>,
+    computer_name: Option<String>,
+) -> String {
+    let nonempty = |s: Option<String>| {
+        s.map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+    };
+    nonempty(machine_id)
+        .or(nonempty(hostname))
+        .or(nonempty(computer_name))
+        .unwrap_or_else(|| "unknown".into())
 }
 
 /// 旧版派生方式（只认 `/etc/hostname` 与 `USER`）。保留它是为了读得动
@@ -436,6 +456,25 @@ mod tests {
             .unwrap_or_else(|_| "unknown".into());
         // 只要不是两段都退化成常量，key 就是每机不同的
         assert!(host != "unknown" || std::env::var("COMPUTERNAME").is_ok());
+    }
+
+    /// 机器标识取源：空串/纯空白不能算「取到了」，要继续往后退。
+    #[test]
+    fn pick_host_skips_blank_sources() {
+        assert_eq!(
+            pick_host(Some("  ".into()), Some("host1".into()), None),
+            "host1"
+        );
+        assert_eq!(
+            pick_host(Some("id1".into()), Some("host1".into()), None),
+            "id1"
+        );
+        assert_eq!(
+            pick_host(Some("\t".into()), Some("".into()), Some("pc1".into())),
+            "pc1"
+        );
+        assert_eq!(pick_host(None, Some("  ".into()), None), "unknown");
+        assert_eq!(pick_host(None, None, None), "unknown");
     }
 
     fn sample_book() -> Book {

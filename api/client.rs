@@ -196,7 +196,11 @@ pub(crate) fn persistent_device_id_in(base: &std::path::Path, scope: &str) -> St
     }
 
     let id = random_hex32();
-    let _ = crate::api::session::write_file_private(&path, id.as_bytes());
+    // 写盘失败不能阻断本次运行，但必须落一条告警：静默丢掉的话，下次启动
+    // 读不到文件会另换随机 device_id，服务端判「新设备」撞 10121。
+    if let Err(e) = crate::api::session::write_file_private(&path, id.as_bytes()) {
+        eprintln!("[client] 设备标识写盘失败 {}: {e}", path.display());
+    }
     id
 }
 
@@ -487,6 +491,24 @@ mod tests {
             a,
             "不同 scope 必须是不同设备标识"
         );
+    }
+
+    /// 设备标识落盘失败时本次运行仍要拿到合法的 32 位 hex id，不能 panic。
+    #[test]
+    #[cfg(unix)]
+    fn device_id_survives_persist_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = TestDir::new("client-device-ro");
+        let ro = t.home().join("ro");
+        std::fs::create_dir_all(&ro).unwrap();
+        std::fs::set_permissions(&ro, PermissionsExt::from_mode(0o500)).unwrap();
+
+        let id = persistent_device_id_in(&ro, "scope-x");
+        assert_eq!(id.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // 还原权限，便于临时目录清理
+        let _ = std::fs::set_permissions(&ro, PermissionsExt::from_mode(0o700));
     }
 
     #[test]
