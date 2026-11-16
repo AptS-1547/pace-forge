@@ -529,6 +529,16 @@ fn start_for_immediate_run(server_now: i64, duration_sec: i64, margin_ms: i64) -
     server_now - duration_sec * 1000 - margin_ms
 }
 
+/// 补跑时刻搬到服务器时间轴上。
+///
+/// `skew = 服务器 - 本机`，由 [`crate::api::gmttime::server_now_ms`] 给出。
+/// 补跑的 `t` 是前端 `Date.now()` 算出来的，带本机误差；本机快 10 分钟时
+/// 直接发就会落到服务器未来轴，被「开始 + 时长 ≤ 现在」驳回——和「现在跑」
+/// 是同一条判据的两个入口。抽成纯函数，免得 `skew` 又被只写进日志。
+fn rerun_start_ms(local_t: i64, skew: Option<i64>) -> i64 {
+    local_t + skew.unwrap_or(0)
+}
+
 /// 只做到自检为止（不发任何写请求）。
 ///
 /// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
@@ -557,7 +567,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         Some(t) => {
             use rand::Rng;
             let mut r = rand::thread_rng();
-            t + skew.unwrap_or(0) + r.gen_range(0..4_000i64)
+            rerun_start_ms(t, skew) + r.gen_range(0..4_000i64)
         }
         // 「现在跑」= 补一条**刚跑完**的记录，不是「从现在开始跑」。
         //
@@ -2201,6 +2211,25 @@ mod obs_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：补跑时刻必须按校时偏移搬到服务器轴上。
+    ///
+    /// 原来 `Some(t) => t + 0..4000` 只加了抖动，`skew` 只写进日志就被丢掉——
+    /// 本机时钟偏快时，补跑记录落到服务器未来轴，被「开始 + 时长 ≤ 现在」
+    /// 驳回（与「现在跑」同一条判据，只堵了一个入口）。
+    #[test]
+    fn rerun_start_shifts_onto_server_clock() {
+        let local_t = 1_790_913_882_164i64;
+        // 本机快 10 分钟 → 服务器比本机慢 → skew = -600_000
+        let shifted = rerun_start_ms(local_t, Some(-600_000));
+        assert_eq!(shifted, local_t - 600_000);
+        assert!(shifted < local_t, "本机偏快时补跑时刻必须往前挪");
+
+        // 本机慢 3 分钟 → skew = +180_000
+        assert_eq!(rerun_start_ms(local_t, Some(180_000)), local_t + 180_000);
+        // 校时失败时保持原值，不做隐式偏移
+        assert_eq!(rerun_start_ms(local_t, None), local_t);
+    }
 
     /// 「现在跑」生成的记录必须**整条落在过去**：服务端判据是
     /// 「开始 + 时长 ≤ 服务器当前时间」，早先这里写成 `now + 0~5s`，

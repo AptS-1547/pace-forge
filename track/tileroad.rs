@@ -156,7 +156,11 @@ fn tile_path_in(base: &std::path::Path, x: i32, y: i32) -> PathBuf {
     cache_dir_in(base).join(format!("{ZOOM}_{x}_{y}.png"))
 }
 
-/// 拉一张瓦片，失败换子域重试。缓存 30 天——底图变化极慢。
+/// 拉一张瓦片，失败换子域重试。
+///
+/// 缓存**不设过期**：底图变化极慢，所以只看文件在不在、长度够不够；空文件
+/// 或损坏的瓦片（`> 512` 字节门槛以下）会被删掉重拉，不会永久毒化缓存。
+/// 若要按天过期，需要在读到可用文件后再查 mtime——目前没有做。
 fn fetch_tile(x: i32, y: i32) -> Result<image::RgbImage, String> {
     let path = tile_path(x, y);
     let bytes = if let Ok(b) = std::fs::read(&path) {

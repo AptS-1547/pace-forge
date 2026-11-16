@@ -196,30 +196,37 @@ pub fn logout(client: &mut Client) -> Result<bool, String> {
     let body = serde_json::json!({});
     let _ = &token;
     match client.request("POST", &url, Some(&body)) {
-        Ok(raw) => {
-            // 解析失败时**不能**退化成 `{}`：那样后面「没有 error 字段就
-            // 当成功」（`unwrap_or(true)`）会把一段 HTML 错误页、空响应、
-            // 被网关截断的内容全当成「登出成功」，而服务端会话其实还活着。
-            // 不是 JSON 就明确回「没确认成功」。
-            let v: serde_json::Value = match serde_json::from_str(&raw) {
-                Ok(v) => v,
-                Err(_) => return Ok(false),
-            };
-            // 服务端可能直接返回明文，也可能包在信封里
-            let inner = v.get("r").and_then(|r| {
-                serde_json::from_str::<serde_json::Value>(r.as_str().unwrap_or("{}")).ok()
-            });
-            let ok = inner
-                .as_ref()
-                .and_then(|x| x.get("error").or_else(|| x.get("code")))
-                .and_then(|e| e.as_i64())
-                .map(|e| e == crate::crypto::consts::CODE_OK)
-                .or_else(|| v.get("error").and_then(|e| e.as_i64()).map(|e| e == crate::crypto::consts::CODE_OK))
-                .unwrap_or(true);
-            Ok(ok)
-        }
+        Ok(raw) => Ok(response_confirms_logout(&raw)),
         Err(_) => Ok(false),
     }
+}
+
+/// 判一条登出响应是否**真的**确认成功。
+///
+/// 解析失败时**不能**退化成 `{}`：那样后面「没有 error 字段就当成功」
+/// （`unwrap_or(true)`）会把一段 HTML 错误页、空响应、被网关截断的内容全当成
+/// 「登出成功」，而服务端会话其实还活着，下次重登直接撞 10121 锁一小时。
+/// 不是 JSON 就明确回「没确认成功」。
+fn response_confirms_logout(raw: &str) -> bool {
+    let v: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    // 服务端可能直接返回明文，也可能包在信封里
+    let inner = v
+        .get("r")
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(r.as_str().unwrap_or("{}")).ok());
+    inner
+        .as_ref()
+        .and_then(|x| x.get("error").or_else(|| x.get("code")))
+        .and_then(|e| e.as_i64())
+        .map(|e| e == crate::crypto::consts::CODE_OK)
+        .or_else(|| {
+            v.get("error")
+                .and_then(|e| e.as_i64())
+                .map(|e| e == crate::crypto::consts::CODE_OK)
+        })
+        .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -245,5 +252,28 @@ mod tests {
         let p = UserProfile::from_data(&json!({}));
         assert_eq!(p.uid, "");
         assert_eq!(p.sex, "未知");
+    }
+
+    /// 回归：登出不能把「无法识别的响应」当成成功。
+    ///
+    /// 原实现 `from_str(&raw).unwrap_or(json!({}))` + `unwrap_or(true)`：
+    /// HTML 错误页 / 空响应 / 被网关截断的内容全被判成登出成功，而服务端
+    /// 会话还在，下次重登直接 10121 锁一小时。
+    #[test]
+    fn logout_does_not_trust_unparseable_response() {
+        assert!(!response_confirms_logout("<html><body>502 Bad Gateway</body></html>"));
+        assert!(!response_confirms_logout(""));
+        assert!(!response_confirms_logout("{\"error\":10000")); // 被截断的 JSON
+        assert!(!response_confirms_logout("OK")); // 明文但非 JSON
+    }
+
+    #[test]
+    fn logout_accepts_explicit_and_enveloped_ok() {
+        // 裸响应里 error == CODE_OK
+        assert!(response_confirms_logout(r#"{"error":10000}"#));
+        // 信封里的明文 JSON
+        assert!(response_confirms_logout(r#"{"r":"{\"error\":10000}"}"#));
+        // 非 CODE_OK 的错误码必须判失败
+        assert!(!response_confirms_logout(r#"{"error":10121}"#));
     }
 }

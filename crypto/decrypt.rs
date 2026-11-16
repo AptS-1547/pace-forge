@@ -149,8 +149,17 @@ fn verify_signature(plaintext: &[u8], sig_b64: &str) -> Result<bool, String> {
     //     05 00 04 10）+ 16 字节 MD5
     //   - 裸 MD5：16 字节
     // 取末尾 16 字节比较，两种都成立，也不依赖服务端到底用哪种。
-    Ok(recovered_digest.len() >= expected.len()
-        && recovered_digest[recovered_digest.len() - expected.len()..] == expected[..])
+    Ok(digest_matches(recovered_digest, &expected))
+}
+
+/// 比摘要的**末尾 N 字节**（`N = expected.len()`），同时容纳 DigestInfo 前缀与裸摘要。
+///
+/// 早先这里是 `recovered_digest == format!("{:x}", md5)`：左边是原始字节（16 或
+/// 34 字节），右边是 32 字符 hex **字符串**的字节，长度必然不等，恒为 false。
+/// `require_signature` 默认关着才没暴露；一旦打开，全部合法响应都会被拒。
+fn digest_matches(recovered_digest: &[u8], expected: &[u8]) -> bool {
+    recovered_digest.len() >= expected.len()
+        && recovered_digest[recovered_digest.len() - expected.len()..] == expected[..]
 }
 
 fn right_pad_to(v: &[u8], size: usize) -> Vec<u8> {
@@ -185,5 +194,30 @@ mod tests {
         let s = SessionKeys::generate();
         let wire = r#"{"r":"AAAA","s":"","v":101}"#;
         assert!(open(wire, &s, true).is_err(), "强制验签时缺 s 必须失败");
+    }
+
+    /// 回归：验签必须按**字节**比摘要末尾，两种 PKCS#1 `T` 形态都要认。
+    ///
+    /// 原实现拿原始摘要字节比 32 字符 hex 字符串的字节，恒为 false——这条测试
+    /// 就是防止有人把它改回去。`hex 形态`那段显式断言旧的错误口径不通过。
+    #[test]
+    fn digest_matches_raw_and_digestinfo_forms() {
+        let md5: [u8; 16] = [
+            0x9e, 0x10, 0x7d, 0xd2, 0x9a, 0x2b, 0x4c, 0x5e, 0x11, 0x63, 0x8f, 0xa1, 0x7c, 0x3d, 0x0b, 0x94,
+        ];
+        assert!(digest_matches(&md5, &md5), "裸 MD5 必须通过");
+
+        let mut digestinfo = vec![
+            0x30, 0x20, 0x30, 0x0C, 0x06, 0x08, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x05, 0x05, 0x00,
+            0x04, 0x10,
+        ];
+        digestinfo.extend_from_slice(&md5);
+        assert_eq!(digestinfo.len(), 34, "DigestInfo 形态应为 18+16 字节");
+        assert!(digest_matches(&digestinfo, &md5), "DigestInfo 形态必须通过");
+
+        // 旧口径：hex 字符串的字节（32 字节），末尾 16 字节与摘要不同 —— 必须不通过
+        let hex_bytes = b"9e107dd29a2b4c5e11638fa17c3d0b94";
+        assert_eq!(hex_bytes.len(), 32);
+        assert!(!digest_matches(hex_bytes, &md5), "hex 字符串口径不能再被当成通过");
     }
 }
