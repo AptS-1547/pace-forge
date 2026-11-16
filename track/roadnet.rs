@@ -495,6 +495,11 @@ fn poly_cache_put_in(
     kind: &str,
     polys: &[Vec<(f64, f64)>],
 ) {
+    // 空结果不写缓存：上游一次瞬时空响应不能把「这一带无障碍物」锁死 30 天，
+    // 否则后续规划会一直缺楼、缺水。
+    if polys.is_empty() {
+        return;
+    }
     let path = poly_cache_path_in(base, bbox, kind);
     let body = serde_json::json!({
         "polys": polys.iter().map(|p| p.iter().map(|q| vec![q.0, q.1]).collect::<Vec<_>>()).collect::<Vec<_>>()
@@ -546,6 +551,10 @@ fn water_cache_put(bbox: (f64, f64, f64, f64), polys: &[Vec<(f64, f64)>]) {
 }
 
 fn water_cache_put_in(base: &std::path::Path, bbox: (f64, f64, f64, f64), polys: &[Vec<(f64, f64)>]) {
+    // 空结果不写缓存，理由同建筑轮廓：瞬时空集不能锁死 30 天。
+    if polys.is_empty() {
+        return;
+    }
     let path = water_cache_path_in(base, bbox);
     let body = serde_json::json!({
         "polys": polys.iter().map(|p| p.iter().map(|q| vec![q.0, q.1]).collect::<Vec<_>>()).collect::<Vec<_>>()
@@ -965,6 +974,23 @@ mod tests {
         let t2 = TestDir::new("roadnet-blockers-empty");
         assert!(load_local_blockers_in(t2.home()).is_empty());
         assert!(!t2.data().exists(), "读路径不该创建数据目录");
+    }
+
+    /// 空的水域/建筑结果不能写缓存：上游一次瞬时空响应不该把「这一带没有
+    /// 障碍物」锁死 30 天，否则后续规划持续缺楼缺水。
+    #[test]
+    fn empty_polys_are_not_cached() {
+        let t = TestDir::new("roadnet-empty-cache");
+        poly_cache_put_in(t.home(), BBOX, "buildings", &[]);
+        assert!(
+            poly_cache_get_in(t.home(), BBOX, "buildings").is_none(),
+            "空建筑结果不该命中缓存"
+        );
+        water_cache_put_in(t.home(), BBOX, &[]);
+        assert!(
+            water_cache_get_in(t.home(), BBOX).is_none(),
+            "空水域结果不该命中缓存"
+        );
     }
 
     /// 水体 / 建筑轮廓缓存同样要能注入。
