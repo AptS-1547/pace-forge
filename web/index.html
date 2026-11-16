@@ -598,11 +598,25 @@ const PF_TOKEN = (() => {
   } catch (_) { return ''; }
 })();
 const authHeaders = () => (PF_TOKEN ? { 'X-Pace-Token': PF_TOKEN } : {});
+/* 单个请求的超时：上游挂起时 fetch 会一直挂着，按钮停在 busy 态无法恢复；
+   到点主动 abort，抛出明确的超时文案，而不是无限等待。 */
+const API_TIMEOUT_MS = 60000;
 const api = async (url, opt) => {
-  const r = await fetch(url, {
-    ...(opt || {}),
-    headers: { ...authHeaders(), ...((opt && opt.headers) || {}) }
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+  let r;
+  try {
+    r = await fetch(url, {
+      ...(opt || {}),
+      signal: ctrl.signal,
+      headers: { ...authHeaders(), ...((opt && opt.headers) || {}) }
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e && e.name === 'AbortError') throw new Error('请求超时：后端长时间无响应，请刷新重试');
+    throw new Error('网络请求失败：' + ((e && e.message) || e));
+  }
+  clearTimeout(timer);
   // 非 JSON 响应（网关错误页、空体、被代理截断）不能让 `r.json()` 抛
   // SyntaxError——那句 "Unexpected token u in JSON at position 0" 用户看不懂。
   // 把状态码和 content-type 带出来，至少能判断是「服务挂了」还是「路由错了」。

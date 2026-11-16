@@ -2267,6 +2267,15 @@ mod index_html_tests {
             assert!(INDEX_HTML.contains(sink), "缺少转义包裹: {sink}");
         }
     }
+
+    /// api() 必须带超时与取消：上游挂起时不能让按钮永久停在 busy 态。
+    #[test]
+    fn api_request_has_timeout_and_abort() {
+        assert!(INDEX_HTML.contains("new AbortController()"));
+        assert!(INDEX_HTML.contains("ctrl.abort()"));
+        assert!(INDEX_HTML.contains("API_TIMEOUT_MS"));
+        assert!(INDEX_HTML.contains("请求超时"));
+    }
 }
 
 #[cfg(test)]
