@@ -2276,6 +2276,15 @@ mod index_html_tests {
         assert!(INDEX_HTML.contains("API_TIMEOUT_MS"));
         assert!(INDEX_HTML.contains("请求超时"));
     }
+
+    /// 写操作必须有防重入：账号行写按钮、禁区保存、picker 登录在请求
+    /// 结算前再次点击要被忽略或禁用，不能并发重复提交。
+    #[test]
+    fn write_actions_guard_reentry() {
+        assert!(INDEX_HTML.contains("accActionBusy"));
+        assert!(INDEX_HTML.contains("busy(btn, true)"));
+        assert!(INDEX_HTML.contains("x.disabled = true"));
+    }
 }
 
 #[cfg(test)]

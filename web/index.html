@@ -1115,7 +1115,13 @@ function renderAccounts(r) {
   });
 }
 
+/* 账号写操作进行中标记：一次请求没结算前，连点其余写按钮直接忽略，
+   避免切换/重登/退出/停用/删除并发打到后端。 */
+let accActionBusy = false;
 async function accountAction(act, id) {
+  if (accActionBusy) return;
+  accActionBusy = true;
+  document.querySelectorAll('#accList button[data-act]').forEach(b => { b.disabled = true; });
   const m = $('accMsg');
   try {
     if (act === 'del') {
@@ -1158,6 +1164,8 @@ async function accountAction(act, id) {
   } catch (e) {
     m.textContent = e.message;
     m.className = 'msg err';
+  } finally {
+    accActionBusy = false;
   }
 }
 
@@ -1789,6 +1797,9 @@ function initBlockers() {
     drawBlockers();
   };
   $('blockSave').onclick = async () => {
+    const btn = $('blockSave');
+    if (btn.disabled) return;
+    busy(btn, true);
     try {
       const r = await api('/api/blockers', {
         method: 'POST',
@@ -1799,6 +1810,8 @@ function initBlockers() {
       setBlockMode(false);
     } catch (e) {
       $('blockInfo').textContent = '保存失败：' + e.message;
+    } finally {
+      busy(btn, false);
     }
   };
   loadBlockers();
@@ -2339,6 +2352,9 @@ function showPicker(list, r) {
 
   box.querySelectorAll('button[data-id]').forEach(b => {
     b.onclick = async () => {
+      if (b.disabled) return;
+      // 登录请求没结算前禁用本卡片所有账号按钮，避免双击/连点重复提交
+      box.querySelectorAll('button[data-id]').forEach(x => { x.disabled = true; });
       const m = $('pickMsg');
       m.textContent = '登录中…';
       m.className = 'msg';
@@ -2351,6 +2367,7 @@ function showPicker(list, r) {
       } catch (e) {
         m.textContent = e.message;
         m.className = 'msg err';
+        box.querySelectorAll('button[data-id]').forEach(x => { x.disabled = false; });
       }
     };
   });
