@@ -396,6 +396,41 @@ fn step_distance_const(start_ms: i64) -> f64 {
 /// 1683.8m）为准：`flag` 全点同值、`lat`/`lng` 恒 -1.0、`state` 是
 /// 运动/暂停/收尾三态（1/2/3）、`type` 含 -1 灰点、`count` 40~53、
 /// `radius` 1.4~2.3、`queueNum` 0..24、没有 `steps` 字段。
+///
+/// 采样点 `type` 用哪套口径。
+///
+/// 两份真机样本对不上，是因为它们**不是同一种跑法**：
+///
+/// - 10-02 那份（114 点）：`{0: 89, -1: 17, 2: 5, 5: 1, 6: 1, 7: 1}`，带 5 个
+///   `type=2` ——正好等于 5 个必到点，是**计分跑**；
+/// - 11-14 那份（104 点）：`{0: 101, 3: 1, 5: 1, 6: 1}`，一个 `type=2` 都没有
+///   ——没有打卡点的跑法（户外跑/自由跑）。
+///
+/// v0.1.5 把 `type=2` 撤掉时把两份样本当成了同一种跑法的新旧口径，结果
+/// 计分跑的报文里没有任何「经过打卡点」的标记：issue #8 实测，提交后整条
+/// 记录被判成自由跑、不计成绩。App 的 `isValidPoint`（libswsport.so 反汇编，
+/// isvalidpoint.py:130-181）给 `type=2` 打 20 分（其余 15 分、及格线 65），
+/// 撤掉标记等于把「这一段算不算经过打卡点」的判据拆了。
+///
+/// 所以按跑法分流：**带必到点（计分跑）用打卡标记那套**；没有必到点的跑法
+/// 保留新口径。`PACE_PT_SCHEME=old|new` 可强制指定，做对照实验用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointTypeScheme {
+    /// 老样本口径：起点 7、第二个点 5、起步灰段 -1、打卡命中 2、终点 6。
+    WithCheckpointMarks,
+    /// 11-14 样本口径：起点 5、倒数第二 3、终点 6、其余全 0。
+    NewDeviceShape,
+}
+
+fn point_type_scheme(has_fixed: bool) -> PointTypeScheme {
+    match std::env::var("PACE_PT_SCHEME").ok().as_deref() {
+        Some("old") | Some("marks") => PointTypeScheme::WithCheckpointMarks,
+        Some("new") => PointTypeScheme::NewDeviceShape,
+        _ if has_fixed => PointTypeScheme::WithCheckpointMarks,
+        _ => PointTypeScheme::NewDeviceShape,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn point_json_full(
     p: &TrackPoint,
@@ -410,6 +445,8 @@ pub fn point_json_full(
     prev_v: &mut f64,
     _total_steps: i64,
     seed: u64,
+    scheme: PointTypeScheme,
+    checkpoint_idxs: &[usize],
     alt_range: Option<(f64, f64)>,
 ) -> Value {
     // BD-09 → GCJ-02（原点是 BD-09，服务端要 gcj02）
@@ -510,46 +547,53 @@ pub fn point_json_full(
 
     // 点位类型是有语义的，不是装饰。
     //
-    // 老版本按概率瞎填（38% 得 3、54% 得 0、3% 得 1、2% 得 2），纯粹凑分布。
     // 真机的 isValidPoint（libswsport.so@0x10e84，XXXXBully 反汇编还原成
     // isvalidpoint.py:130-181）对它打分：type=1 得 30 分、type=2 得 20 分、
     // 其他得 15 分，及格线 65。也就是说「这个采样点算不算有效打卡点」直接
     // 由 type 决定，瞎填等于每个点都拿不到类型分。
     //
-    //   0  普通采样（GPS 正常）
-    //   1  ——（真机 114 点里 type=1 出现 0 次，已不再生成）
-    //   2  次一级打卡点 / 弱定位
-    //   5  起步阶段的弱定位点
+    // 计分跑（带必到点）走老样本那套，撤掉 type=2 会让整条记录被服务端判成
+    // 自由跑不计成绩（issue #8，见 `PointTypeScheme` 的注释）：
+    //
+    //   7  起点（灰点，真机首点）
+    //   5  第二个点
+    //   -1 起步灰段（GPS 刚锁定、位移被过滤，真机第 3~18 点）
+    //   2  打卡命中：**只标命中的那一个采样点**，一点一个。真机 114 点里
+    //      type=2 恰好 5 个 = 5 个必到点，没有 ±2 那种撒窗口（早先撒窗口
+    //      5 个点能撒出 31 个 type=2，是真机的 6 倍）。
     //   6  终点
-    //   7  / -1  灰点：GPS 弱，跳变检查豁免
+    //   0  其余
     //
-    // 真机分布：{0: 89, -1: 17, 2: 5, 5: 1, 6: 1, 7: 1}（共 114 点）。
-    // 和老实现的三处差异：起点是 7 不是 0、第二个点是 5；起步段（GPS 刚
-    // 锁定、位移被过滤）整段是 **-1**；全程不出现 1，打卡位置改用 2 承载。
-    // 类型只认最新一份真机实测（实测账号，rrid 1362483656 / 1366096492，
-    // 104 个采样点）：`{0: 101, 3: 1, 5: 1, 6: 1}`。
-    //
-    //   5  起点（第 1 个点）
-    //   3  倒数第二个点
-    //   6  终点
-    //   0  其余全部
-    //
-    // 早先这套是照 10-02 那份老样本（`{0:89, -1:17, 2:5, 5:1, 6:1, 7:1}`）写的：
-    // 起点 7、第二个点 5、起步段整段 -1、打卡点撒 type=2。可新样本里 **没有
-    // -1、没有 2、没有 7**，起点是 5，还多出一个 3。两份样本对不上，说明
-    // 服务端或 App 改过口径，以新的为准。
-    //
-    // 打卡点标记（type=2）一起删掉：新真机压根不发它，App 详情页也不靠它——
-    // 实测真实记录的 5 个点位全靠 `fivePointJson` 渲染，`allLocJson` 里一个
-    // 打卡标记都没有。发出去只会多一个「这不是真机」的特征。
-    let ptype = if idx == 0 {
-        5
-    } else if idx + 1 == n {
-        6
-    } else if idx + 2 == n {
-        3
-    } else {
-        0
+    // 没有必到点的跑法（户外跑/自由跑）走 11-14 样本那套 `{0: 101, 3: 1,
+    // 5: 1, 6: 1}`：起点 5、倒数第二 3、终点 6、其余 0。
+    let ptype = match scheme {
+        PointTypeScheme::WithCheckpointMarks => {
+            if idx == 0 {
+                7
+            } else if idx + 1 == n {
+                6
+            } else if idx == 1 {
+                5
+            } else if idx < startup {
+                // 起步灰点：真机第 3~18 个点全是 -1，对应 86 秒 GPS 漂移段
+                -1
+            } else if checkpoint_idxs.contains(&idx) {
+                2
+            } else {
+                0
+            }
+        }
+        PointTypeScheme::NewDeviceShape => {
+            if idx == 0 {
+                5
+            } else if idx + 1 == n {
+                6
+            } else if idx + 2 == n {
+                3
+            } else {
+                0
+            }
+        }
     };
     // GPS 精度半径：真机 1.4~2.3m（众数 1.5~2.0）。早先按 3.6~4.3 生成，
     // 等于「每次定位都差四米」，是明显的机器指纹。
@@ -1372,7 +1416,7 @@ pub fn build(
     fixed: &[FixedPoint],
     sim: &crate::track::SimResult,
 ) -> Result<Submission, String> {
-    let loc_items = build_points(points, params.start_time_ms, params.alt_range)?;
+    let loc_items = build_points(points, fixed, params.start_time_ms, params.alt_range)?;
     build_from_points(params, points, fixed, sim, loc_items)
 }
 
@@ -1394,11 +1438,14 @@ pub fn build(
 /// 谁都不许自己再拼一遍。入参就是点位的全部输入：
 ///
 /// - `track`：几何 + 时间戳（坐标、`totalDis`/`totalTime`、速度三兄弟、`bdA` 相位）；
+/// - `fixed`：必到点。决定 `type` 口径（计分跑恢复 `type=2` 打卡标记）与
+///   标记落点；传空 = 无必到点的跑法，走新口径；
 /// - `start_ms`：seed（`id`/`count`/`radius`/`type`/`bdA` 的相位）、`flag`、
 ///   `stepDistance`、起步窗口；
 /// - `alt_range`：`bdA` 区间。
 pub fn build_points(
     track: &[TrackPoint],
+    fixed: &[FixedPoint],
     start_ms: i64,
     alt_range: Option<(f64, f64)>,
 ) -> Result<Vec<Value>, String> {
@@ -1424,6 +1471,36 @@ pub fn build_points(
             .unwrap_or(0);
         crate::track::startup_point_count(&times, start_ms, total_sec)
     };
+    // `type` 口径按跑法分流（见 `PointTypeScheme`）：带必到点 = 计分跑，
+    // 恢复 `type=2` 打卡标记——撤掉它，服务端会把整条记录判成自由跑
+    // 不计成绩（issue #8）。
+    let scheme = point_type_scheme(!fixed.is_empty());
+    // 这些下标会被 `type` 赋成 7/6/5/-1（起点、终点、第二个点、起步灰点），
+    // 全部排在 `type=2` 之前。打卡点若落在这里就标不出标记，App 少画一个点。
+    let reserved: std::collections::HashSet<usize> = std::iter::once(0)
+        .chain(std::iter::once(1))
+        .chain(std::iter::once(track.len().saturating_sub(1)))
+        .chain(0..startup.min(track.len()))
+        .collect();
+    // 每个必到点在采样数组里命中的那个下标（避开上面的保留下标）。
+    let cp_idxs: Vec<usize> = checkpoint_track_indexes_reserved(
+        track,
+        &fixed.iter().map(|f| (f.lat, f.lon)).collect::<Vec<_>>(),
+        &reserved,
+    );
+    // 命中下标必须两两不同：`type=2` 只标一个采样点，两个点位落到同一个
+    // 下标就会被 `contains` 合并成一次标记，App 详情页于是少画一个点。
+    if scheme == PointTypeScheme::WithCheckpointMarks {
+        let mut seen = std::collections::HashSet::new();
+        let dup: Vec<usize> = cp_idxs.iter().copied().filter(|i| !seen.insert(*i)).collect();
+        if !dup.is_empty() {
+            eprintln!(
+                "! [points] {} 个必到点只命中 {} 个不同采样点，重复下标 {dup:?}（App 会少画点）",
+                fixed.len(),
+                cp_idxs.len() - dup.len()
+            );
+        }
+    }
     let mut items: Vec<Value> = track
         .iter()
         .enumerate()
@@ -1432,7 +1509,7 @@ pub fn build_points(
             // （点位里没有 steps 字段），这里传 0 以免让调用方以为它影响点位。
             point_json_full(
                 p, i, track.len(), startup, start_ms, start_pt, &mut prev, &mut cum,
-                &mut prev_time, &mut prev_v, 0, seed, alt_range,
+                &mut prev_time, &mut prev_v, 0, seed, scheme, &cp_idxs, alt_range,
             )
         })
         .collect();
@@ -2387,6 +2464,90 @@ mod point_shape_tests {
         for gone in [-1, 1, 2, 7] {
             assert!(!types.contains(&gone), "type={gone} 是老样本口径，新版真机不发");
         }
+    }
+
+    /// 计分跑（带必到点）必须恢复 `type=2` 打卡标记。
+    ///
+    /// v0.1.5 把它撤掉时，依据是一份没有 `type=2` 的真机样本——但那份是
+    /// 没有必到点的跑法；带必到点的记录撤掉标记后整条被判成自由跑、不计
+    /// 成绩（issue #8，见 `PointTypeScheme`）。这条钉住：带必到点 → 老口径。
+    #[test]
+    fn graded_run_keeps_checkpoint_marks() {
+        let n = 240usize;
+        let lat0 = 31.2304;
+        // 一条南北向直线，每点约 6.7m
+        let pts: Vec<TrackPoint> = (0..n)
+            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 121.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .collect();
+        // 5 个必到点直接落在第 40/80/120/160/200 个采样点上
+        let marks = [40usize, 80, 120, 160, 200];
+        let fixed: Vec<FixedPoint> = marks
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| FixedPoint {
+                lat: pts[i].lat,
+                lon: pts[i].lon,
+                point_name: format!("P{i}"),
+                glat: 0.0,
+                glon: 0.0,
+                is_fixed: if k == 4 { 1 } else { 0 },
+            })
+            .collect();
+        let p0 = params();
+        let sim = test_sim(&p0, &pts);
+        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
+
+        // type=2 恰好 5 个：一点一个，不多不少
+        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
+        assert_eq!(n2, 5, "计分跑 5 个必到点全命中，type=2 必须正好 5 个，实际 {n2} 个");
+        // 老口径的其余特征也在：起点 7、第二个点 5、终点 6、起步灰段 -1
+        assert_eq!(sub.points[0]["type"], 7, "计分跑起点 type=7");
+        assert_eq!(sub.points[1]["type"], 5, "计分跑第二个点 type=5");
+        let last = sub.points.len() - 1;
+        assert_eq!(sub.points[last]["type"], 6, "终点 type=6");
+        assert!(
+            sub.points.iter().any(|q| q["type"].as_i64() == Some(-1)),
+            "起步灰段必须有 -1"
+        );
+    }
+
+    /// 打卡点落在起点上时，`type=2` 不能被起点抢走。
+    ///
+    /// `type` 是 if-else 顺序赋值的：起点 7、终点 6、第二个点 5、起步灰点 -1
+    /// 都排在 `type=2` 前面。实测轨迹从第一个打卡点附近起步时，5 个必到点
+    /// 只标出 4 个 `type=2`，App 详情页于是少画一个点位。命中下标必须绕开
+    /// 这些保留下标。
+    #[test]
+    fn checkpoint_on_start_point_still_gets_type_2() {
+        let n = 200usize;
+        let lat0 = 31.2304;
+        let pts: Vec<TrackPoint> = (0..n)
+            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 121.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .collect();
+        // 第一个必到点**正好落在起点**（idx=0），其余散布在后面
+        let marks = [0usize, 50, 90, 130, 170];
+        let fixed: Vec<FixedPoint> = marks
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| FixedPoint {
+                lat: pts[i].lat,
+                lon: pts[i].lon,
+                point_name: format!("P{i}"),
+                glat: 0.0,
+                glon: 0.0,
+                is_fixed: if k == 2 { 1 } else { 0 },
+            })
+            .collect();
+        let p0 = params();
+        let sim = test_sim(&p0, &pts);
+        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
+        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
+        assert_eq!(
+            n2, 5,
+            "起点上的打卡点也得标 type=2（绕开 idx=0），实际只有 {n2} 个"
+        );
+        // 起点仍然是 7
+        assert_eq!(sub.points[0]["type"], 7, "起点 type 必须还是 7");
     }
 }
 

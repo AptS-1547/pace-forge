@@ -1529,9 +1529,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 自检与上传必须共用同一份点位。
     //
     // 早先这里是数 `type=2` 打卡标记的个数，用来兜「`fixed` 传空」——
-    // 但新版真机（实测账号，rrid 1362483656）压根不发 `type=2`，
-    // 104 个点全是 `{0: 101, 3: 1, 5: 1, 6: 1}`，5 个必经点完全靠
-    // `fivePointJson` 渲染。所以改成直接数必到点数组，不再依赖采样点类型。
+    // 后来口径分了流（见 submit::PointTypeScheme）：带必到点的跑法才撒
+    // `type=2`，没有必到点的跑法不发。数标记就不再可靠，改成直接数必到点
+    // 数组，不依赖采样点 `type` 的口径。
     let n_fixed = probe_sub
         .save_record
         .get("fivePointJson")
@@ -2294,7 +2294,7 @@ mod obs_tests {
             actual_length_m: 1000.0,
         };
         // 点位走唯一构造点（`build_points`），与提交报文同一份来源
-        let loc = crate::api::submit::build_points(&pts, start_ms, None).expect("points");
+        let loc = crate::api::submit::build_points(&pts, &[], start_ms, None).expect("points");
         let v = detail_payload_rrid(&sim, "123", 99, start_ms, "U", "[]", &loc);
 
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
@@ -2626,10 +2626,11 @@ mod fixed_point_payload_tests {
         })
         .to_string();
 
-        // 点位由 `build_points` 造一次，OBS 明细原样复用。它不再接收必到点：
-        // `allLocJson` 里不撒打卡标记（见下面 marked 的断言），`isPass` 由
-        // `fixed_point_items` 按坐标命中算进 `fivePointJson`，两条路径互不依赖。
-        let loc = crate::api::submit::build_points(&pts, start_ms, None).expect("points");
+        // 点位由 `build_points` 造一次，OBS 明细原样复用。这份明细不带必到点
+        // （传 `&[]`，无必到点跑法的新口径）：`allLocJson` 里不撒打卡标记
+        // （见下面 marked 的断言），`isPass` 由 `fixed_point_items` 按坐标命中
+        // 算进 `fivePointJson`，两条路径互不依赖。
+        let loc = crate::api::submit::build_points(&pts, &[], start_ms, None).expect("points");
         let obj = detail_payload_rrid(&sim, "123", 99, start_ms, "U", &five, &loc);
         let raw = obj["run_data"].as_str().expect("run_data 是 gzip+base64 字符串");
         let bytes = base64::engine::general_purpose::STANDARD
@@ -2642,9 +2643,9 @@ mod fixed_point_payload_tests {
             serde_json::from_str(run["allLocJson"].as_str().unwrap()).unwrap();
 
         // 新版真机（实测账号，rrid 1362483656）的 allLocJson 里
-        // **没有任何打卡标记**：104 个点全是 {0: 101, 3: 1, 5: 1, 6: 1}，
-        // 5 个必经点完全靠 `fivePointJson` 渲染。早先要求 type=2 是照
-        // 10-02 老样本写的，那套口径服务端已经不用了。
+        // **没有任何打卡标记**：这份夹具不带必到点（传 `&[]`），走无必到点
+        // 跑法的新口径 `{0: 101, 3: 1, 5: 1, 6: 1}`。带必到点的计分跑才会
+        // 撒 `type=2`（见 submit::PointTypeScheme 与 issue #8 的回归）。
         let marked: Vec<usize> = loc
             .iter()
             .enumerate()
@@ -3003,13 +3004,15 @@ mod single_point_source_tests {
             "必到点必须带 isFixed/isPass 标记：{fa:?}"
         );
 
-        // 新版真机不发 type=2（见 `ptype` 处注释），这里改成断言「一份里也不该有」
+        // 计分跑必须撒 `type=2` 打卡标记（口径见 submit::PointTypeScheme）：
+        // 撤掉它服务端会把记录判成自由跑不计成绩（issue #8）。这个夹具
+        // 带 5 个必到点且全部命中，标记必须正好 5 个。
         let marked = probe
             .points
             .iter()
             .filter(|p| p["type"].as_i64() == Some(2))
             .count();
-        assert_eq!(marked, 0, "新版真机不发 type=2，实际 {marked} 个");
+        assert_eq!(marked, 5, "计分跑的打卡标记应与必到点数一致，实际 {marked} 个");
 
         // envelope 层：差异只允许出现在白名单里
         assert_envelope_diff_allowlisted(&probe.save_record, &submission.save_record);
