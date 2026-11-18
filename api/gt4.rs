@@ -90,6 +90,14 @@ fn get_pow_nonce(
     let mut rng = rand::thread_rng();
     let mut attempts = 0u64;
     loop {
+        // 上限检查放在**掷骰子之前**。原来的顺序是先算一把哈希、再查上限，
+        // 上限传 0 时第一把仍有 1/256 的概率直接命中 00 开头返回 Ok——
+        // 「给 0 次机会」结果还允许试一次，断言 is_err 的测试跟着随机挂，
+        // CI 上真的踩中过。放前面之后 0 次上限必然立刻报错，给的次数预算
+        // 一次不少（max_attempts=N 仍然允许恰好 N 次尝试）。
+        if attempts >= max_attempts {
+            return Err(format!("PoW 超过 {max_attempts} 次仍未找到 nonce"));
+        }
         let nonce: String = (0..16)
             .map(|_| HEX[rng.gen_range(0..16)] as char)
             .collect();
@@ -101,9 +109,6 @@ fn get_pow_nonce(
         if hash.starts_with("00") {
             log(&format!("[gt4] PoW 找到 nonce（尝试 {attempts} 次）"));
             return Ok(nonce);
-        }
-        if attempts >= max_attempts {
-            return Err(format!("PoW 超过 {max_attempts} 次仍未找到 nonce"));
         }
     }
 }
