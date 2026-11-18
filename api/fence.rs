@@ -167,6 +167,58 @@ pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
     Ok(fences)
 }
 
+/// 从 `geoFences` 的取值里抠出围栏条目，解析不出的形状一律返回空，
+/// 具体是什么由 [`fence_diag`] 报告。
+///
+/// 见过的形状：数组（多数学校）、序列化成字符串的数组。issue #8 又
+/// 冒出来既不是这两种的——geoFences 直接是对象或 null。这里统一兜住：
+///
+/// - **数组**：元素原样收下；元素本身是字符串（序列化的单个围栏）就地反序列化。
+/// - **字符串**：整体反序列化后递归。
+/// - **对象**：带 `points` 的当**单个围栏**收下（服务端只配了一个围栏时有的
+///   返回形状）；没有 `points` 的当**信封或 id→围栏的映射**，逐个字段值递归。
+/// - **null / 数字 / 布尔**：收不进来。
+///
+/// 递归深度 4 层封顶，和点位解析的深度上限一个用意：畸形嵌套不该把
+/// 解析线程带崩，报出形状让人修才是正路。
+fn fence_items_from(raw: &Value, depth: u8) -> Vec<Value> {
+    if depth > 4 {
+        return Vec::new();
+    }
+    match raw {
+        Value::Array(items) => items
+            .iter()
+            .map(|it| match it {
+                Value::String(t) => {
+                    serde_json::from_str::<Value>(t).unwrap_or_else(|_| it.clone())
+                }
+                other => other.clone(),
+            })
+            .collect(),
+        Value::String(t) => serde_json::from_str::<Value>(t)
+            .map(|v| fence_items_from(&v, depth + 1))
+            .unwrap_or_default(),
+        Value::Object(o) => {
+            if o.get("points").is_some() {
+                return vec![raw.clone()];
+            }
+            o.values()
+                .flat_map(|v| fence_items_from(v, depth + 1))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// 诊断用：截断长文本，尾巴换成省略号，不让一条日志刷满整个控制台。
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    format!("{cut}…")
+}
+
 /// 围栏响应诊断：说明到底返回了什么、为什么解析不出环。
 ///
 /// 只用于错误信息，不参与业务逻辑。字段名一并列出——服务端若把
@@ -180,13 +232,38 @@ fn fence_diag(v: &Value) -> String {
     let Some(raw) = raw else {
         return "响应里没有 geoFences 字段".into();
     };
-    let items: Vec<Value> = match raw {
-        Value::Array(a) => a.clone(),
-        Value::String(s) => serde_json::from_str(s).unwrap_or_default(),
-        _ => return "geoFences 既不是数组也不是 JSON 字符串".into(),
-    };
+    let items = fence_items_from(raw, 0);
     if items.is_empty() {
-        return "geoFences 是空数组".into();
+        // 空数组是「配了围栏接口、这个校区没配围栏」，和「形状没见过」
+        // 是两种处境，老消息保留
+        if let Value::Array(a) = raw {
+            if a.is_empty() {
+                return "geoFences 是空数组".into();
+            }
+        }
+        // 什么条目都抠不出来：把实际形状报出来，别让人对着
+        // 「既不是数组也不是 JSON 字符串」猜谜。原始内容截一段，
+        // 下次用户把日志贴回来就能直接对着形状修。
+        let shape = match raw {
+            Value::Null => "null（服务端没下发围栏内容）".to_string(),
+            Value::Bool(b) => format!("布尔 {b}"),
+            Value::Number(n) => format!("数字 {n}"),
+            Value::Array(a) => {
+                format!("数组（{} 个元素，但没抠出任何围栏）", a.len())
+            }
+            Value::String(t) => format!(
+                "字符串，内容开头=[{}]",
+                truncate_str(t, 160)
+            ),
+            Value::Object(o) => format!(
+                "对象，字段=[{}]",
+                o.keys().take(12).cloned().collect::<Vec<String>>().join(",")
+            ),
+        };
+        return format!(
+            "geoFences 解析不出围栏（实际是{shape}，序列化后开头=[{}]）",
+            truncate_str(&raw.to_string(), 160)
+        );
     }
 
     let counts: Vec<String> = items
@@ -216,21 +293,22 @@ pub fn parse_fences(v: &Value) -> Result<Vec<Fence>, String> {
     let data = v.get("data").unwrap_or(v);
     let fences = data
         .get("geoFences")
-        .cloned()
-        .or_else(|| v.get("geoFences").cloned())
-        .and_then(|value| match value {
-            Value::Array(items) => Some(items),
-            // 有些接口把数组序列化成字符串返回
-            Value::String(text) => serde_json::from_str(&text).ok(),
-            _ => None,
-        })
+        .or_else(|| v.get("geoFences"))
+        .map(|value| fence_items_from(value, 0))
         .unwrap_or_default();
 
     let mut out = Vec::new();
     for f in &fences {
-        let Some(pts) = f.get("points").and_then(|x| x.as_array()) else {
-            continue;
+        // points 多数是数组；有的学校把整个环序列化成字符串下发，
+        // 和 passPoints 的字符串口径同一个道理
+        let pts: Vec<Value> = match f.get("points") {
+            Some(Value::Array(a)) => a.clone(),
+            Some(Value::String(t)) => serde_json::from_str(t).unwrap_or_default(),
+            _ => Vec::new(),
         };
+        if pts.is_empty() {
+            continue;
+        }
         let ring: Vec<(f64, f64)> = pts
             .iter()
             .filter_map(point_xy)
@@ -588,6 +666,78 @@ mod tests {
         assert!(d.contains("geoFences=2"), "应报出围栏个数: {d}");
         assert!(d.contains("[1,0]"), "应报出每个围栏的点数: {d}");
         assert!(d.contains("points"), "应列出字段名: {d}");
+    }
+
+    /// geoFences 不是数组也不是字符串的形状（issue #8 跟评里那所学校的
+    /// 报错就是「既不是数组也不是 JSON 字符串」）：单个对象、id→围栏映射、
+    /// null，都必须能解析或至少报出真实形状。
+    #[test]
+    fn fence_items_from_handles_object_shapes() {
+        // 1. 服务端只配了一个围栏，geoFences 直接给对象
+        let single = json!({
+            "data": {
+                "geoFences": {
+                    "id": 7,
+                    "points": [
+                        { "lat": 47.38, "lon": 123.95 },
+                        { "lat": 47.39, "lon": 123.95 },
+                        { "lat": 47.39, "lon": 123.96 },
+                        { "lat": 47.38, "lon": 123.96 }
+                    ]
+                }
+            }
+        });
+        let fs = parse_fences(&single).unwrap();
+        assert_eq!(fs.len(), 1, "单个围栏对象要能收下: {fs:?}");
+        assert_eq!(fs[0].id, Some(7));
+        assert_eq!(fs[0].ring.len(), 4);
+
+        // 2. id→围栏 的映射
+        let map = json!({
+            "geoFences": {
+                "a": { "id": 1, "points": [
+                    { "lat": 47.38, "lon": 123.95 },
+                    { "lat": 47.39, "lon": 123.95 },
+                    { "lat": 47.39, "lon": 123.96 }
+                ]},
+                "b": { "id": 2, "points": [
+                    { "lat": 47.40, "lon": 123.97 },
+                    { "lat": 47.41, "lon": 123.97 },
+                    { "lat": 47.41, "lon": 123.98 }
+                ]}
+            }
+        });
+        let fs = parse_fences(&map).unwrap();
+        assert_eq!(fs.len(), 2, "映射形状要逐个收下: {fs:?}");
+
+        // 3. points 序列化成字符串
+        let stringy = json!({
+            "geoFences": [{
+                "id": 3,
+                "points": "[{\"lat\":47.38,\"lon\":123.95},{\"lat\":47.39,\"lon\":123.95},{\"lat\":47.39,\"lon\":123.96}]"
+            }]
+        });
+        let fs = parse_fences(&stringy).unwrap();
+        assert_eq!(fs.len(), 1);
+        assert_eq!(fs[0].ring.len(), 3, "字符串化的环要就地反序列化");
+
+        // 4. null：解析不出，但诊断要报出真实形状而不是老的那句谜语
+        let null_fence = json!({ "data": { "geoFences": null } });
+        let d = fence_diag(&null_fence);
+        assert!(parse_fences(&null_fence).unwrap().is_empty());
+        assert!(d.contains("null"), "诊断要点名 null: {d}");
+        assert!(d.contains("解析不出围栏"), "诊断要说清是解析问题: {d}");
+
+        // 5. 没见过的对象形状：报出字段名 + 原始内容开头，下次日志贴回来
+        //    就能直接对形状修
+        let weird = json!({ "data": { "geoFences": { "fenceList": 3, "total": 9 } } });
+        let d = fence_diag(&weird);
+        assert!(d.contains("对象"), "要点名是对象: {d}");
+        assert!(d.contains("fenceList"), "要报出字段名: {d}");
+
+        // 6. 空数组的老消息不能丢（和「形状没见过」是两种处境）
+        let empty = json!({ "data": { "geoFences": [] } });
+        assert!(fence_diag(&empty).contains("空数组"));
     }
 
     #[test]
