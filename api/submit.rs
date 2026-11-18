@@ -448,6 +448,8 @@ pub fn point_json_full(
     scheme: PointTypeScheme,
     checkpoint_idxs: &[usize],
     alt_range: Option<(f64, f64)>,
+    // 海拔噪声的点距缩放（1.0 = 真机标定点距，见函数内说明）
+    alt_scale: f64,
 ) -> Value {
     // BD-09 → GCJ-02（原点是 BD-09，服务端要 gcj02）
     let (glat, glng) = crate::api::coord::bd09_to_gcj02(p.lat, p.lon);
@@ -659,12 +661,20 @@ pub fn point_json_full(
     // 噪声项是**传感器噪声**，绝对量级（±2.4m / ±2.0m），不随海拔区间放大：
     // 传一个 200~260m 的高原区间进去时，地形漂移该变大，但气压计抖动不会
     // 跟着变成 ±8m——那会让相邻点跳近 20 米，比真机假得多。
-    let mid_amp = (half * 0.30).min(2.4);
-    let fast_amp = (half * 0.25).min(2.0);
+    // 点距缩放：这三个正弦的相位速率（rad/点）和噪声幅度都是对着真机
+    // 标定记录（1683.83m / 114 点 ≈ 14.9m 点距）配的。慢跑的点距缩到
+    // 6~7m 后逐点频率不变，等于同样的噪声每公里多抖 2 倍——App 配速图
+    // 海拔段于是出现明显的周期起伏，累计爬升也按点数翻倍（issue #7 实测
+    // 28m vs 真机 5m）。`alt_scale` 由 `build_points` 按点距算好传进来：
+    // 标定点距（≥14.9m）时恒为 1.0，行为逐字节不变；点距越密噪声越温和。
+    // 漂移项（第一条，管整条十几米的地形起伏）不缩——海拔区间是调用方
+    // 给的真实地形，慢跑也该走完这个区间，只有传感器噪声该变小。
+    let mid_amp = (half * 0.30).min(2.4) * alt_scale;
+    let fast_amp = (half * 0.25).min(2.0) * alt_scale;
     let altitude = (base
-        + half * 0.45 * (fi * 0.02 + ph(1)).sin()
-        + mid_amp * (fi * 0.30 + ph(2)).sin()
-        + fast_amp * (fi * 0.95 + ph(3)).sin())
+        + half * 0.45 * (fi * 0.02 * alt_scale + ph(1)).sin()
+        + mid_amp * (fi * 0.30 * alt_scale + ph(2)).sin()
+        + fast_amp * (fi * 0.95 * alt_scale + ph(3)).sin())
     .clamp(lo, hi);
 
     // `stepDistance`：真机是**整场一个常量**（唯一值集合
@@ -1501,6 +1511,18 @@ pub fn build_points(
             );
         }
     }
+    // 海拔噪声的点距缩放：标定记录 14.9m/点，密采样（慢跑 6~7m/点）时
+    // 噪声的「每公里含量」会随点数翻倍，按点距折算回去。≥标定点距时为
+    // 1.0（标定区间逐字节不变）。
+    let alt_scale = if track.len() >= 2 {
+        let len_m: f64 = track
+            .windows(2)
+            .map(|w| crate::track::geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)))
+            .sum();
+        ((len_m / (track.len() - 1) as f64) / 14.9).clamp(0.40, 1.0)
+    } else {
+        1.0
+    };
     let mut items: Vec<Value> = track
         .iter()
         .enumerate()
@@ -1510,6 +1532,7 @@ pub fn build_points(
             point_json_full(
                 p, i, track.len(), startup, start_ms, start_pt, &mut prev, &mut cum,
                 &mut prev_time, &mut prev_v, 0, seed, scheme, &cp_idxs, alt_range,
+                alt_scale,
             )
         })
         .collect();
@@ -2865,6 +2888,37 @@ mod step_distance_tests {
     }
 
     // ---- 圈与爬升 ----
+    /// 海拔噪声随点距缩放：慢跑的点距缩到 6~7m 后，若还用标定点距
+    /// （14.9m）的逐点噪声，每公里的起伏量会翻倍——App 海拔图出现明显
+    /// 周期波、累计爬升膨胀（issue #7 实测 28m vs 真机 5m）。密采样的
+    /// 噪声必须比标定稀疏的小；标定稀疏量级本身不许被改。
+    #[test]
+    fn altitude_noise_scales_with_point_spacing() {
+        let mk = |n: usize, total_m: f64| {
+            let t = rich_points(n, total_m, 720);
+            let pts = build_points(&t, &[], 1_790_000_000_000, None).unwrap();
+            let alt: Vec<f64> = pts.iter().map(|q| q["bdA"].as_f64().unwrap()).collect();
+            let dalt: Vec<f64> = alt.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+            dalt.iter().sum::<f64>() / dalt.len() as f64
+        };
+        // 300 点铺 4500m：15m 点距 ≈ 真机标定点距，噪声保持标定量级
+        let sparse = mk(300, 4500.0);
+        // 300 点铺 2000m：6.7m 点距（12 分/公里慢跑），噪声应明显收敛
+        let dense = mk(300, 2000.0);
+        assert!(
+            sparse > 0.9,
+            "标定点距的海拔噪声 |ΔbdA| 均值 {sparse:.2} 被改小了（标定 ≈1.2）"
+        );
+        assert!(
+            dense < 0.7,
+            "密采样（慢跑点距）的噪声 {dense:.2} 应比标定点距小一半以上"
+        );
+        assert!(
+            dense < sparse * 0.6,
+            "密采样噪声 {dense:.2} 应随点距缩放（稀疏 {sparse:.2}）"
+        );
+    }
+
 
     fn rich_points(n: usize, total_m: f64, total_s: i64) -> Vec<TrackPoint> {
         let lat0 = 31.2304;

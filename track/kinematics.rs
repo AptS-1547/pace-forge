@@ -194,6 +194,13 @@ pub fn pace_profile(
     }
     let mut rng = StdRng::seed_from_u64(seed);
 
+    // 生理上限：巡航速度的 2.2 倍。真机标定记录（3.03 m/s 均速）最快的点
+    // 6.21 m/s，2.2 倍对这个量级是无操作；但慢跑（12:00/km ≈ 1.39 m/s）
+    // 若还沿用规则上限 6.0，OU 噪声会把瞬时速度顶到 3~4 m/s——配速图上
+    // 一条 13 分/公里的线夹着几个 4 分多的尖刺，真机慢跑没有这种尖刺
+    // （issue #7 实测配速平稳，最快也就 10 分出头）。
+    let ceil = ceil.min(v0 * 2.2).max(floor + 0.1);
+
     // σ 按目标区间自适应。
     //
     // `p.sigma` 是对着真机那条记录标出来的（主体 sd 1.20，换算成逐点 σ 0.353）。
@@ -203,7 +210,16 @@ pub fn pace_profile(
     // 取 `span/6`：±3σ 正好铺满区间。宽区间时 6.94/6 = 1.16 > 0.353，仍然用
     // 真机标定值（不放大）；窄区间才收紧。这样「波动幅度像真人」和「别撞规则
     // 边界」两个目标能同时照顾到。
-    let sigma = p.sigma.min((ceil - floor) / 6.0).max(0.0);
+    let mut sigma = p.sigma.min((ceil - floor) / 6.0).max(0.0);
+
+    // 慢速段 σ 按巡航速度的三次方缩。σ 0.353 的两个真机统计量（主体 sd
+    // 1.20 / 相邻跳 0.79）都对着 3.88 m/s 的巡航测的，相对离散度约 31%；
+    // 直接拿绝对量去算慢跑（1.39 m/s）等于给 86% 的相对抖动——配速图整条
+    // 锯齿，最快被顶出 4 分以内的尖刺（issue #7）。按 (v0/2)³ 缩，2.0 m/s
+    // 以上是无操作（标定区间逐字节不变），慢速段的相对离散度回到标定水平。
+    if v0 < 2.0 {
+        sigma *= (v0 / 2.0).powi(3).max(0.0);
+    }
 
     // ① OU 均值回归 + 热身 ramp
     let mut w = Vec::with_capacity(n);
@@ -369,6 +385,46 @@ pub fn noise_upper_bound(n: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    /// 慢速跑的瞬时速度不许顶到规则上限：生理上限是巡航的 2.2 倍。
+    /// 12:00/km（1.39 m/s）的跑者不会有 6 m/s 的采样点——那在 App 配速图
+    /// 上是 2'47" 的尖刺（issue #7 报的 4'14" 就是这个机制）。
+    #[test]
+    fn slow_run_speeds_capped_at_physiological_ceil() {
+        let n = 120;
+        let pts: Vec<(f64, f64)> = (0..n).map(|i| (i as f64 * 7.0, 0.0)).collect();
+        let dts: Vec<f64> = vec![4.91; n - 1];
+        let v0 = 800.0 / 589.0; // ≈1.36 m/s 巡航
+        let p = KinParams::default();
+        let speeds = pace_profile(&pts, v0, &dts, 800.0, 42, &p, 0.24, 6.0, 1.0);
+        let max = speeds.iter().cloned().fold(-f64::INFINITY, f64::max);
+        assert!(
+            max <= v0 * 2.2 + 0.01,
+            "慢速跑最高瞬时 {max:.2} 超过生理上限 {:.2}",
+            v0 * 2.2
+        );
+    }
+
+    /// 慢速跑的 OU 波动按巡航缩放：相对离散度与标定记录一致（约 31%）
+    /// 而不是绝对 σ 0.353 硬套（那在 1.4 m/s 上等于 86% 的相对抖动）。
+    #[test]
+    fn slow_run_noise_scales_with_cruise() {
+        let n = 240;
+        let pts: Vec<(f64, f64)> = (0..n).map(|i| (i as f64 * 7.0, 0.0)).collect();
+        let dts: Vec<f64> = vec![4.91; n - 1];
+        let v0 = 800.0 / 1178.0; // ≈0.68 m/s
+        let p = KinParams::default();
+        let speeds = pace_profile(&pts, v0, &dts, 800.0, 42, &p, 0.2, 6.0, 1.0);
+        let m = speeds.iter().sum::<f64>() / speeds.len() as f64;
+        let sd = (speeds.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / speeds.len() as f64).sqrt();
+        assert!(
+            sd / m < 0.55,
+            "慢速跑速度相对离散度 {}/{} = {:.0}%，比标定记录（31%）宽出一倍",
+            sd,
+            m,
+            sd / m * 100.0
+        );
+    }
+
     use super::*;
 
     /// 一个带直角弯的折线，用于验证弯道降速。

@@ -41,20 +41,50 @@ pub struct Gait {
 ///
 /// 常见的旧公式 `150 + 12v` 在 6:40/km 会给出 180 步/分，比实测高 36 步，
 /// 而且形态是「步频主导」；真实数据是**步幅主导**——慢配速时步频掉得更多。
-pub fn gait(v: f64, fatigue: f64) -> Gait {
-    let target_cad = (34.4 + 44.5 * v) * (1.0 - 0.05 * fatigue);
-    let mut cadence = target_cad.clamp(100.0, 210.0);
-    let mut stride = if cadence > 0.0 { v * 60.0 / cadence } else { 0.0 };
+///
+/// 回归的下界是 2.0 m/s（8:19/km）。**低于它不许外推**：拿回归去算
+/// 12:00/km（1.39 m/s）会给出 96 步/分，被 100 的下限一夹，步频整段压成
+/// 100~112 的平带，步幅又被等式反推到 0.77m——issue #7 实测对比里正好
+/// 就是这两个数（真机步频 179、步幅 0.47m）。慢速走跑的实测形态是
+/// 「步频顶在 175~185 一带、步幅随速度缩」：1.40 m/s 步幅 0.47m（#7 真机），
+/// 2.0 m/s 步幅 0.96m（回归端点），中间两段线性接起来；1.40 以下步频近似
+/// 恒定、步幅继续缩。端点上 2.0 m/s 恰好回到回归值 125，两段连续。
+pub const GAIT_REGRESSION_FLOOR_MPS: f64 = 2.0;
 
-    // 步幅越界时反解步频，保持等式成立
-    if stride > 1.7 {
-        stride = 1.7;
-        cadence = v * 60.0 / stride;
-    } else if stride < 0.5 {
-        stride = 0.5;
-        cadence = v * 60.0 / stride;
+pub fn gait(v: f64, fatigue: f64) -> Gait {
+    if v >= GAIT_REGRESSION_FLOOR_MPS {
+        let target_cad = (34.4 + 44.5 * v) * (1.0 - 0.05 * fatigue);
+        let mut cadence = target_cad.clamp(100.0, 210.0);
+        let mut stride = if cadence > 0.0 { v * 60.0 / cadence } else { 0.0 };
+
+        // 步幅越界时反解步频，保持等式成立
+        if stride > 1.7 {
+            stride = 1.7;
+            cadence = v * 60.0 / stride;
+        } else if stride < 0.5 {
+            stride = 0.5;
+            cadence = v * 60.0 / stride;
+        }
+        Gait { cadence, stride }
+    } else {
+        // 慢速走跑段（见上面的锚点说明）。上端锚在回归于 2.0 的取值上
+        // （123.4 步/分 → 步幅 0.973m），保证两侧连续；下端锚 1.40 →
+        // 0.47m（#7 真机实测）。1.40 以下步频近似恒定、步幅随速度缩。
+        let stride0 = if v >= 1.40 {
+            0.47 + (v - 1.40) * (0.9733 - 0.47) / (2.0 - 1.40)
+        } else {
+            0.47 * v / 1.40
+        }
+        .clamp(0.0, 0.9733);
+        // 步频下限只防退化（v→0 时步幅缩到 0、等式仍成立），不再夹 100：
+        // 慢跑真机步频 179，夹 100 会把它打平成一条 100 出头的直线。
+        let mut cadence = (v * 60.0 / stride0.max(1e-9)) * (1.0 - 0.05 * fatigue);
+        if cadence < 60.0 {
+            cadence = 60.0;
+        }
+        let stride = if cadence > 0.0 { v * 60.0 / cadence } else { 0.0 };
+        Gait { cadence, stride }
     }
-    Gait { cadence, stride }
 }
 
 /// 由速度与疲劳度取步幅（米）。
@@ -163,6 +193,46 @@ mod tests {
                 assert!((speed_from(g.cadence, g.stride) - v).abs() < 1e-6);
             }
         }
+    }
+
+    /// 慢速走跑段的锚点：12:00/km 实测步频 179、步幅 0.47m（issue #7 真机）。
+    /// 回归外推在这里是错的：会给出 96 步/分、被下限夹成 100 出头的平线。
+    #[test]
+    fn slow_jog_matches_real_anchor() {
+        let g = gait(1000.0 / 720.0, 0.0); // 12:00/km = 1.39 m/s
+        assert!(
+            (172.0..=185.0).contains(&g.cadence),
+            "12:00/km 步频 {:.1} 应在 179 一带（真机实测），不是 100 出头",
+            g.cadence
+        );
+        assert!(
+            (0.42..=0.52).contains(&g.stride),
+            "12:00/km 步幅 {:.3}m 应在 0.47 一带（真机实测）",
+            g.stride
+        );
+        // 等式：步频×步幅必须能还原速度
+        let back = g.cadence / 60.0 * g.stride;
+        assert!((back - 1000.0 / 720.0).abs() < 1e-9, "等式被破坏：{back}");
+    }
+
+    /// 慢速分支与标定区间在 2.0 m/s 端点上连续：8:19/km 实测 125 步/分。
+    #[test]
+    fn slow_branch_continuous_at_regression_floor() {
+        let below = gait(2.0 - 1e-9, 0.0);
+        let at = gait(2.0, 0.0);
+        assert!(
+            (below.cadence - at.cadence).abs() < 1.0,
+            "2.0 m/s 两侧步频 {:.1} vs {:.1} 应连续",
+            below.cadence,
+            at.cadence
+        );
+        assert!((at.cadence - 125.0).abs() <= 3.0, "8:19/km 实测 125");
+        assert!(
+            (below.stride - at.stride).abs() < 0.05,
+            "2.0 m/s 两侧步幅 {:.3} vs {:.3} 应连续",
+            below.stride,
+            at.stride
+        );
     }
 
     #[test]

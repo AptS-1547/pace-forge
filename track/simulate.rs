@@ -114,6 +114,7 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
     //
     // 这里用两段 OU：外层的速度已经有了惯性，内层的步频再对速度做一次
     // 回归。真实跑者的步频不会严格等于公式值，会滞后于速度变化。
+    let v_cruise = target_len / p.total_sec as f64;
     let mut cad_targets = Vec::with_capacity(speeds.len());
     let mut elapsed_km = 0.0f64;
     for (i, &v) in speeds.iter().enumerate() {
@@ -121,8 +122,20 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
             elapsed_km += v * dts[i - 1] / 1000.0;
         }
         let fat = fatigue_from_km(elapsed_km);
-        // 目标步频：来自真实记录拟合的 34.4 + 44.5v，带疲劳衰减
-        cad_targets.push(((34.4 + 44.5 * v) * (1.0 - 0.05 * fat)).clamp(100.0, 210.0));
+        // 目标步频走 biomech::gait：标定区间（≥2.0 m/s）是同一条回归
+        // `34.4 + 44.5v` 带疲劳衰减，行为不变。慢速跑（巡航 <2.0 m/s）
+        // 有两个差异：一是回归不许外推（12:00/km 外推出 96 步/分、被下限
+        // 夹平，实测真机 179，issue #7）；二是步频不跟着**瞬时**速度扫——
+        // 真机慢跑的步频顶在一个稳值上，速度的起伏全由步幅吸收（#7 真机
+        // 步频曲线近似水平线）。所以慢速跑的目标步频按巡航速度取一次，
+        // 之后只随疲劳度缓降；瞬时速度仍走 `speeds`，步幅在下面第 ③ 步
+        // 由等式反解，自动吸收全部起伏。
+        let target_v = if v_cruise >= super::biomech::GAIT_REGRESSION_FLOOR_MPS {
+            v
+        } else {
+            v_cruise
+        };
+        cad_targets.push(super::biomech::gait(target_v, fat).cadence);
     }
     let mut cadences = ou_cadence_series(
         &cad_targets,
@@ -146,7 +159,10 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
         } else {
             1.0
         };
-        strides.push(st.clamp(0.5, 1.7));
+        // 下限 0.30：慢速走跑的实测步幅能到 0.47m（issue #7 真机），夹 0.5
+        // 会把等式硬掰断（0.5 × 179 步/分 ≠ 实际速度）。标定区间内步幅
+        // ≥0.96，这个下限永远不触发，行为不变。
+        strides.push(st.clamp(0.30, 1.7));
     }
 
     // ④ 逐段步数，累加得总步数
@@ -172,7 +188,7 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
             // 服务端一除就发现三组数据互相矛盾。
             for i in 0..strides.len() {
                 strides[i] = if cadences[i] > 0.0 {
-                    (speeds[i] * 60.0 / cadences[i]).clamp(0.5, 1.7)
+                    (speeds[i] * 60.0 / cadences[i]).clamp(0.30, 1.7)
                 } else {
                     strides[i]
                 };
@@ -502,6 +518,51 @@ pub fn validate(r: &SimResult, p: &SimParams) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// 慢速跑（巡航 <2.0 m/s）的步频不跟瞬时速度扫：真机慢跑步频顶在
+    /// 179 一带的稳值上（issue #7），速度起伏全由步幅吸收。
+    #[test]
+    fn slow_run_cadence_is_pinned_and_stride_absorbs() {
+        // 12:00/km：118 个 4.91s 网格点（≈575s），每段 6.84m（≈800m），
+        // 时间轴与里程、巡航速度互相自洽
+        let n = 118;
+        let pts: Vec<(f64, f64, i64)> = (0..n)
+            .map(|i| {
+                (
+                    47.3801 + i as f64 * 6.84 / 111_320.0,
+                    123.9502,
+                    1_790_000_000_000 + (i as f64 * 4.91 * 1000.0) as i64,
+                )
+            })
+            .collect();
+        let sp = SimParams {
+            total_distance_m: 800.0,
+            total_sec: 575, // 巡航 ≈1.39 m/s（12:00/km）
+            start_ms: 1_790_000_000_000,
+            target_steps: None,
+            seed: 7,
+            ..Default::default()
+        };
+        let sim = simulate(&pts, &sp).expect("simulate");
+        let mean_cad = sim.cadences.iter().sum::<f64>() / sim.cadences.len() as f64;
+        assert!(
+            (165.0..=185.0).contains(&mean_cad),
+            "慢速跑平均步频 {mean_cad:.1} 应在 179 一带（真机 179），不是 100 出头"
+        );
+        let stride_mean = sim.strides.iter().sum::<f64>() / sim.strides.len() as f64;
+        assert!(
+            (0.40..=0.62).contains(&stride_mean),
+            "慢速跑平均步幅 {stride_mean:.3} 应在 0.47 一带（真机 0.47m），不是 0.7+"
+        );
+        // 步频序列的离散度：顶在稳值上，OU 只带小抖动
+        let sd = {
+            let m = mean_cad;
+            (sim.cadences.iter().map(|c| (c - m) * (c - m)).sum::<f64>()
+                / sim.cadences.len() as f64)
+                .sqrt()
+        };
+        assert!(sd < 25.0, "步频 sd {sd:.1} 过大：瞬时速度不该拖着步频来回扫");
+    }
+
     use super::*;
 
     fn straight_track(n: usize, sec: i64) -> Vec<(f64, f64, i64)> {
@@ -638,3 +699,4 @@ mod time_precision_tests {
         }
     }
 }
+
