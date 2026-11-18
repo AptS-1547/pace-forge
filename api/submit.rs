@@ -3828,7 +3828,7 @@ mod parity_regression_tests {
             .collect();
 
         // ③ 起步窗口压平
-        compress_startup(&mut track, start, dur);
+        compress_startup(&mut track, start, dur, None);
         let real_len = path_length(
             &track.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>(),
         )

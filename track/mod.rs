@@ -102,7 +102,58 @@ pub fn startup_point_count(times_ms: &[i64], start_ms: i64, total_sec: i64) -> u
 /// 早先这里写的是 `t^1.5` 缓入，但缓入起点斜率为 0，第一个采样点位移几乎
 /// 为 0，配速会算出 400 多分/公里，App 配速图最左边就贴底走。真机 9/16 那条
 /// 起点是 91'（0.18 m/s），是平的——所以改成线性。下面的实现与这段描述一致。
-pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
+/// 把 `adv`（累计弧长，`adv[0]=0`、末点=总长）的单步增量压到 `caps[i]`
+/// 以内，削掉的量顺延给后面有余量的步。总长不变、单调不减；实在兜不住
+/// （全程贴着上限跑）就按比例少削，不做强切。
+pub fn cap_advances(adv: &mut [f64], caps: &[f64], total: f64) {
+    let n = adv.len();
+    if n < 3 || caps.len() + 1 != n || total <= 0.0 {
+        return;
+    }
+    // 两轮足够：第一轮削峰顺延，第二轮处理顺延造成的新超限
+    for _round in 0..2 {
+        let mut debt = 0.0f64;
+        for i in 0..caps.len() {
+            let step = adv[i + 1] - adv[i];
+            if step > caps[i] {
+                // 先记债务再削，债务由后面的步吸收
+                debt += step - caps[i];
+                adv[i + 1] = adv[i] + caps[i];
+            } else if debt > 0.0 {
+                let room = caps[i] - step;
+                let give = debt.min(room);
+                adv[i + 1] += give;
+                debt -= give;
+            }
+        }
+        if debt <= 1e-9 {
+            break;
+        }
+        // 前面全满了还欠着：从尾步往前把债务摊回去（末点必须钉在 total）
+        let mut i = caps.len();
+        while debt > 1e-9 && i > 0 {
+            i -= 1;
+            let step = adv[i + 1] - adv[i];
+            let room = (caps[i] - step).max(0.0);
+            let give = debt.min(room);
+            if give > 0.0 {
+                adv[i + 1] += give;
+                debt -= give;
+            }
+        }
+    }
+    // 末点钉回总长（浮点顺延可能有残差）
+    if let Some(last) = adv.last_mut() {
+        *last = total;
+    }
+}
+
+pub fn compress_startup(
+    pts: &mut [TrackPoint],
+    start_ms: i64,
+    total_sec: i64,
+    max_step_mps: Option<f64>,
+) {
     let n = pts.len();
     if n < 4 {
         return;
@@ -187,6 +238,29 @@ pub fn compress_startup(pts: &mut [TrackPoint], start_ms: i64, total_sec: i64) {
             1.0
         };
         want.push(cluster + (total_len - cluster) * f);
+    }
+
+    // 窗口外的仿射映射是「98.9% 里程铺进 88% 时长」，整体步长放大
+    // (total-cluster)/(total-anchor) 倍（典型 1.1 倍上下）。`sample_by_time`
+    // 刚把单步压到规则上限附近，这一步会把它再顶出规则带（issue #6：规则
+    // 3'30"~10'00" 的跑被仿射放大出 2'39" 的尖刺）。`max_step_mps` 给了
+    // 就按采样时间轴重新封顶——削掉的量顺延，总长不变；`None`（测试夹具）
+    // 完全跳过，行为与原来逐字节一致。
+    if let Some(vmax) = max_step_mps {
+        // 封顶必须按**报文口径**的时间差算：报文里 `totalTime` 是整秒累计
+        // （真机同款），4.91 秒的采样网格落在相邻整秒上，会有一批点对点
+        // 只隔 4 秒。同样的 26m 走 4 秒段就是 6.5 m/s（issue #6 的 2'39"
+        // 尖刺正是这么顶到 clamp 的），按毫秒网格封顶根本拦不住它。
+        let caps: Vec<f64> = pts
+            .windows(2)
+            .map(|w| {
+                let dt = (((w[1].time_ms - start_ms) as f64 / 1000.0).floor()
+                    - ((w[0].time_ms - start_ms) as f64 / 1000.0).floor())
+                    .max(1.0);
+                vmax * dt * 1.15
+            })
+            .collect();
+        cap_advances(&mut want, &caps, total_len);
     }
 
     // 沿原折线插值（want 单调，游标只往前走）
@@ -724,6 +798,19 @@ pub fn sample_by_time(
             *last = total_len;
         }
         s = ns;
+    }
+
+    // 单步位移封顶：收敛迭代按比例拉伸网格，顶在规则上限的那批点会被再
+    // 放大百分之几到十几——真机里瞬时速度确实能越过规则带（31m/5s 的
+    // 实测点存在），但那是有惯性的孤立尖峰，不是一整段贴着「规则上限 ×
+    // 拉伸系数」的整排平顶（issue #6 手绘场景实测最快 2'39"，而规则带是
+    // 3'30"~10'00"，快出 36%，App 配速图上肉眼可见的假）。这里把每个
+    // 间隔的弧长压到「规则上限 × 间隔 × 1.15」以内（15% 余量给真机式的
+    // 有机越界），削下来的量顺延到后面有余量的间隔，总里程一点不变。
+    // v_ceil 宽松（测试夹具 8.0 m/s）时这个上限远大于实际步长，是无操作。
+    {
+        let caps: Vec<f64> = dts.iter().map(|&dt| ceil * dt * 1.15).collect();
+        cap_advances(&mut s, &caps, total_len);
     }
 
     // 把最近的采样弧长**对齐到打卡点**（在弧长空间做，不是事后挪点）。
@@ -1618,7 +1705,7 @@ mod checkpoint_hit_tests {
             (cadence_stats(&track).mean_dt_sec - REAL_MEAN_INTERVAL_SEC).abs() < 0.2,
             "A1 扫的必须是真机节奏"
         );
-        compress_startup(&mut track, START_MS, dur);
+        compress_startup(&mut track, START_MS, dur, None);
         align_samples_to_checkpoints(&mut track, cps);
         let rep = if snap {
             snap_checkpoints(&mut track, cps)
@@ -1831,7 +1918,7 @@ mod checkpoint_hit_tests {
             &[],
             cps,
         );
-        compress_startup(&mut track, START_MS, dur);
+        compress_startup(&mut track, START_MS, dur, None);
         align_samples_to_checkpoints(&mut track, cps);
         let rep = if snap {
             snap_checkpoints(&mut track, cps)
@@ -2256,7 +2343,7 @@ mod sample_rate_tests {
             &[],
         );
         assert!(track.len() >= 2, "采样为空");
-        compress_startup(&mut track, START_MS, 555);
+        compress_startup(&mut track, START_MS, 555, None);
         let st = cadence_stats(&track);
         (track, st)
     }
@@ -2458,7 +2545,7 @@ mod sample_rate_tests {
             .map(|w| geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)))
             .collect();
         let mut after = raw.clone();
-        compress_startup(&mut after, START_MS, 555);
+        compress_startup(&mut after, START_MS, 555, None);
         let d_after: Vec<f64> = after
             .windows(2)
             .map(|w| geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)))
@@ -2561,10 +2648,100 @@ mod sample_rate_tests {
             })
             .collect();
         // 不 panic 即为通过；压完还要保住首末点与时长
-        compress_startup(&mut pts, START_MS, 555);
+        compress_startup(&mut pts, START_MS, 555, None);
         assert_eq!(pts.len(), n);
         assert_eq!(pts.first().unwrap().time_ms, START_MS);
         assert_eq!(pts.last().unwrap().time_ms, START_MS + 555_000);
+    }
+
+    /// `cap_advances` 基本盘：削峰、顺延、保总量、保单调。
+    #[test]
+    fn cap_advances_trims_and_keeps_total() {
+        // 4 步：5 / 20 / 3 / 2，上限都是 10 → 20 被削 10，顺延给后面两步
+        let mut adv = vec![0.0, 5.0, 25.0, 28.0, 30.0];
+        let caps = vec![10.0, 10.0, 10.0, 10.0];
+        cap_advances(&mut adv, &caps, 30.0);
+        assert_eq!(adv.len(), 5);
+        assert!((adv[4] - 30.0).abs() < 1e-9, "总量不变");
+        for w in adv.windows(2) {
+            assert!(w[1] >= w[0], "单调不减");
+            assert!(w[1] - w[0] <= 10.0 + 1e-9, "单步不越上限");
+        }
+        // 全程贴着上限跑（总需求 > 总上限）：不强切，保总量
+        let mut adv = vec![0.0, 12.0, 24.0, 36.0];
+        let caps = vec![10.0, 10.0, 10.0];
+        cap_advances(&mut adv, &caps, 36.0);
+        assert!((adv[3] - 36.0).abs() < 1e-9, "兜不住时总量仍然不变");
+        for w in adv.windows(2) {
+            assert!(w[1] >= w[0]);
+        }
+        // 太短直接返回
+        let mut adv = vec![0.0, 100.0];
+        cap_advances(&mut adv, &[10.0], 100.0);
+        assert_eq!(adv, vec![0.0, 100.0]);
+    }
+
+    /// 窄规则带（3'30"~10'00" → 4.76 m/s）下，`compress_startup` 的仿射放大
+    /// 不能把单步弧长顶出「规则上限 × 报文时间差 × 1.15」。
+    ///
+    /// 复现的是 issue #6：手绘轨迹的配速图最快 2'39"（6.3 m/s clamp），
+    /// 规则带 3'30"~10'00"，肉眼可见越带 36%。成因有两层——OU 顶在规则
+    /// 上限的整排点被收敛迭代按比例拉伸，再被起步压缩的仿射映射放大
+    /// 1.1 倍上下；报文 `totalTime` 还是整秒口径，4.91 秒网格的「4 秒段」
+    /// 又把同样的弧长折算快 25%。三层叠出来就是 2'39"。
+    #[test]
+    fn compress_startup_caps_steps_under_narrow_band() {
+        let lat0 = 47.38f64;
+        let lng0 = 123.95f64;
+        let mlat = geo::M_PER_DEG_LAT;
+        // 60 点、5 秒网格，位置沿经线：步长交替 25m / 5m（平均 15，起步压缩
+        // 放大后 25m 段会顶到 30m+，足够触发封顶；总预算兜得住）
+        let n = 60usize;
+        let mut arc = 0.0f64;
+        let mut pts: Vec<TrackPoint> = Vec::with_capacity(n);
+        for i in 0..n {
+            if i > 0 {
+                arc += if i % 2 == 1 { 25.0 } else { 5.0 };
+            }
+            pts.push(TrackPoint {
+                lat: lat0 + arc / mlat,
+                lon: lng0,
+                time_ms: START_MS + i as i64 * 4910,
+            });
+        }
+        let total_before = pts
+            .windows(2)
+            .map(|w| geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)))
+            .sum::<f64>();
+        compress_startup(&mut pts, START_MS, 555, Some(4.76));
+        // 起步窗口（前 startup_point_count 个点）弧长被压平是设计行为，只查窗口外
+        let su = startup_point_count(
+            &pts.iter().map(|p| p.time_ms).collect::<Vec<_>>(),
+            START_MS,
+            555,
+        );
+        let vmax = 4.76f64;
+        for w in pts.windows(2).enumerate().skip(su.saturating_sub(1)) {
+            let (i, w) = w;
+            let dt = (((w[1].time_ms - START_MS) as f64 / 1000.0).floor()
+                - ((w[0].time_ms - START_MS) as f64 / 1000.0).floor())
+                .max(1.0);
+            let step = geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon));
+            assert!(
+                step <= vmax * dt * 1.15 + 0.75,
+                "窗口外第 {i} 步 {step:.1}m 越过 {}m 上限",
+                vmax * dt * 1.15
+            );
+        }
+        // 总量不动（封顶只重分配）
+        let total_after = pts
+            .windows(2)
+            .map(|w| geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)))
+            .sum::<f64>();
+        assert!(
+            (total_after - total_before).abs() < 1.0,
+            "封顶不能吃掉总里程：{total_before:.1} → {total_after:.1}"
+        );
     }
 
     fn l_path() -> ((f64, f64), Vec<(f64, f64)>) {

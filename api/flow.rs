@@ -1227,7 +1227,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 顺序很关键：retime 必须看**压平前**的几何（它是按路径长度分配时间的，
     // 看压平后的点会把时间也一起压没），所以压平放在 retime 之后。
     let snap_cps: Vec<(f64, f64)> = cps.iter().map(|c| (c.lat, c.lng)).collect();
-    crate::track::compress_startup(&mut track_points, start_ms, p.duration_sec);
+    crate::track::compress_startup(&mut track_points, start_ms, p.duration_sec, Some(v_ceil));
 
     // ⑤.5 压缩之后沿轨迹**重新对齐一次**采样点。
     //
@@ -2790,7 +2790,7 @@ mod single_point_source_tests {
             "夹具的节奏必须是真机的 4.91s/点，实际 {:.2}s",
             st.mean_dt_sec
         );
-        crate::track::compress_startup(&mut track, START_MS, DURATION_SEC);
+        crate::track::compress_startup(&mut track, START_MS, DURATION_SEC, None);
 
         // 5 个打卡点直接取轨迹顶点，保证「轨迹真的经过它们」（isPass=true）。
         let n = track.len();
