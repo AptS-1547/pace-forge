@@ -106,7 +106,8 @@ impl Risk {
 #[derive(Debug, Clone, Default)]
 pub struct Report {
     pub risks: Vec<Risk>,
-    /// 满分区内的点占比（0~1）。越高越像真跑。
+    /// 间距落在满分区间内的相邻点占比（0~1）。本地统计口径：只说明
+    /// 这条轨迹像不像真跑，通过与否都不代表服务端审核或学校计分结果。
     pub full_score_ratio: f64,
     /// 平均点间距。
     pub avg_gap_m: f64,
@@ -124,13 +125,13 @@ impl Report {
     pub fn summary(&self) -> String {
         if self.risks.is_empty() {
             format!(
-                "点位检查通过 · 满分区 {:.1}% · 平均间距 {:.1}m",
+                "点位检查通过 · 符合本地间距条件的相邻点占比 {:.1}% · 平均间距 {:.1}m（本地统计）",
                 self.full_score_ratio * 100.0,
                 self.avg_gap_m
             )
         } else {
             format!(
-                "{} 项风险（{} 项拦截）· 满分区 {:.1}%",
+                "{} 项风险（{} 项拦截）· 符合本地间距条件的相邻点占比 {:.1}%（本地统计）",
                 self.risks.len(),
                 self.risks.iter().filter(|r| r.blocking()).count(),
                 self.full_score_ratio * 100.0
@@ -284,6 +285,33 @@ mod tests {
         assert!(!r.blocked(), "{:?}", r.risks);
         assert!(r.full_score_ratio > 0.95);
         assert!((r.avg_gap_m - 5.0).abs() < 0.5, "间距 {:.2}", r.avg_gap_m);
+    }
+
+    /// 摘要里的占比必须写明是「本地统计」。光写「满分区 100%」会让用户
+    /// 把本地间距检查误读成官方认定——这条文案是 issue 里点名要求改的，
+    /// 钉个测试防止哪天又被改回去。
+    #[test]
+    fn summary_says_local_stats() {
+        // 干净轨迹：通过分支
+        let pts: Vec<(f64, f64)> = (0..50)
+            .map(|i| (30.5 + i as f64 * 0.000045, 104.0))
+            .collect();
+        let bs = vec![bucket(10.0), bucket(10.0), bucket(10.0)];
+        let r = inspect(&pts, &bs, PointRule::default(), 0);
+        let s = r.summary();
+        assert!(s.contains("符合本地间距条件的相邻点占比"), "{s}");
+        assert!(s.contains("（本地统计）"), "{s}");
+        assert!(!s.contains("满分区"), "老标签不能再出现: {s}");
+
+        // 有风险：风险分支同样要带口径
+        let sparse: Vec<(f64, f64)> = (0..10)
+            .map(|i| (30.5 + i as f64 * 0.0009, 104.0)) // ~100m 一个点，间距出格
+            .collect();
+        let bs2 = vec![bucket(10.0), bucket(10.0), bucket(10.0)];
+        let r2 = inspect(&sparse, &bs2, PointRule::default(), 0);
+        let s2 = r2.summary();
+        assert!(s2.contains("（本地统计）"), "{s2}");
+        assert!(!s2.contains("满分区"), "{s2}");
     }
 
     /// 真机节奏（5 秒一点 ≈ 14.9m）必须**全部通过**，一个风险项都不许有。
