@@ -1514,6 +1514,25 @@ pub fn build_points(
             );
         }
     }
+    // 第二轮放开半径命中的点位：偏出 10m 命中圈多远必须可见——「宁可标记
+    // 偏几米也不能少画一个点」是兜底，不是免费午餐；偏到几十米通常说明
+    // 点位压根不在轨迹上（画错围栏 / 人在围栏外），人工看一眼能省一次
+    // 白跑。目前只告警不改标记：官方客户端在「10m 内全被起点/灰点占用」
+    // 时怎么放标记没有样本依据，乱挪比偏着更危险。
+    if scheme == PointTypeScheme::WithCheckpointMarks {
+        for (i, &idx) in cp_idxs.iter().enumerate() {
+            let d = crate::track::geo::distance(
+                (track[idx].lat, track[idx].lon),
+                (fixed[i].lat, fixed[i].lon),
+            );
+            if d > FIXED_POINT_HIT_M {
+                eprintln!(
+                    "! [points] 必到点「{}」{FIXED_POINT_HIT_M:.0}m 内没有可用采样点（被起点/灰点占住），标记落在 {d:.0}m 外的最近采样上",
+                    fixed[i].point_name
+                );
+            }
+        }
+    }
     // 海拔噪声的点距缩放：标定记录 14.9m/点，密采样（慢跑 6~7m/点）时
     // 噪声的「每公里含量」会随点数翻倍，按点距折算回去。≥标定点距时为
     // 1.0（标定区间逐字节不变）。
