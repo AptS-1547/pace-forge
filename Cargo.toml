@@ -1,6 +1,6 @@
 [package]
 name = "pace-forge"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "运动世界校园 自动刷跑客户端 · 纯 Rust，极验本地求解，数据自洽"
 license = "MIT"
