@@ -557,6 +557,10 @@ cargo test
 - [docs/fix/](docs/fix/) — 每次「发现偏差 → 定位 → 改法 → 实测数字」的完整记录
 - [docs/notes/](docs/notes/) — 零散观测与排查笔记
 
+## 参与
+
+协议核对、逆向结论、带 `[track]` 日志的实测反馈，都算贡献——不会 Rust 也帮得上。证据分级（真机样本 > 线上探测 > APK 静态 > 推断）和不能碰的校准数值，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 数据依据
 
 `evidence/` 下的文件是**可复核的底稿**，代码注释里凡是写「真机实测 X」都应该
