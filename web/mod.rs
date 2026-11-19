@@ -206,6 +206,21 @@ fn is_loopback(remote: &str) -> bool {
     r.starts_with("127.") || r == "::1"
 }
 
+/// 口令比较，走常量时间。
+///
+/// 直接 `==` 在第一个不同的字节就返回，同网段攻击者能从响应时间差里逐字节
+/// 试探口令。两边先摘成 SHA-256 再逐字节 XOR 累加，比较路径与内容无关。
+fn ct_eq(got: &str, want: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let a = Sha256::digest(got.as_bytes());
+    let b = Sha256::digest(want.as_bytes());
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// 鉴权通过返回 Ok，否则返回 Err(要回给客户端的话)。
 fn check_auth(request: &tiny_http::Request, path: &str, query: &str) -> Result<(), String> {
     // 静态页不拦，否则连页面都打不开
@@ -229,7 +244,7 @@ fn check_auth(request: &tiny_http::Request, path: &str, query: &str) -> Result<(
                 .find_map(|kv| kv.strip_prefix("token="))
                 .map(url_decode);
             let got = from_header.or(from_query).unwrap_or_default();
-            if got == want {
+            if ct_eq(&got, &want) {
                 Ok(())
             } else {
                 Err("缺少或错误的口令（X-Pace-Token）".into())
@@ -2592,5 +2607,20 @@ mod loopback_tests {
         for no in ["10.0.0.1", "192.168.1.2", "::ffff:192.168.1.2", "114.114.114.114"] {
             assert!(!is_loopback(no), "{no} 不该判为本机");
         }
+    }
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::ct_eq;
+
+    /// 口令比较只认逐字节全等；前缀相同、长度不同的都不能过。
+    #[test]
+    fn token_compare_is_exact_and_prefix_safe() {
+        let want = "0123456789abcdef0123456789abcdef";
+        assert!(ct_eq(want, want));
+        assert!(!ct_eq(&want[..16], want), "前缀相同不能算相等");
+        assert!(!ct_eq("", want));
+        assert!(!ct_eq("0123456789abcdef0123456789abcdee", want));
     }
 }
