@@ -303,6 +303,34 @@ fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+/// 同时在处理的请求上限。
+///
+/// 控制台是本机工具，几十个并发已经远超正常使用。绑 `0.0.0.0` 暴露到局域网
+/// 后，扫描器或慢速连接会一条条堆线程（tiny_http 没有读超时），线程数无上限
+/// 时内存跟着涨。超限直接回 503，让新连接快速失败，而不是继续排队。
+const MAX_INFLIGHT: usize = 64;
+
+static INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 请求处理名额：拿到才算被允许起线程，线程结束自动归还。
+struct InflightGuard;
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn try_admit() -> Option<InflightGuard> {
+    let prev = INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if prev >= MAX_INFLIGHT {
+        INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        None
+    } else {
+        Some(InflightGuard)
+    }
+}
+
 pub fn serve(addr: &str) -> Result<(), String> {
     let server = Server::http(addr).map_err(|e| format!("监听 {addr} 失败: {e}"))?;
     let state: Shared = Arc::new(Mutex::new(State::restore()));
@@ -318,8 +346,21 @@ pub fn serve(addr: &str) -> Result<(), String> {
     println!("按 Ctrl+C 停止");
 
     for request in server.incoming_requests() {
+        let Some(slot) = try_admit() else {
+            eprintln!("请求超过 {MAX_INFLIGHT} 个在跑，直接回 503");
+            let _ = request.respond(
+                Response::from_string("{\"error\":\"控制台繁忙，请稍后重试\"}")
+                    .with_status_code(503)
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/json; charset=utf-8")
+                            .expect("静态头合法"),
+                    ),
+            );
+            continue;
+        };
         let state = Arc::clone(&state);
         std::thread::spawn(move || {
+            let _slot = slot;
             // 单个请求里的 panic 只杀这一个线程，不带走整个进程和正在跑的批次。
             // 之前 release 配的是 panic="abort"，一处 unwrap 失败就等于全崩。
             let guard = std::panic::AssertUnwindSafe(|| handle(request, state));
@@ -2621,6 +2662,30 @@ mod token_tests {
         assert!(ct_eq(want, want));
         assert!(!ct_eq(&want[..16], want), "前缀相同不能算相等");
         assert!(!ct_eq("", want));
-        assert!(!ct_eq("0123456789abcdef0123456789abcdee", want));
+        assert!(!ct_eq(
+            "0123456789abcdef0123456789abcdee",
+            want
+        ));
+    }
+}
+
+#[cfg(test)]
+mod inflight_tests {
+    use super::{try_admit, INFLIGHT, MAX_INFLIGHT};
+    use std::sync::atomic::Ordering;
+
+    /// 名额发满后新请求立刻被拒；处理完归还后名额恢复。
+    #[test]
+    fn inflight_cap_is_enforced_and_released() {
+        assert_eq!(INFLIGHT.load(Ordering::SeqCst), 0, "测试开始时计数应为 0");
+        let mut held = Vec::new();
+        while let Some(g) = try_admit() {
+            held.push(g);
+        }
+        assert_eq!(held.len(), MAX_INFLIGHT, "同时持有的名额应恰好等于上限");
+        assert!(try_admit().is_none(), "满了以后不该再发名额");
+        drop(held);
+        assert_eq!(INFLIGHT.load(Ordering::SeqCst), 0, "全部归还后计数应归零");
+        assert!(try_admit().is_some(), "归还后应立刻能再拿到名额");
     }
 }
