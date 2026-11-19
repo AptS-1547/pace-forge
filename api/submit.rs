@@ -479,15 +479,17 @@ pub fn point_json_full(
     // 与几何压缩、`segment_json` 首段用同一个窗口；这里不再自己按点数比例
     // 估一遍，否则三条链会各切各的。
     //
-    // **`speed` / `avgSpeed` 不再在这个窗口里写死 0**。早先照 evidence 那条
-    // 记录（rrid 1328288734，前 18 点三项全 0）硬抄，代价是 App 配速图开头
-    // 直接断线两分半——因为配速 0 被当作「无数据」不画点。真机 9/16 那条
-    // （19:20 / 6'08"）起点明明有 91' 的线，说明「窗口内一律 0」不是普遍
-    // 规律，只是那一条记录设备端的行为。
+    // **窗口内 `speed` / `avgSpeed` / `bdS` 一律写死 0**（只有 idx 0 的 0 是
+    // 「没有前一个点」的算不出，其余是明确的口径）。
     //
-    // 窗口内这点位移是真有的（真机 90 秒走 13.6m ≈ 0.15 m/s ≈ 111 分/km），
-    // 按几何如实算，线就接上了。`stepDistance` 仍然保持窗口内为 0：那是
-    // 整场一个常数，与逐点配速不是一回事。
+    // 依据是 evidence 主校准样本（rrid 1328288734，2026-10-02，114 点）：
+    // 前 18 点三项全 0——GPS 刚锁定、还没进测速窗口，不是「速度为 0」。
+    // 真机 9/16 那条（19:20 / 6'08"）窗口内确实有 ~91 分/km 的起笔，说明
+    // 设备端行为有差异；但选哪条都不能两全，而**按几何小速度上送**实测
+    // 更糟：0.15 m/s 折成 110 分/km 级的配速，App 配速图纵轴跟着极值走，
+    // 整张图被顶到 156'~160'/km，主体曲线压成底部一条线（#3/#4 反馈截图
+    // 实测）。断线只影响窗口那 ~90 秒且真机记录同样断；纵轴爆表让**整张
+    // 图**不可读。两害取其轻，回到主校准样本的口径。
     let in_startup = idx < startup;
 
     // ── speed / avgSpeed / bdS 的口径 ───────────────────────────────────────
@@ -514,11 +516,12 @@ pub fn point_json_full(
     //      是 2.5，两者差 6 倍）。
     //   ③ `bdS == speed/3.6` 这个「天然不变量」是把①的错口径写成了定理。
     //
-    // 起步窗口（真机前 18 点）服务端发的是**硬 0**，但这里只把**第一个点**
-    // 写成 0：`bdS` 我们发逐点几何速度，窗口内 Δdis 仍有 0.16~0.8 m/s 的
-    // GPS 漂移（真机 idx5/idx11/idx14 都非零），照几何算反而更接近 App 曲线。
-    // 只有 idx 0 没有前一个点、算不出 `step_m/gap_sec`，必须显式给 0。
-    let v_mps = if idx == 0 {
+    // 起步窗口（真机前 18 点）服务端发的是**硬 0**。窗口内 Δdis 确实仍有
+    // 0.16~0.8 m/s 的 GPS 漂移（真机 idx5/idx11/idx14 都非零），但真机仍
+    // 写 0 —— 是「还没进测速窗口」，不是「配速无穷大被截断成 0」。
+    // 之前试过「照几何算」，窗口内配速顶到 110 分/km 以上，把 App 配速图
+    // 纵轴拉到 156'~160'/km（#3/#4 截图实测），已回退。
+    let v_mps = if idx == 0 || in_startup {
         0.0
     } else {
         // 上限 6.3 m/s 只兜 GPS 抖动（世界纪录配速的两倍还多）。**不设下限**：
@@ -1044,11 +1047,13 @@ pub fn smooth_point_speed(items: &mut [Value]) {
         .map(|p| p["totalTime"].as_f64().unwrap_or(0.0))
         .collect();
     // 起步窗口不参与：真机这一段 speed / bdS / avgSpeed 恒 0（GPS 未锁定），
-    // 反算会把窗口内那点漂移折算成非 0 速度。
+    // 反算会把窗口内那点漂移折算成 110 分/km 级的配速，App 配速图纵轴跟着
+    // 极值走、整张图被压扁（#3/#4 截图实测 156'~160'/km），所以窗口内
+    // 一律写 0，与 `point_json_full` 的 `v_mps` 同口径。
     //
     // 窗口按时间戳数（与 `point_json_full` 的 `startup` 同一口径），这里手上
     // 的对象就是报文里那几个字段，直接读 totalTime 现算。
-    let _su = {
+    let su = {
         let times: Vec<i64> = items
             .iter()
             .map(|p| p["totalTime"].as_i64().unwrap_or(0) * 1000)
@@ -1061,10 +1066,8 @@ pub fn smooth_point_speed(items: &mut [Value]) {
     };
     let mut prev_v = 0.0f64;
     for (i, item) in items.iter_mut().enumerate().take(n) {
-        // 只把真正的首点写 0。窗口内 `i < su` 也写 0 是早先照 evidence 那条
-        // 记录抄的，代价是 App 配速图开头整段断线——两处（这里和上面
-        // `v_mps`）都写死 0，改一处没用，另一处会把 speed 覆盖回去。
-        let v = if i == 0 {
+        // 窗口内（含首点）一律 0；只有出了窗口才按 ΔtotalDis/ΔtotalTime 算。
+        let v = if i == 0 || i < su {
             0.0
         } else {
             let dt = tim[i] - tim[i - 1];
@@ -3928,21 +3931,16 @@ mod parity_regression_tests {
             "起步窗口占了 {:.1}% 的点，太多",
             su as f64 / pts.len() as f64 * 100.0
         );
-        // 起步窗口里**只有首点**是 0。
+        // 起步窗口内四项全 0（evidence rrid 1328288734 前 18 点的口径）。
         //
-        // 早先这里断言整窗 speed/bdS/avgSpeed/stepDistance 全 0（照 evidence
-        // 那条 rrid 1328288734 抄的），代价是 App 配速图开头两分半没有线——
-        // 配速 0 被当作「无数据」不画点。真机 9/16 那条起点明明是 91'。
-        // 现在按几何如实算（窗口内 90 秒走十几米 ≈ 0.15 m/s ≈ 110 分/km），
-        // 线是连着的。stepDistance 仍然窗口内为 0：它是整场一个常数。
-        assert_eq!(pts[0]["speed"].as_f64().unwrap(), 0.0, "首点 speed 应为 0");
-        assert_eq!(pts[0]["stepDistance"].as_f64().unwrap(), 0.0, "首点 stepDistance 应为 0");
-        for (i, q) in pts.iter().take(su).enumerate().skip(1) {
-            assert_eq!(q["stepDistance"].as_f64().unwrap(), 0.0, "第 {i} 点 stepDistance 应为 0");
-            let sp = q["speed"].as_f64().unwrap();
-            assert!(sp > 0.0, "第 {i} 点 speed 为 {sp}，配速图会断线");
-            // 窗口内配速必须比主体慢得多（真人起步就是磨），但不能是 0
-            assert!(sp < 400.0, "第 {i} 点配速 {sp:.0} 分/km，慢得不合理");
+        // 中间一度改成「按几何小速度算」让配速图开头有线，实测窗口内
+        // 0.15 m/s 折成 110 分/km 级配速，把 App 配速图纵轴顶到 156'~160'
+        // /km、整张图压成一条底线（#3/#4 反馈截图）——比「开头 ~90 秒没线」
+        // （真机记录同样没线，GPS 未锁定）更显眼，已回退。
+        for (i, q) in pts.iter().take(su).enumerate() {
+            for k in ["speed", "bdS", "avgSpeed", "stepDistance"] {
+                assert_eq!(q[k].as_f64().unwrap(), 0.0, "第 {i} 点 {k} 应为 0");
+            }
         }
         assert!(
             pts[su]["speed"].as_f64().unwrap() > 0.0,
@@ -4051,18 +4049,22 @@ mod parity_regression_tests {
             crate::track::startup_point_count(&times, p.start_time_ms, p.total_time_sec)
         };
         assert!(su >= 2, "起步窗口至少 2 个点");
-        // 同上：只有首点全 0。窗口内其余点按几何算，保证 App 配速图有线。
-        assert_eq!(pts[0]["speed"].as_f64().unwrap(), 0.0, "首点 speed 应为 0");
-        for (i, q) in pts.iter().take(su).enumerate().skip(1) {
-            assert!(q["speed"].as_f64().unwrap() > 0.0, "第 {i} 点 speed 为 0，配速图会断线");
-            assert_eq!(q["stepDistance"].as_f64().unwrap(), 0.0, "第 {i} 点 stepDistance 应为 0");
+        // 窗口内四项全 0（evidence rrid 1328288734 前 18 点的口径）。
+        // 曾经改成「按几何小速度算」让配速图开头有线，实测把 App 纵轴顶到
+        // 156'~160'/km、整图压扁，比开头断线（真机记录同样断）更糟，已回退。
+        for (i, q) in pts.iter().take(su).enumerate() {
+            for k in ["speed", "bdS", "avgSpeed", "stepDistance"] {
+                assert_eq!(q[k].as_f64().unwrap(), 0.0, "第 {i} 点 {k} 应为 0");
+            }
             // 新版真机起步段没有 -1 灰点，窗口内除首点(5)外一律 0
-            assert_eq!(
-                q["type"].as_i64(),
-                Some(0),
-                "第 {i} 点：新版真机起步段是 0，不该再有 -1，实际 {:?}",
-                q["type"]
-            );
+            if i > 0 {
+                assert_eq!(
+                    q["type"].as_i64(),
+                    Some(0),
+                    "第 {i} 点：新版真机起步段是 0，不该再有 -1，实际 {:?}",
+                    q["type"]
+                );
+            }
         }
         assert!(
             pts[su]["speed"].as_f64().unwrap() > 0.0,
