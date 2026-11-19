@@ -1,12 +1,21 @@
-# Claude Code：在 issue / PR 评论里 @claude，让 Claude 直接干活
-# （查代码、答协议问题、开修复 PR 都行，官方 anthropics/claude-code-action）。
+# Claude Code：在 issue / PR 评论里 @claude，让 AI 直接下场干活
+# （查代码、答协议问题、开修复 PR，官方 anthropics/claude-code-action）。
 #
-# ⚠️ 激活条件（二选一，加到仓库 Settings → Secrets → Actions）：
-#   - ANTHROPIC_API_KEY ：Claude Console 的 API key（按量付费）
-#   - 或把下面 anthropic_api_key 一行换成 claude_code_oauth_token:
-#     ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}，并填入本地
-#     `claude setup-token` 生成的令牌（Pro/Max 订阅可用，不另计 API 费）
-# 在加 secret 之前，@claude 只会让这个 workflow 报错，不影响其他任何东西。
+# ── 激活：三选一，把 secret 加到 Settings → Secrets → Actions ──
+#
+# 【A. Anthropic】加 secret ANTHROPIC_API_KEY（Claude Console 的 key，按量付费）。
+#     下面什么都不用改。
+#
+# 【B. Claude 订阅】本地跑 `claude setup-token` 生成令牌，加 secret
+#     CLAUDE_CODE_OAUTH_TOKEN，再把 anthropic_api_key 一行换成：
+#       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#
+# 【C. DeepSeek key】DeepSeek 官方 Anthropic 兼容端点。直接把 DeepSeek key
+#     填进 ANTHROPIC_API_KEY **不行**（端点不对），要走下面注释里的 DeepSeek
+#     版步骤：加 secret DEEPSEEK_API_KEY，删掉 Anthropic 版步骤、启用注释块。
+#     模型当前用 deepseek-flash，要更强的换 deepseek-v4-pro（两处一起换）。
+#
+# 没配任何 secret 前，@claude 只会让这一个 workflow 跑失败，无副作用。
 
 name: Claude Code
 
@@ -40,8 +49,22 @@ jobs:
         with:
           fetch-depth: 1
 
+      # ── Anthropic / 订阅版（默认启用）──
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      # ── DeepSeek 版（走【C】时：删掉上面整步、启用下面整块）──
+      # - name: Run Claude Code
+      #   id: claude
+      #   uses: anthropics/claude-code-action@v1
+      #   env:
+      #     ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+      #     ANTHROPIC_AUTH_TOKEN: ${{ secrets.DEEPSEEK_API_KEY }}
+      #     ANTHROPIC_MODEL: deepseek-flash
+      #     ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek-flash
+      #     ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek-flash
+      #   with:
+      #     anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
