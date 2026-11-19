@@ -194,9 +194,17 @@ pub fn campus_oval_track(
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     // 相关 GPS 噪声（OU）：沿轨迹与垂直轨迹各一维，相邻点有惯性 → 多圈成"带"。
+    //
+    // θ 和 σ 都按采样间距缩放，基准是真机样本的 14.9m 间距（θ=0.15、σ=1.1
+    // 的原值就是在那个间距下标定的）：
+    //   θ ∝ spacing/14.9（相关长度按米恒定 ≈100m）
+    //   σ ∝ √(spacing/14.9)（慢速漂移的带宽按米恒定 ≈2m）
+    // 不缩放的话，5m 间距的操场轨迹逐点噪声占比是 14.9m 的三倍：实测
+    // （#6 的日志）外框按标准 400m 生成、单圈却量出 429m（+7.3%），画在
+    // 地图上是一整条"河"。缩放后间距不再影响长度膨胀，实测回到 1% 上下。
     let (mut jx, mut jy) = (0.0f64, 0.0f64);
-    let theta = 0.15;
-    let sigma = 1.1;
+    let theta = 0.15 * (sample_step_m / 14.9);
+    let sigma = 1.1 * (sample_step_m / 14.9).sqrt();
     let gauss = |rng: &mut rand::rngs::StdRng| {
         let u1: f64 = rng.gen::<f64>().max(1e-12);
         let u2: f64 = rng.gen();

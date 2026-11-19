@@ -106,20 +106,27 @@ fn try_stadium_track(
     let klng = crate::track::geo::m_per_deg_lng(cps[0].lat);
 
     // 质心：先用来找出「场心」那个点（它在场地内部，不是跑道外框的角，
-    // 拿它算朝向/尺寸会把椭圆带偏、变圆）
+    // 拿它算朝向/尺寸会把椭圆带偏、变圆）。
     let gx = cps.iter().map(|c| c.lat).sum::<f64>() / cps.len() as f64;
     let gy = cps.iter().map(|c| c.lng).sum::<f64>() / cps.len() as f64;
-    let center_idx = (0..cps.len())
-        .min_by(|&a, &b| {
-            let da = ((cps[a].lat - gx) * klat).hypot((cps[a].lng - gy) * klng);
-            let db = ((cps[b].lat - gx) * klat).hypot((cps[b].lng - gy) * klng);
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .unwrap_or(0);
+    // 只有**明显在内场**的点才剔除：离质心的距离不足第二近点的一半。
+    // 四角对称、没有内场点时谁都不剔——少剔一个角，质心会整体偏出几十米，
+    // 椭圆画偏一圈还漏掉那个角上的打卡点（4 个角点、没有「田径场中」的
+    // 学校就是这种分布，实测偏 33m）。
+    let mut dists: Vec<(usize, f64)> = cps
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, ((c.lat - gx) * klat).hypot((c.lng - gy) * klng)))
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let center_idx: Option<usize> = match dists.first() {
+        Some(&(i, d1)) if dists.len() >= 2 && d1 < 0.5 * dists[1].1 => Some(i),
+        _ => None,
+    };
     let corners: Vec<&Checkpoint> = cps
         .iter()
         .enumerate()
-        .filter(|(i, _)| *i != center_idx)
+        .filter(|(i, _)| Some(*i) != center_idx)
         .map(|(_, c)| c)
         .collect();
     if corners.len() < 3 {
@@ -179,10 +186,14 @@ fn try_stadium_track(
 
     let (radius, straight) = if looks_standard_400 {
         // 第 1 道：36.5 内突沿 + 0.30 内突沿到分道线
-        log("[track] 外框像标准 400m 跑道，按第 1 道尺寸生成（半径 36.8m）");
+        log(&format!(
+            "[track] 打卡点外框 {major:.1}×{minor:.1}m 像标准 400m 跑道，按第 1 道尺寸生成（半径 36.8m）"
+        ));
         (36.8, 84.39)
     } else if looks_small_oval {
-        log("[track] 外框像 280m 校内小场，按半径 26m 生成");
+        log(&format!(
+            "[track] 打卡点外框 {major:.1}×{minor:.1}m 像 280m 校内小场，按半径 26m 生成"
+        ));
         (26.0, 55.0)
     } else {
         const FIELD_TO_TRACK: f64 = 1.35;
@@ -210,6 +221,12 @@ fn try_stadium_track(
     // 打卡点吸附：四角点真实椭圆天然就在 20m 内；「田径场中」这种在椭圆
     // 内部的点可能差得远，用余弦渐变把一小段整体拉过去，形成柔和外凸，
     // 不戳尖刺（硬吸附会在轨迹上留下一个尖角）。
+    //
+    // 注意：被吸附的点位离跑道有多远，轨迹就凹进去多深——点位在场地正中
+    // 的话轨迹必然穿进内场一段，这是「必须经过打卡点」的代价，不是跑偏。
+    // 吸附了几个、最远多远，都打进日志，用户反馈贴日志就能定位。
+    let mut snap_n = 0usize;
+    let mut snap_max = 0.0f64;
     for c in cps {
         let target = (c.lat, c.lng);
         let (mut bi, mut bd) = (usize::MAX, f64::MAX);
@@ -223,6 +240,8 @@ fn try_stadium_track(
         if bi == usize::MAX || bd <= 16.0 || bd > 45.0 {
             continue;
         }
+        snap_n += 1;
+        snap_max = snap_max.max(bd);
         let base = pts[bi];
         let (dlat, dlng) = (target.0 - base.0, target.1 - base.1);
         let w = ((bd / sample_step_m).ceil() as usize).clamp(4, 14);
@@ -240,7 +259,52 @@ fn try_stadium_track(
         }
     }
 
+    // 吸附统计 + 复核：吸附详情让「轨迹为什么穿进内场」可从日志诊断；
+    // 还有打卡点够不着（>45m）就放弃操场形状，回退路线规划。
+    if snap_n > 0 {
+        log(&format!(
+            "[track] {snap_n} 个打卡点距跑道 >16m，已吸附（最远 {snap_max:.0}m，轨迹在该处凹向点位）"
+        ));
+    }
+    if !stadium_cp_fits(&pts, cps, log) {
+        return None;
+    }
     Some(pts)
+}
+
+/// 吸附之后复核每个打卡点到轨迹的最终距离：
+/// - 16m 内的天然贴上，16~45m 的被上面那段余弦吸附拉过来；
+/// - **超过 45m 的没被吸附**——操场轨迹绕的是标准跑道，可这个点根本不在
+///   跑道附近（落在场地中间、或者教学楼下）。计分跑要求经过全部打卡点，
+///   这条轨迹交上去就是一次「漏打卡」，白烧提交额度还留档。
+///   这种情况放弃操场形状，回退到路线规划（那条链会逐一经过 must 点），
+///   并把原因打进日志，让用户知道为什么没绕圈。
+fn stadium_cp_fits(
+    pts: &[(f64, f64)],
+    cps: &[Checkpoint],
+    log: &mut Log,
+) -> bool {
+    let mut max_d = 0.0f64;
+    let mut bad: Option<(&str, f64)> = None;
+    for c in cps {
+        let mut d = f64::MAX;
+        for q in pts {
+            d = d.min(crate::track::geo::distance(*q, (c.lat, c.lng)));
+        }
+        max_d = max_d.max(d);
+        if d > 45.0 && bad.map(|(_, b)| d > b).unwrap_or(true) {
+            bad = Some((c.name.as_str(), d));
+        }
+    }
+    if let Some((name, d)) = bad {
+        log(&format!(
+            "[track] ⚠ 打卡点「{name}」距操场轨迹 {d:.0}m，超过吸附上限 45m，绕圈不会经过它；",
+        ));
+        log("[track] ⚠ 计分跑会被判漏打卡，操场形状放弃，改走路线规划（会逐一经过打卡点）");
+        return false;
+    }
+    log(&format!("[track] 打卡点贴合：距轨迹最远 {max_d:.1}m"));
+    true
 }
 
 /// 尝试沿 OSM 真实道路规划。任何一步失败都返回 None（静默降级）。
@@ -2489,6 +2553,107 @@ mod tests {
             got.iter().any(|l| l.contains("不像操场")),
             "应该记一条回退原因: {got:?}"
         );
+    }
+
+    /// 「田径场中」这类内场点位（距跑道 16~45m）：轨迹必须凹进去一段才
+    /// 经过它。吸附了几次、最深多少米要打进日志——用户反馈「轨迹穿进
+    /// 足球场」时，从日志就能分辨是点位吸附（正常，必须打卡）还是跑偏。
+    #[test]
+    fn stadium_snaps_infield_checkpoint_and_logs() {
+        let lat0 = 47.386;
+        let lng0 = 123.956;
+        let klat = crate::track::geo::m_per_deg_lat(lat0);
+        let klng = crate::track::geo::m_per_deg_lng(lat0);
+        let mk = |dy: f64, dx: f64| Checkpoint {
+            lat: lat0 + dy / klat,
+            lng: lng0 + dx / klng,
+            glat: lat0 + dy / klat,
+            glon: lng0 + dx / klng,
+            name: "P".into(),
+        };
+        // 标准 400m 外框四角 + 一个场地正中的点位
+        let cps = vec![
+            mk(0.0, -88.5),
+            mk(0.0, 88.5),
+            mk(92.5, -88.5),
+            mk(92.5, 88.5),
+            mk(46.25, 0.0),
+        ];
+        let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
+        let l2 = std::rc::Rc::clone(&logs);
+        let mut log = move |s: &str| l2.borrow_mut().push(s.to_string());
+        let r = try_stadium_track(&cps, 2000.0, 10.0, 42, &mut log);
+        drop(log);
+        let pts = r.expect("内场有一个点位也该生成操场轨迹（吸附过去）");
+        let got = logs.borrow();
+        assert!(
+            got.iter().any(|l| l.contains("已吸附")),
+            "内场点位被吸附时要写日志: {got:?}"
+        );
+        assert!(
+            got.iter().any(|l| l.contains("打卡点贴合")),
+            "要记录贴合统计: {got:?}"
+        );
+        // 吸附后的轨迹必须真的经过那个内场点位（30m 内）
+        let mut best = f64::MAX;
+        for q in &pts {
+            best = best.min(crate::track::geo::distance(*q, (cps[4].lat, cps[4].lng)));
+        }
+        assert!(best < 30.0, "吸附后距内场点位 {best:.0}m，还是没经过它");
+    }
+
+    /// 吸附够不着的点位（>45m）必须拒绝操场形状，回退路线规划——计分跑
+    /// 漏打卡等于白烧一次提交额度。现在的尺寸保护让这种点位进不了操场
+    /// 分支，这条主要是防将来放宽阈值后悄悄漏打卡。
+    #[test]
+    fn stadium_cp_fits_rejects_far_checkpoint() {
+        let pts = vec![(47.386, 123.956), (47.387, 123.956)];
+        let cps = vec![Checkpoint {
+            lat: 47.396,
+            lng: 123.956,
+            glat: 47.396,
+            glon: 123.956,
+            name: "远处".into(),
+        }];
+        let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
+        let l2 = std::rc::Rc::clone(&logs);
+        let mut log = move |s: &str| l2.borrow_mut().push(s.to_string());
+        assert!(!stadium_cp_fits(&pts, &cps, &mut log), "1.1km 外的点位不该判贴合");
+        drop(log);
+        let got = logs.borrow();
+        assert!(
+            got.iter().any(|l| l.contains("漏打卡")),
+            "拒绝时要写明后果: {got:?}"
+        );
+    }
+
+    /// 操场多圈的 GPS 抖动必须随采样间距缩放：θ/σ 是在真机 14.9m 间距下
+    /// 标定的，固定值用在 5m 间距上逐点噪声占比翻三倍——#6 实测标准
+    /// 400m 一圈量出 429m（+7.3%），画出来一整条「河」。
+    #[test]
+    fn campus_oval_wobble_scales_with_spacing() {
+        let spec = crate::track::OvalSpec {
+            straight: 84.39,
+            radius: 36.8,
+            heading: 0.82,
+            laps: 5.0,
+        };
+        let clean = 2.0 * spec.straight + 2.0 * std::f64::consts::PI * spec.radius;
+        let clean_total = clean * spec.laps;
+        for spacing in [5.2f64, 10.0, 14.9] {
+            for seed in [42u64, 20261119, 7] {
+                let pts = crate::track::campus_oval_track((47.386, 123.956), &spec, spacing, seed);
+                let len = crate::track::geo::path_length(&pts);
+                assert!(
+                    len < clean_total * 1.03 + 40.0,
+                    "间距 {spacing}m 种子 {seed}：操场轨迹 {len:.0}m，抖动把长度吹过头（目标 {clean_total:.0}m）"
+                );
+                assert!(
+                    len > clean_total,
+                    "间距 {spacing}m：{len:.0}m 比干净椭圆 {clean_total:.0}m 还短，轨迹断了"
+                );
+            }
+        }
     }
 
     #[test]
