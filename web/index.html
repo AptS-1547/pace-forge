@@ -434,6 +434,7 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
 <div id="app" class="wrap">
   <div class="topbar">
     <span id="buildTag" title="构建版本">本地控制台</span>
+    <span id="egressTag" class="hint" style="font-weight:400" title="提交出口 IP 自检（加载中）">出口…</span>
     <div class="avatar" id="ava" aria-hidden="true">·</div>
     <div class="who">
       <b id="uname">—</b>
@@ -683,6 +684,28 @@ function enter(me) {
   $('uinfo').textContent = [me.campus_name, me.depart, me.grade_class].filter(Boolean).join(' · ') || '—';
   initMap();
   loadRecords();
+  loadEgress();
+}
+
+/* 出口 IP 自检（#10）：亮出提交时服务端用的公网出口 IP，不伪造、不选路。
+   IP 字符串来自外部接口，只走 textContent/title，不进 innerHTML。
+   失败显示「出口未知」——它是自检项，不影响提交，也不弹错。 */
+async function loadEgress() {
+  const t = $('egressTag');
+  if (!t) return;
+  try {
+    const j = await api('/api/egress-ip');
+    if (j && j.ok) {
+      t.textContent = '出口 ' + j.ip;
+      t.title = '提交出口 IP（探测源 ' + j.source + '）。归属地和学校不在同城时，记录的 IP 特征会异常——同类工具成片被封的直接原因。';
+    } else {
+      t.textContent = '出口未知';
+      t.title = '公网出口探测失败（不影响提交，可忽略；有代理或断外网时常见）';
+    }
+  } catch (_) {
+    t.textContent = '出口未知';
+    t.title = '公网出口探测失败（不影响提交，可忽略）';
+  }
 }
 $('logout').onclick = async () => {
   // 退出登录 = 让服务端 token 失效 + 清本地登录态。

@@ -477,6 +477,11 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             handle_raw(request, state, &body)
         }
         (Method::Get, "/api/health") => json_ok(request, json!({"ok": true, "version": crate::VERSION})),
+        // 出口 IP 自检（#10）：显示提交时服务端用的公网 IP，不伪造、不选路。
+        // 探测失败返回 ok:false，前端显示「出口未知」，不阻塞任何功能。
+        (Method::Get, "/api/egress-ip") => {
+            json_ok(request, crate::api::egress::cached_json())
+        }
         _ => {
             if let Some(rest) = path.strip_prefix("/api/accounts/") {
                 // /api/accounts/{id}/switch  |  /api/accounts/{id}  (DELETE)
