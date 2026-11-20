@@ -11,6 +11,7 @@
 //! - `cli`       命令行入口（`pace-forge help`，见 `main.rs`）
 
 pub mod api;
+pub mod config;
 pub mod crypto;
 pub mod track;
 pub mod web;

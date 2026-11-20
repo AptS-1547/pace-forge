@@ -46,6 +46,9 @@ fn main() {
     match cmd {
         "web" => {
             let addr = args.get(1).cloned().unwrap_or_else(|| "127.0.0.1:9999".into());
+            if let Some(line) = pace_forge::config::non_default_line() {
+                println!("非默认开关: {line}");
+            }
             if let Err(e) = pace_forge::web::serve(&addr) {
                 eprintln!("启动失败: {e}");
                 std::process::exit(1);
@@ -116,6 +119,7 @@ fn main() {
             let lane: u8 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
             stadium_probe(laps, lane);
         }
+        "config" => pace_forge::config::print_table(),
         "version" | "-V" | "--version" => {
             println!("pace-forge {}", pace_forge::VERSION);
         }
@@ -131,6 +135,7 @@ fn main() {
             println!("  pace-forge ago <分钟> [km] [min]            补跑：N 分钟前");
             println!("  pace-forge rand [km] [min] [--days N]       补跑：当天 7-20 点随机时刻");
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
+            println!("  pace-forge config              列出全部 PACE_* 开关与当前取值");
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
