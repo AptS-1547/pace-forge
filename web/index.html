@@ -534,12 +534,15 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
         <button id="llPick" class="ghost" type="button">在地图上点选</button>
         <button id="llFetch" class="ghost" type="button"
                 title="只拉围栏和必到点，不生成轨迹">查围栏/点位</button>
+        <button id="netcheckBtn" class="ghost" type="button"
+                title="分别探测 Overpass 与高德瓦片，生成慢时用它定位是哪条链路">网络自检</button>
         <label style="margin:0" title="账号下发了多个校区/场地时在这里切换；选中会把定位锚点挪到该围栏中心">
           <select id="fenceSel" class="coord-input" style="min-width:130px" aria-label="校区/场地">
             <option value="">校区/场地（先查一次）</option>
           </select></label>
         <button id="llClear" class="ghost" type="button">清空</button>
         <span id="llInfo" class="hint"></span>
+        <pre id="ncOut" class="mono" style="display:none;flex-basis:100%;margin:6px 0 0;font-size:11px;line-height:1.6;white-space:pre-wrap;color:var(--dim)"></pre>
       </div>
 
       <div id="blockWrap" style="flex-basis:100%;margin-top:6px">
@@ -1741,7 +1744,34 @@ function initLoc() {
     fetchBtn.addEventListener('click', fetchFencesAndPoints);
   }
 
+  const ncBtn = $('netcheckBtn');
+  if (ncBtn && !ncBtn.__bound) {
+    ncBtn.__bound = true;
+    ncBtn.addEventListener('click', runNetcheck);
+  }
+
   if (info && !info.textContent) info.textContent = '填经纬度后点「定位」';
+}
+
+/* 网络自检：生成卡住时先点这个，确认是 Overpass 还是瓦片那条链路不通 */
+async function runNetcheck() {
+  const btn = $('netcheckBtn'), out = $('ncOut');
+  busy(btn, true);
+  out.style.display = 'block';
+  out.textContent = '检测中…（Overpass 每项最多 8 秒，瓦片 6 秒）';
+  try {
+    const d = await api('/api/netcheck', { cache: 'no-store' });
+    const lines = (d.items || []).map(it =>
+      `${it.ok ? '✓' : '✗'} ${it.name}  ${it.ms}ms${it.ok ? '' : '  ' + (it.detail || '')}`);
+    lines.push('');
+    lines.push(d.hint || '');
+    lines.push(`版本 ${d.version || '未知'}`);
+    out.textContent = lines.join('\n');
+  } catch (e) {
+    out.textContent = '自检失败：' + ((e && e.message) || e);
+  } finally {
+    busy(btn, false);
+  }
 }
 
 /* ---------- 手绘轨迹 ---------- */

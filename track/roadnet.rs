@@ -11,7 +11,7 @@ use crate::api::session::home_dir;
 use serde_json::Value;
 
 /// Overpass 端点。主站经常 502/504，准备了两个镜像轮询。
-const OVERPASS_HOSTS: [&str; 3] = [
+pub(crate) const OVERPASS_HOSTS: [&str; 3] = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",

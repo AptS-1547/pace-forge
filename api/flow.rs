@@ -663,6 +663,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 校时：之后所有时间戳都必须落在服务器时间轴上。
     // 「开始时间 + 时长 ≤ 服务器现在」是服务端硬判据，本机时钟偏十几分钟
     // 就直接驳回，而本地自检用同一个时钟，永远发现不了这个偏差。
+    // 阶段计时：每一步都报耗时，卡住时日志里能直接看出卡在哪一段。
+    let dry_t0 = std::time::Instant::now();
+    let mut stage_t = dry_t0;
+
     let (server_now, skew) = super::gmttime::server_now_ms(client);
     match skew {
         Some(off) if off.abs() >= 1000 => log(&format!(
@@ -753,6 +757,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         Err(e) => return Err(e),
     };
 
+    log(&format!("[耗时] 校时+策略 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    stage_t = std::time::Instant::now();
+
     // ② fence
     log("[fence] 拉取围栏…");
     let pick = match fence::fetch_fences(client) {
@@ -789,6 +796,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             None
         }
     };
+
+    log(&format!("[耗时] 围栏 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    stage_t = std::time::Instant::now();
 
     // ③ points
     log("[points] 拉取打卡点…");
@@ -850,6 +860,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             PointsContext::default()
         }
     };
+
+    log(&format!("[耗时] 打卡点 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    stage_t = std::time::Instant::now();
 
     // ④ 规划
     let cps: Vec<Checkpoint> = pt
@@ -1089,6 +1102,12 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             v
         };
 
+        log(&format!(
+            "[耗时] 建筑/水体 {:.1}s",
+            stage_t.elapsed().as_secs_f64()
+        ));
+        stage_t = std::time::Instant::now();
+
         // 路网来源两级：OSM 优先（有真实道路等级和拓扑），拿不到再试高德
         // 瓦片。两级都失败才退回几何规划。
         let on_roads = if p.prefer_roads {
@@ -1099,6 +1118,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         } else {
             None
         };
+        log(&format!("[耗时] 拉路网 {:.1}s", stage_t.elapsed().as_secs_f64()));
+        stage_t = std::time::Instant::now();
+
         let route = if let Some(r) = on_roads {
             r
         } else if must.len() >= 2 {
@@ -1243,6 +1265,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         p.distance_m,
         (track.actual_length_m - p.distance_m).abs() / p.distance_m * 100.0
     ));
+
+    log(&format!("[耗时] 规划 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    stage_t = std::time::Instant::now();
 
     // ⑤ 上报采样：**等时间** 5 秒（真机节奏），几何仍走密采样。
     //
@@ -1719,6 +1744,12 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             log("[point-order] 重新规划或调整手绘轨迹，让轨迹只按点位次序穿过每个点");
         }
     }
+
+    log(&format!(
+        "[耗时] 采样+自检 {:.1}s · 全程 {:.1}s",
+        stage_t.elapsed().as_secs_f64(),
+        dry_t0.elapsed().as_secs_f64()
+    ));
 
     Ok(RunOutcome {
         policy: pol,

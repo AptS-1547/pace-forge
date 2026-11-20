@@ -549,6 +549,8 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Get, "/api/egress-ip") => {
             json_ok(request, crate::api::egress::cached_json())
         }
+        // 网络自检：生成卡住时用来回答「哪条链路不通」，只探连通性。
+        (Method::Get, "/api/netcheck") => handle_netcheck(request),
         _ => {
             if let Some(rest) = path.strip_prefix("/api/accounts/") {
                 // /api/accounts/{id}/switch  |  /api/accounts/{id}  (DELETE)
@@ -2314,6 +2316,102 @@ fn lock_state(state: &Shared) -> std::sync::MutexGuard<'_, State> {
         eprintln!("! [state] 状态锁已中毒（有线程持锁时 panic 过），强制恢复继续");
         e.into_inner()
     })
+}
+
+/// `application/x-www-form-urlencoded` 的最小百分号编码（只用于自检查询串）。
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn host_short(host: &str) -> String {
+    host.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or(host)
+        .to_string()
+}
+
+/// 网络自检：分别探 Overpass 三个端点和高德瓦片，各自报耗时与错误。
+///
+/// 生成轨迹卡在「拉路网 / 建筑 / 瓦片」时，最需要回答的是「到底哪条不通」。
+/// 这里只做连通性探测（一个空 bbox 的极小查询、一张瓦片），不参与生成，
+/// 也不写缓存，失败不影响任何功能。
+fn handle_netcheck(request: tiny_http::Request) -> Result<(), String> {
+    use std::time::{Duration, Instant};
+    let mut items: Vec<Value> = Vec::new();
+
+    // Overpass：空 bbox 查询，只验证能否拿到 elements。
+    let enc = percent_encode("[out:json][timeout:5];node(0,0,0.01,0.01);out;");
+    for host in crate::track::roadnet::OVERPASS_HOSTS {
+        let t0 = Instant::now();
+        let (ok, detail) = match ureq::get(&format!("{host}?data={enc}"))
+            .set("User-Agent", "pace-forge/0.1 (netcheck)")
+            .timeout(Duration::from_secs(8))
+            .call()
+        {
+            Ok(r) => match r.into_string() {
+                Ok(t) if t.contains("\"elements\"") => (true, "连通".to_string()),
+                Ok(_) => (false, "返回内容异常".to_string()),
+                Err(e) => (false, format!("读取失败: {e}")),
+            },
+            Err(e) => (false, format!("{e}")),
+        };
+        items.push(json!({
+            "name": format!("Overpass {}", host_short(host)),
+            "ok": ok,
+            "ms": t0.elapsed().as_millis() as u64,
+            "detail": detail
+        }));
+    }
+
+    // 高德瓦片：拿一张固定瓦片（北京附近），只验证能不能下载到图。
+    let tile = "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=3360&y=1558&z=17";
+    let t0 = Instant::now();
+    let (ok, detail) = match ureq::get(tile)
+        .set("User-Agent", "Mozilla/5.0 (compatible; pace-forge/0.1)")
+        .set("Referer", "https://www.amap.com/")
+        .timeout(Duration::from_secs(6))
+        .call()
+    {
+        Ok(r) => {
+            use std::io::Read as _;
+            let mut rd = r.into_reader().take(4096);
+            let mut buf = Vec::new();
+            match rd.read_to_end(&mut buf) {
+                Ok(_) if buf.len() > 512 => (true, "连通".to_string()),
+                Ok(_) => (false, "返回内容过短（可能被拦截）".to_string()),
+                Err(e) => (false, format!("读取失败: {e}")),
+            }
+        }
+        Err(e) => (false, format!("{e}")),
+    };
+    items.push(json!({
+        "name": "高德瓦片 webrd01",
+        "ok": ok,
+        "ms": t0.elapsed().as_millis() as u64,
+        "detail": detail
+    }));
+
+    let all_ok = items.iter().all(|i| i["ok"].as_bool().unwrap_or(false));
+    let hint = if all_ok {
+        "链路都通：卡住就不是网络问题，看结果面板里的「[耗时]」行定位在哪一段"
+    } else {
+        "有一项不通：对应那一步会等满超时才放弃，生成因此变慢；日志里的 [roads]/[block]/[tiles] 就是它"
+    };
+    json_ok(
+        request,
+        json!({"allOk": all_ok, "hint": hint, "items": items, "version": crate::VERSION}),
+    )
 }
 
 fn json_ok(request: tiny_http::Request, body: Value) -> Result<(), String> {
