@@ -121,6 +121,7 @@ fn main() {
         }
         "config" => pace_forge::config::print_table(),
         "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
+        "export-records" => do_export_records(args.get(1), args.get(2)),
         "version" | "-V" | "--version" => {
             println!("pace-forge {}", pace_forge::VERSION);
         }
@@ -138,6 +139,7 @@ fn main() {
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
             println!("  pace-forge config              列出全部 PACE_* 开关与当前取值");
             println!("  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合");
+            println!("  pace-forge export-records [N] [out.json]  导出最近 N 条记录（含轨迹）给 crosscheck");
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
@@ -489,6 +491,116 @@ fn do_crosscheck(file: Option<&str>) {
         None => println!("[重合] 带轨迹的记录不足两条，算不了"),
     }
     println!("\n只给数，不给阈值：判不判异常取决于各校规则和自己的实测定论。");
+}
+
+/// 导出最近 N 条记录（带轨迹）成一份 JSON，直接喂给 `crosscheck`。
+///
+/// 列表接口不带轨迹，逐条拉详情；详情里有没有轨迹取决于服务端配置，没有就
+/// 留空——`crosscheck` 会把它排除在重合度之外，其余指标照算。
+fn do_export_records(count: Option<&String>, output: Option<&String>) {
+    use pace_forge::api::{client, crosscheck as cc, records, session};
+    let n: u32 = count.and_then(|s| s.parse().ok()).unwrap_or(20).clamp(1, 100);
+    let out_path = output.map(|s| s.as_str()).unwrap_or("records.json");
+
+    let sess = session::load_session();
+    if !sess.is_valid() {
+        eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
+        std::process::exit(1);
+    }
+    let c = client::Client::new(client::DeviceProfile::default()).with_credentials(
+        client::Credentials {
+            uid: Some(sess.uid.to_string()),
+            token: Some(sess.token.clone()),
+            unid: Some(sess.unid.clone()),
+        },
+    );
+
+    let list = match records::list_records(&c, 1, n, 1) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("拉记录列表失败: {e}");
+            std::process::exit(1);
+        }
+    };
+    let rows = list.get("records").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    if rows.is_empty() {
+        eprintln!("列表是空的：确认账号有计分跑记录，或换用网页里的记录页。");
+        std::process::exit(1);
+    }
+
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
+    let mut with_track = 0usize;
+    for (i, row) in rows.iter().enumerate() {
+        let rrid = row
+            .get("rrid")
+            .or_else(|| row.get("recordId"))
+            .or_else(|| row.get("id"))
+            .and_then(|v| v.as_i64());
+        let detail = rrid
+            .and_then(|r| match records::get_record(&c, r) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    eprintln!("! 第 {} 条（rrid={r}）详情拉取失败: {e}", i + 1);
+                    None
+                }
+            })
+            .unwrap_or_else(|| row.clone());
+        let track = cc::extract_track(&detail);
+        if track.len() >= 2 {
+            with_track += 1;
+        }
+        let start = ["startTime", "start_time", "beginTime"]
+            .iter()
+            .find_map(|k| detail.get(*k).and_then(|v| v.as_i64()))
+            .or_else(|| {
+                detail
+                    .get("startTime")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<i64>().ok())
+            })
+            .unwrap_or(0);
+        let dist = detail
+            .get("totalDistance")
+            .and_then(|v| v.as_f64())
+            .or_else(|| detail.get("totalDis").and_then(|v| v.as_f64()))
+            .unwrap_or(0.0);
+        let dur = detail.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0);
+        let pts: Vec<serde_json::Value> = track
+            .iter()
+            .map(|(la, ln)| serde_json::json!([la, ln]))
+            .collect();
+        out.push(serde_json::json!({
+            "rrid": rrid,
+            "startTime": start,
+            "totalDis": dist,
+            "totalTime": dur,
+            "points": pts,
+        }));
+        log_export(i + 1, rows.len(), rrid, track.len());
+    }
+
+    let body = serde_json::json!({ "exportedAt": now_ms(), "records": out });
+    match std::fs::write(out_path, serde_json::to_string_pretty(&body).unwrap_or_default()) {
+        Ok(()) => println!(
+            "已导出 {} 条到 {out_path}（带轨迹 {with_track} 条）。\n下一步: pace-forge crosscheck {out_path}",
+            out.len()
+        ),
+        Err(e) => {
+            eprintln!("写 {out_path} 失败: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn log_export(i: usize, total: usize, rrid: Option<i64>, pts: usize) {
+    println!("  [{i}/{total}] rrid={} 轨迹 {pts} 点", rrid.map(|r| r.to_string()).unwrap_or_else(|| "-".into()));
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn do_cheat() {

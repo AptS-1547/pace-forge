@@ -4,6 +4,18 @@
 连续多少天、起跑时刻是不是总在同一分钟、里程和配速的离散度、两次轨迹是不是
 同一条线。`pace-forge crosscheck` 把这四项算出来，只给数，不下结论。
 
+## 先导出，再自检
+
+列表接口不带轨迹，要比重合度得先把详情拉下来。两条命令一步到位：
+
+```bash
+pace-forge export-records 20 records.json   # 最近 20 条，逐条拉详情取轨迹
+pace-forge crosscheck records.json
+```
+
+`export-records` 会打印每条的 rrid 与轨迹点数；某条详情拉不到就留空轨迹，
+脚本不整体失败。导出文件里 `points` 缺省的记录仍参与连续天数、时刻、离散度。
+
 ## 用法
 
 ```bash

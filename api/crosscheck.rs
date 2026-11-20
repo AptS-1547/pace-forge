@@ -77,6 +77,15 @@ fn parse_track(v: &Value) -> Vec<(f64, f64)> {
         .collect()
 }
 
+/// 从单条记录/详情里取轨迹：`allLocJson` 字符串、`points`、`track` 都认。
+pub fn extract_track(v: &Value) -> Vec<(f64, f64)> {
+    v.get("allLocJson")
+        .or_else(|| v.get("points"))
+        .or_else(|| v.get("track"))
+        .map(parse_track)
+        .unwrap_or_default()
+}
+
 /// 从一段 JSON 里读记录。字段别名按服务端/前端两套都收。
 pub fn parse_records(v: &Value) -> Vec<RunRecord> {
     let arr = match v {
@@ -332,6 +341,19 @@ mod tests {
         // 只有一条带轨迹时算不了
         let one = vec![RunRecord { start_ms: 0, distance_m: 1.0, duration_sec: 1, track: line(0.0, 5) }];
         assert!(max_pair_overlap(&one, OVERLAP_RADIUS_M).is_none());
+    }
+
+    #[test]
+    fn extract_track_reads_detail_shapes() {
+        let v: Value = serde_json::from_str(
+            r#"{"allLocJson":"[{\"lat\":47.38,\"lon\":103.95},{\"lat\":47.381,\"lon\":103.951}]"}"#,
+        )
+        .unwrap();
+        assert_eq!(extract_track(&v).len(), 2);
+        let p: Value = serde_json::from_str(r#"{"points":[[47.38,103.95],[47.381,103.951]]}"#).unwrap();
+        assert_eq!(extract_track(&p).len(), 2);
+        let none: Value = serde_json::from_str(r#"{"summary":"no track"}"#).unwrap();
+        assert!(extract_track(&none).is_empty());
     }
 
     #[test]

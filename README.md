@@ -395,7 +395,8 @@ pace-forge run 3 18 -y     # 加 -y 跳过确认
 # 只预演
 pace-forge dry 2 12
 
-# 跨记录自检（读一份记录 JSON，离线）
+# 跨记录自检：先导出（逐条拉详情取轨迹），再离线算
+pace-forge export-records 20 records.json
 pace-forge crosscheck records.json
 
 # 操场参数
