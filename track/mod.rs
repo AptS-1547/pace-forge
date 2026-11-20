@@ -1368,6 +1368,34 @@ pub fn queue_num(pos: usize, n: usize, startup: usize) -> i32 {
     (1 + (pos - startup) / step).min(24) as i32
 }
 
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    /// 本地诊断（issue #4）：起步窗口在 555 / 1200 / 1800 秒三个时长下的
+    /// 数学结果，不用账号、不提交。调窗口口径前先看这张表，别拿真机试。
+    ///
+    /// `cargo test --release startup_window_table -- --nocapture` 可以把表打出来。
+    #[test]
+    fn startup_window_table() {
+        for total in [555i64, 1200, 1800] {
+            let w = startup_sec(total);
+            // 上报节奏 5 秒/点，窗口内的点数就是零速度点数
+            let pts = w / 5;
+            println!(
+                "总时长 {total}s → 窗口 {w}s（{}%），约 {pts} 个零速度点",
+                format!("{:.1}", w as f64 / total as f64 * 100.0)
+            );
+            assert!(w >= 5 && w <= total / 2, "窗口越界: {w}");
+        }
+        // 按 15.5% 外推的实际取值，锁住当前口径；改口径时这条会先红
+        assert_eq!(startup_sec(555), 86);
+        assert_eq!(startup_sec(1200), 186);
+        assert_eq!(startup_sec(1800), 279);
+    }
+}
+
 #[cfg(test)]
 mod nudge_tests {
     use super::*;
