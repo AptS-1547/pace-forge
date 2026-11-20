@@ -328,6 +328,8 @@ android.hardware.bluetooth             蓝牙
 | Windows x64 | `pace-forge-v{version}-windows-x86_64.zip` |
 | Linux x64 | `pace-forge-v{version}-linux-x86_64.tar.gz` |
 
+升级前先看一眼 [CHANGELOG](CHANGELOG.md)，标 **[行为变化]** 的版本会改变默认行为。
+
 归档包包含可执行文件、`LICENSE`、本 README、`build-info.json` 和启动脚本：Windows 使用 `start-web.cmd`，Linux 使用 `start-web.sh`。预编译包不需要安装 Rust/Cargo。当前发布目标为 Windows x64 MSVC（静态 CRT）和 Linux x64 musl；具体兼容性以对应版本的 CI 构建结果为准。
 
 升级前先看 [CHANGELOG.md](CHANGELOG.md)：标 `[行为变化]` 的版本会改变默认行为（例如自动规划不再被操场反推覆盖、计分跑围栏失败即停），只想要旧行为可以先不动。

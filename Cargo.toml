@@ -1,6 +1,6 @@
 [package]
 name = "pace-forge"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 # 依赖链把 icu_* 钉在 1.88（idna → url → ureq），低于这个版本直接编译不过。
 rust-version = "1.88"
