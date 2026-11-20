@@ -1384,8 +1384,8 @@ mod window_tests {
             // 上报节奏 5 秒/点，窗口内的点数就是零速度点数
             let pts = w / 5;
             println!(
-                "总时长 {total}s → 窗口 {w}s（{}%），约 {pts} 个零速度点",
-                format!("{:.1}", w as f64 / total as f64 * 100.0)
+                "总时长 {total}s → 窗口 {w}s（{:.1}%），约 {pts} 个零速度点",
+                w as f64 / total as f64 * 100.0
             );
             assert!(w >= 5 && w <= total / 2, "窗口越界: {w}");
         }
