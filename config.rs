@@ -72,6 +72,12 @@ const ENTRIES: &[Entry] = &[
         default_value: Some("2"),
     },
     Entry {
+        name: "PACE_FIXED_STRICT",
+        default: "0",
+        effect: "1 = 必到点只认 10 米内，够不着就报缺失，不自动放开半径",
+        default_value: Some("0"),
+    },
+    Entry {
         name: "PACE_STEP_M",
         default: "5.0",
         effect: "CLI 的几何采样间距（米），只管形状不管上报节奏",

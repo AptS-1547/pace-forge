@@ -152,25 +152,69 @@ pub fn checkpoint_track_indexes(track: &[TrackPoint], coords: &[(f64, f64)]) -> 
 /// `type=2` 就被抢走——实测起点正好压在第一个打卡点上时，5 个必到点只
 /// 标出 4 个 `type=2`，App 详情页于是少画一个点位。这里让打卡点绕开
 /// 那些下标，取最近一个可用的采样点。
-pub fn checkpoint_track_indexes_reserved(
+/// 单个必到点的匹配结果。
+///
+/// 早先这里返回 `Vec<usize>`，没命中的点被 `filter_map` 直接丢掉——调用方
+/// 只能拿「返回长度」猜丢了几个、丢的是哪个，配对 `fixed[i]` 时还会错位。
+/// 现在每个点都占一位，命中方式也分开写：
+/// - `Hit`：10 米内、且没被起点/终点/灰点占住（正常情形）
+/// - `Relaxed`：半径内全被占住，放开半径取了最近的非占用采样点（兜底）
+/// - `Missing`：没有可用采样点（严格模式下没放开半径，或轨迹压根没经过）
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MarkMatch {
+    Hit { index: usize, dist_m: f64 },
+    Relaxed { index: usize, dist_m: f64 },
+    Missing(MissReason),
+}
+
+impl MarkMatch {
+    /// 命中的采样点下标；没命中返回 `None`。
+    pub fn index(&self) -> Option<usize> {
+        match self {
+            MarkMatch::Hit { index, .. } | MarkMatch::Relaxed { index, .. } => Some(*index),
+            MarkMatch::Missing(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MissReason {
+    /// 轨迹点数组为空
+    EmptyTrack,
+    /// 严格模式下半径内没有可用采样点（不放开半径）
+    StrictRadius,
+    /// 非严格模式也找不到任何采样点（理论上只有空轨迹）
+    NoCandidate,
+}
+
+/// 逐个必到点匹配采样下标，返回与 `coords` 等长的结果。
+///
+/// `strict = true` 时只做第一轮（10 米内、避开保留点），够不着就报
+/// `Missing(StrictRadius)`，不自动放宽距离——给「宁可少标也不偏标」的
+/// 用法留一条明确路径。默认（`PACE_FIXED_STRICT` 未开）保持原兜底行为。
+pub fn match_checkpoints(
     track: &[TrackPoint],
     coords: &[(f64, f64)],
     reserved: &std::collections::HashSet<usize>,
-) -> Vec<usize> {
-    let n = track.len();
+    strict: bool,
+) -> Vec<MarkMatch> {
+    if track.is_empty() {
+        return coords.iter().map(|_| MarkMatch::Missing(MissReason::EmptyTrack)).collect();
+    }
     coords
         .iter()
-        .filter_map(|&pt| {
+        .map(|&pt| {
+            // 第一轮：10 米内、且不在 reserved 里。
+            //
             // 取**最近**的采样点，不是「第一个进入半径的采样点」。
             //
             // 命中半径 10m、采样间距 5~15m，所以点位前面那个点也常常落在
             // 半径内：取第一个的话，标记会整体往前挪一个采样点（实测点位在
             // 第 25 点、却被标到第 24 点）。真机是一点一个标记，标到的必须
             // 是真正经过它的那个点。
-            // 第一轮：10 米内、且不在 reserved 里。
             let mut best: Option<(f64, usize)> = None;
             for (i, t) in track.iter().enumerate() {
-                if i >= n || reserved.contains(&i) {
+                if reserved.contains(&i) {
                     continue;
                 }
                 let d = crate::track::geo::distance((t.lat, t.lon), pt);
@@ -178,16 +222,20 @@ pub fn checkpoint_track_indexes_reserved(
                     best = Some((d, i));
                 }
             }
-            if best.is_some() {
-                return best.map(|(_, i)| i);
+            if let Some((dist_m, index)) = best {
+                return MarkMatch::Hit { index, dist_m };
+            }
+            if strict {
+                return MarkMatch::Missing(MissReason::StrictRadius);
             }
             // 第二轮：10 米内全被 reserved 占了（起步窗口够长时很常见——
-            // 前十几个采样点都是 -1，而轨迹又正好从第一个打卡点起步）。
-            // 这时候得放开半径，在**所有**非 reserved 下标里取最近的：
-            // 宁可标记点偏几米，也不能整个标记消失（App 会少画一个点位）。
+            // 前十几个采样点都是 -1，而轨迹又正好从第一个打卡点起步）；
+            // 或者轨迹离这个点位本来就远（画错围栏 / 人在围栏外）。
+            // 放开半径，在**所有**非 reserved 下标里取最近的：宁可标记点
+            // 偏几米，也不能整个标记消失（App 会少画一个点位）。
             let mut near: Option<(f64, usize)> = None;
             for (i, t) in track.iter().enumerate() {
-                if i >= n || reserved.contains(&i) {
+                if reserved.contains(&i) {
                     continue;
                 }
                 let d = crate::track::geo::distance((t.lat, t.lon), pt);
@@ -195,9 +243,34 @@ pub fn checkpoint_track_indexes_reserved(
                     near = Some((d, i));
                 }
             }
-            near.map(|(_, i)| i)
+            match near {
+                Some((dist_m, index)) => MarkMatch::Relaxed { index, dist_m },
+                None => MarkMatch::Missing(MissReason::NoCandidate),
+            }
         })
         .collect()
+}
+
+/// 与 [`match_checkpoints`] 同口径，但只返回命中下标（丢掉没命中的点）。
+///
+/// 保留这个签名是为了兼容老调用方；新代码请直接用 `match_checkpoints`，
+/// 那样才能知道哪个必到点没标上。
+pub fn checkpoint_track_indexes_reserved(
+    track: &[TrackPoint],
+    coords: &[(f64, f64)],
+    reserved: &std::collections::HashSet<usize>,
+) -> Vec<usize> {
+    match_checkpoints(track, coords, reserved, false)
+        .iter()
+        .filter_map(|m| m.index())
+        .collect()
+}
+
+/// 严格半径开关：`PACE_FIXED_STRICT=1` 时只认 10 米内、不放开半径。
+fn fixed_strict() -> bool {
+    std::env::var("PACE_FIXED_STRICT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// 必到点 → `fivePointJson` 的内层点位数组（真机形状）。
@@ -1495,12 +1568,15 @@ pub fn build_points(
         .chain(std::iter::once(track.len().saturating_sub(1)))
         .chain(0..startup.min(track.len()))
         .collect();
-    // 每个必到点在采样数组里命中的那个下标（避开上面的保留下标）。
-    let cp_idxs: Vec<usize> = checkpoint_track_indexes_reserved(
+    // 每个必到点的匹配结果（避开上面的保留下标）。用带结果的结构而不是
+    // 光秃秃的下标数组：没命中的点也占一位，下面配 fixed[i] 才不会错位。
+    let cp_marks = match_checkpoints(
         track,
         &fixed.iter().map(|f| (f.lat, f.lon)).collect::<Vec<_>>(),
         &reserved,
+        fixed_strict(),
     );
+    let cp_idxs: Vec<usize> = cp_marks.iter().filter_map(|m| m.index()).collect();
     // 命中下标必须两两不同：`type=2` 只标一个采样点，两个点位落到同一个
     // 下标就会被 `contains` 合并成一次标记，App 详情页于是少画一个点。
     if scheme == PointTypeScheme::WithCheckpointMarks {
@@ -1520,16 +1596,24 @@ pub fn build_points(
     // 白跑。目前只告警不改标记：官方客户端在「10m 内全被起点/灰点占用」
     // 时怎么放标记没有样本依据，乱挪比偏着更危险。
     if scheme == PointTypeScheme::WithCheckpointMarks {
-        for (i, &idx) in cp_idxs.iter().enumerate() {
-            let d = crate::track::geo::distance(
-                (track[idx].lat, track[idx].lon),
-                (fixed[i].lat, fixed[i].lon),
-            );
-            if d > FIXED_POINT_HIT_M {
-                eprintln!(
-                    "! [points] 必到点「{}」{FIXED_POINT_HIT_M:.0}m 内没有可用采样点（被起点/灰点占住），标记落在 {d:.0}m 外的最近采样上",
-                    fixed[i].point_name
-                );
+        for (i, m) in cp_marks.iter().enumerate() {
+            match m {
+                MarkMatch::Relaxed { dist_m, .. } if dist_m > &FIXED_POINT_HIT_M => {
+                    eprintln!(
+                        "! [points] 必到点「{}」{FIXED_POINT_HIT_M:.0}m 内没有可用采样点（被起点/灰点占住），标记落在 {dist_m:.0}m 外的最近采样上",
+                        fixed[i].point_name
+                    );
+                }
+                MarkMatch::Missing(MissReason::StrictRadius) => {
+                    eprintln!(
+                        "! [points] 必到点「{}」严格半径下没命中（PACE_FIXED_STRICT=1，不放开 10m）",
+                        fixed[i].point_name
+                    );
+                }
+                MarkMatch::Missing(_) => {
+                    eprintln!("! [points] 必到点「{}」没有任何可用采样点", fixed[i].point_name);
+                }
+                _ => {}
             }
         }
     }
@@ -4144,5 +4228,88 @@ mod parity_regression_tests {
         // 圈步数和必须等于总步数
         let sum: i64 = laps.iter().map(|l| l["step"].as_i64().unwrap()).sum();
         assert_eq!(sum, p.total_steps as i64, "圈步数和 != totalSteps");
+    }
+}
+
+#[cfg(test)]
+mod mark_match_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// 沿经度方向等间距造一条直线轨迹（纬度 0，1 度经度 ≈ 111320m）。
+    fn line_track(n: usize, step_m: f64) -> Vec<TrackPoint> {
+        (0..n)
+            .map(|i| TrackPoint { lat: 0.0, lon: i as f64 * step_m / 111_320.0, time_ms: i as i64 * 5_000 })
+            .collect()
+    }
+
+    /// 线下点偏离轨迹的纬度偏移（米 → 度）。
+    fn off_line(m: f64) -> f64 { m / 111_320.0 }
+
+    #[test]
+    fn reserved_start_point_falls_to_next_sample() {
+        // 起点压在第一个打卡点上：0 号采样被起点占住，只能往后挪一个点。
+        let track = line_track(10, 5.5);
+        let reserved: HashSet<usize> = [0].into_iter().collect();
+        let m = match_checkpoints(&track, &[(0.0, 0.0)], &reserved, false);
+        assert_eq!(m.len(), 1);
+        match m[0] {
+            MarkMatch::Hit { index, dist_m } => {
+                assert_eq!(index, 1, "0 号被占，应命中 1 号");
+                assert!(dist_m < FIXED_POINT_HIT_M, "命中距离 {dist_m} 应在 10m 内");
+            }
+            other => panic!("应为 Hit，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_checkpoints_can_share_one_sample() {
+        // 间距 15m，两个点位都只够得着 3 号采样：这是「App 少画一个点」的
+        // 已知情形，匹配结果必须如实报同一下标，而不是悄悄错开。
+        let track = line_track(10, 15.0);
+        let a = (0.0, 3.0 * 15.0 / 111_320.0);
+        let b = (3.0 / 111_320.0, 3.0 * 15.0 / 111_320.0); // 偏 3m
+        let m = match_checkpoints(&track, &[a, b], &HashSet::new(), false);
+        let idx: Vec<usize> = m.iter().filter_map(|x| x.index()).collect();
+        assert_eq!(idx, vec![3, 3], "两个点位应命中同一个采样下标");
+    }
+
+    #[test]
+    fn far_point_relaxes_by_default_and_reports_missing_when_strict() {
+        // 点位离线 60m：默认放开半径兜底（Relaxed，距离如实报），
+        // 严格模式必须报缺失，绝不悄悄偏标。
+        let track = line_track(20, 5.5);
+        let pt = (off_line(60.0), 10.0 * 5.5 / 111_320.0);
+        let relaxed = match_checkpoints(&track, &[pt], &HashSet::new(), false);
+        match relaxed[0] {
+            MarkMatch::Relaxed { dist_m, .. } => {
+                assert!((dist_m - 60.0).abs() < 1.5, "偏出距离应约 60m，实际 {dist_m}");
+            }
+            other => panic!("默认应 Relaxed，实际 {other:?}"),
+        }
+        let strict = match_checkpoints(&track, &[pt], &HashSet::new(), true);
+        assert_eq!(strict[0], MarkMatch::Missing(MissReason::StrictRadius));
+    }
+
+    #[test]
+    fn partial_missing_keeps_point_alignment() {
+        // 三个点里第二个离线 80m：结果必须仍是 3 项，且 fixed[1] 对的是
+        // 那个没命中的点——旧的 Vec<usize> 在这里会整体错位。
+        let track = line_track(20, 5.5);
+        let on = |i: usize| (0.0, i as f64 * 5.5 / 111_320.0);
+        let coords = [on(2), (off_line(80.0), on(5).1), on(8)];
+        let m = match_checkpoints(&track, &coords, &HashSet::new(), true);
+        assert_eq!(m.len(), 3, "没命中的点也要占一位");
+        assert!(matches!(m[0], MarkMatch::Hit { index: 2, .. }));
+        assert_eq!(m[1], MarkMatch::Missing(MissReason::StrictRadius));
+        assert!(matches!(m[2], MarkMatch::Hit { index: 8, .. }));
+    }
+
+    #[test]
+    fn empty_inputs_are_explicit() {
+        let track = line_track(5, 5.5);
+        assert!(match_checkpoints(&track, &[], &HashSet::new(), false).is_empty());
+        let m = match_checkpoints(&[], &[(0.0, 0.0)], &HashSet::new(), false);
+        assert_eq!(m[0], MarkMatch::Missing(MissReason::EmptyTrack));
     }
 }
