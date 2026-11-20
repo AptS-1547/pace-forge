@@ -17,6 +17,63 @@ const OVERPASS_HOSTS: [&str; 3] = [
     "https://overpass.private.coffee/api/interpreter",
 ];
 
+/// 单个端点的超时。原来这里是 60~70 秒，再乘 3 个镜像、3 类查询（建筑、
+/// 水体、路网），国内网络打不开 Overpass 时一次生成能卡近十分钟——用户看到
+/// 的就是「点了生成，半天没反应」。校园 bbox 的查询正常几秒就回，10 秒足够，
+/// 超时直接换下一个端点。
+const HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 三个端点全线失败后的冷却时长：这段时间内不再打 Overpass，直接走瓦片/几何。
+///
+/// 没有它的话，同一次生成里建筑、水体、路网三查各失败一遍（30 秒），
+/// 下一次生成又从零开始——网络不通的用户每次都要等一遍。
+const DOWN_COOLDOWN_MS: u64 = 600_000;
+
+static DOWN_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms_u64() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 冷却判断抽成纯函数，方便用固定时刻测窗口边界。
+fn cooling_at(now_ms: u64, down_at_ms: u64) -> bool {
+    down_at_ms != 0 && now_ms.saturating_sub(down_at_ms) < DOWN_COOLDOWN_MS
+}
+
+/// 打 Overpass：短超时、轮询端点、全线失败后进入冷却。
+fn overpass_post(body: &str, what: &str) -> Result<String, String> {
+    if cooling_at(
+        now_ms_u64(),
+        DOWN_AT_MS.load(std::sync::atomic::Ordering::Relaxed),
+    ) {
+        return Err(format!(
+            "Overpass 刚失败过，{} 分钟内不再重试（{what}）",
+            DOWN_COOLDOWN_MS / 60_000
+        ));
+    }
+    let mut last_err = String::new();
+    for host in OVERPASS_HOSTS {
+        match ureq::post(host)
+            .set("User-Agent", "pace-forge/0.1 (route planning)")
+            .set("Content-Type", "application/x-www-form-urlencoded")
+            .timeout(HOST_TIMEOUT)
+            .send_string(body)
+        {
+            Ok(r) => match r.into_string() {
+                Ok(t) if t.contains("\"elements\"") => return Ok(t),
+                Ok(_) => last_err = format!("{host} 内容异常"),
+                Err(e) => last_err = format!("{host} 读取失败: {e}"),
+            },
+            Err(e) => last_err = format!("{host} 请求失败: {e}"),
+        }
+    }
+    DOWN_AT_MS.store(now_ms_u64(), std::sync::atomic::Ordering::Relaxed);
+    Err(format!("所有 Overpass 端点都失败（{what}，最后一次: {last_err}）"))
+}
+
 /// 打算走的路类型。excluding motorway/trunk：校园里没有，且人不能跑。
 /// 包括 footway/path/pedestrian/steps/track/service/residential/unclassified/living_street/cycleway。
 const WALKABLE: &str = "footway|path|pedestrian|steps|track|service|residential|unclassified|living_street|cycleway|tertiary|secondary";
@@ -107,29 +164,7 @@ pub fn fetch(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
     );
 
     let body = format!("data={}", urlencode(&query));
-    let mut text = String::new();
-    let mut last_err = String::new();
-    for host in OVERPASS_HOSTS {
-        let resp = ureq::post(host)
-            .set("User-Agent", "pace-forge/0.1 (route planning)")
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .timeout(std::time::Duration::from_secs(70))
-            .send_string(&body);
-        match resp {
-            Ok(r) => match r.into_string() {
-                Ok(t) if t.contains("\"elements\"") => {
-                    text = t;
-                    break;
-                }
-                Ok(_) => last_err = format!("{host} 返回内容异常"),
-                Err(e) => last_err = format!("{host} 读取失败: {e}"),
-            },
-            Err(e) => last_err = format!("{host} 请求失败: {e}"),
-        }
-    }
-    if text.is_empty() {
-        return Err(format!("所有 Overpass 端点都失败（最后一次: {last_err}）"));
-    }
+    let text = overpass_post(&body, "路网")?;
 
     let v: Value = serde_json::from_str(&text).map_err(|e| format!("路网 JSON 解析失败: {e}"))?;
     let elements = v
@@ -271,29 +306,7 @@ pub fn fetch_water(bbox: (f64, f64, f64, f64)) -> Result<Vec<Vec<(f64, f64)>>, S
         "[out:json][timeout:30];         (way[\"natural\"=\"water\"]({min_lat},{min_lon},{max_lat},{max_lon});          way[\"waterway\"~\"river|stream|canal\"]({min_lat},{min_lon},{max_lat},{max_lon}););         out geom;"
     );
     let body = format!("data={}", urlencode(&query));
-    let mut text = String::new();
-    let mut last_err = String::new();
-    for host in OVERPASS_HOSTS {
-        match ureq::post(host)
-            .set("User-Agent", "pace-forge/0.1 (route planning)")
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .timeout(std::time::Duration::from_secs(60))
-            .send_string(&body)
-        {
-            Ok(r) => match r.into_string() {
-                Ok(t) if t.contains("\"elements\"") => {
-                    text = t;
-                    break;
-                }
-                Ok(_) => last_err = format!("{host} 内容异常"),
-                Err(e) => last_err = format!("{host} 读取失败: {e}"),
-            },
-            Err(e) => last_err = format!("{host} 请求失败: {e}"),
-        }
-    }
-    if text.is_empty() {
-        return Err(format!("拉水域失败: {last_err}"));
-    }
+    let text = overpass_post(&body, "水域")?;
     let v: Value = serde_json::from_str(&text).map_err(|e| format!("水域 JSON 解析失败: {e}"))?;
     let mut polys = Vec::new();
     if let Some(els) = v.get("elements").and_then(|e| e.as_array()) {
@@ -399,29 +412,7 @@ pub fn fetch_buildings(bbox: (f64, f64, f64, f64)) -> Result<Vec<Vec<(f64, f64)>
 /// Overpass 拉 polygon 的公共部分（水体、建筑共用）。
 fn fetch_polys(query: &str, what: &str) -> Result<Vec<Vec<(f64, f64)>>, String> {
     let body = format!("data={}", urlencode(query));
-    let mut text = String::new();
-    let mut last_err = String::new();
-    for host in OVERPASS_HOSTS {
-        match ureq::post(host)
-            .set("User-Agent", "pace-forge/0.1 (route planning)")
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .timeout(std::time::Duration::from_secs(60))
-            .send_string(&body)
-        {
-            Ok(r) => match r.into_string() {
-                Ok(t) if t.contains("\"elements\"") => {
-                    text = t;
-                    break;
-                }
-                Ok(_) => last_err = format!("{host} 内容异常"),
-                Err(e) => last_err = format!("{host} 读取失败: {e}"),
-            },
-            Err(e) => last_err = format!("{host} 请求失败: {e}"),
-        }
-    }
-    if text.is_empty() {
-        return Err(format!("拉{what}失败: {last_err}"));
-    }
+    let text = overpass_post(&body, what)?;
     let v: Value = serde_json::from_str(&text).map_err(|e| format!("{what} JSON 解析失败: {e}"))?;
     let mut polys = Vec::new();
     if let Some(els) = v.get("elements").and_then(|e| e.as_array()) {
@@ -807,6 +798,22 @@ pub fn bbox_of(points: &[(f64, f64)], pad_m: f64) -> (f64, f64, f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 冷却窗口：失败后 10 分钟内不再打 Overpass，过了窗口重新允许。
+    #[test]
+    fn overpass_cooldown_window() {
+        let t = 1_790_000_000_000u64;
+        assert!(!cooling_at(t, 0), "没失败过，正常请求");
+        assert!(cooling_at(t, t - 1_000), "刚失败，冷却中");
+        assert!(
+            cooling_at(t, t - (DOWN_COOLDOWN_MS - 1)),
+            "差 1ms 到窗口，仍冷却"
+        );
+        assert!(
+            !cooling_at(t, t - DOWN_COOLDOWN_MS),
+            "到点解冻，重新给 Overpass 机会"
+        );
+    }
 
     fn l_shape_net() -> RoadNet {
         // 一个直角路口：东西向 + 南北向各一段

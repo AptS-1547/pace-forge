@@ -41,6 +41,26 @@ const TILE_HOSTS: [&str; 4] = [
 /// 再高一档瓦片数量翻四倍，覆盖一个校区要上百张，拉取时间不可接受。
 const ZOOM: u8 = 17;
 
+/// 单张瓦片的端点超时。原来 15 秒 × 4 个域名，一个校区十几张瓦片，
+/// 网络不顺时能卡十几分钟。高德瓦片正常几十毫秒就回，6 秒足够。
+const TILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// 四个域名全失败后的冷却：这段时间内不再拉瓦片，直接走几何规划。
+const TILE_DOWN_COOLDOWN_MS: u64 = 600_000;
+
+static TILE_DOWN_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn tile_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn tile_cooling_at(now_ms: u64, down_at_ms: u64) -> bool {
+    down_at_ms != 0 && now_ms.saturating_sub(down_at_ms) < TILE_DOWN_COOLDOWN_MS
+}
+
 /// 单次最多拉多少张瓦片。12×12 = 144 张约覆盖 3.6 km 见方，
 /// 超过这个范围说明 bbox 不合理（或者调用方传错了坐标系）。
 const MAX_TILES: usize = 200;
@@ -177,6 +197,12 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
     };
 
     let bytes = if bytes.is_empty() {
+        if tile_cooling_at(
+            tile_now_ms(),
+            TILE_DOWN_AT_MS.load(std::sync::atomic::Ordering::Relaxed),
+        ) {
+            return Err("高德瓦片刚全失败过，冷却中".into());
+        }
         let mut last = String::new();
         let mut got: Option<Vec<u8>> = None;
         for host in TILE_HOSTS {
@@ -184,7 +210,7 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
             let resp = ureq::get(&url)
                 .set("User-Agent", "Mozilla/5.0 (compatible; pace-forge/0.1)")
                 .set("Referer", "https://www.amap.com/")
-                .timeout(std::time::Duration::from_secs(15))
+                .timeout(TILE_TIMEOUT)
                 .call();
             match resp {
                 Ok(r) => match read_all(r.into_reader()) {
@@ -198,7 +224,14 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
                 Err(e) => last = format!("{url} 请求失败: {e}"),
             }
         }
-        let b = got.ok_or_else(|| format!("瓦片 {x}/{y} 拉取失败（{last}）"))?;
+        let b = match got {
+            Some(b) => b,
+            None => {
+                // 四个域名全挂：记冷却，后面的瓦片直接快速失败，不再逐张等。
+                TILE_DOWN_AT_MS.store(tile_now_ms(), std::sync::atomic::Ordering::Relaxed);
+                return Err(format!("瓦片 {x}/{y} 拉取失败（{last}）"));
+            }
+        };
         // 目录不存在时由 write_file_private 建出来（首次运行）
         let _ = crate::api::session::write_file_private(&path, &b);
         b
@@ -1363,6 +1396,16 @@ pub fn walk_graph(
 mod tests {
     use super::*;
     use crate::test_support::{assert_isolated, TestDir};
+
+    /// 瓦片冷却窗口：四个域名全挂后 10 分钟内直接快速失败。
+    #[test]
+    fn tile_cooldown_window() {
+        let t = 1_790_000_000_000u64;
+        assert!(!tile_cooling_at(t, 0));
+        assert!(tile_cooling_at(t, t - 1_000));
+        assert!(tile_cooling_at(t, t - (TILE_DOWN_COOLDOWN_MS - 1)));
+        assert!(!tile_cooling_at(t, t - TILE_DOWN_COOLDOWN_MS));
+    }
 
     /// 护栏：瓦片缓存目录的注入版**绝不能**落到真实 `$HOME/.pace-forge/tiles`。
     ///

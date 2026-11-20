@@ -334,6 +334,8 @@ fn try_route_on_roads(
 ) -> Option<crate::track::fence_route::FenceRoute> {
     use crate::track::roadnet;
     let bbox = roadnet::bbox_of(fence, 80.0);
+    log("[roads] 拉 OSM 路网…（单端点 10 秒超时）");
+    let t0 = std::time::Instant::now();
     let net = match roadnet::fetch(bbox) {
         Ok(n) => n,
         Err(e) => {
@@ -349,7 +351,10 @@ fn try_route_on_roads(
         ));
         return None;
     }
-    log(&format!("[roads] 路网 {total:.0}m，按真实道路规划"));
+    log(&format!(
+        "[roads] 路网 {total:.0}m（用时 {:.1}s），按真实道路规划",
+        t0.elapsed().as_secs_f64()
+    ));
     let start = must.first().copied().unwrap_or(fence[0]);
     match roadnet::route_on_roads(&clipped, start, must, want_m, seed) {
         Ok(r) => {
@@ -398,6 +403,7 @@ fn try_route_on_tiles(
 ) -> Option<crate::track::fence_route::FenceRoute> {
     use crate::track::{roadnet, tileroad};
     let bbox = roadnet::bbox_of(fence, 60.0);
+    log("[tiles] 拉高德瓦片路网…");
     let net = match tileroad::fetch_roadnet(bbox) {
         Ok(n) => n,
         Err(e) => {
@@ -1044,6 +1050,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         // 数据源是 Overpass（30 天缓存），拉不到就跳过，不阻断跑单。
         let blockers: Vec<Vec<(f64, f64)>> = {
             let bbox = crate::track::roadnet::bbox_of(&fence_ring, 60.0);
+            log("[block] 查 OSM 建筑/水体轮廓…");
             let mut v: Vec<Vec<(f64, f64)>> = Vec::new();
             // **三套坐标系必须归一到 BD-09 才能放进同一个几何判断。**
             // 这里原来是直接 `v.extend(...)`，把三种坐标混在一个平面上：
