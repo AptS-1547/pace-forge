@@ -818,7 +818,7 @@ mod tests {
     fn l_shape_net() -> RoadNet {
         // 一个直角路口：东西向 + 南北向各一段
         let lat0 = 31.2304;
-        let lon0 = 121.4737;
+        let lon0 = 101.4737;
         let mut segs = vec![RoadSegment {
             points: (0..=20)
                 .map(|i| (lat0, lon0 + i as f64 * 10.0 / m_per_deg_lng(lat0)))
@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn must_point_unreachable_returns_err() {
         let lat0 = 31.2304;
-        let lon0 = 121.4737;
+        let lon0 = 101.4737;
         let mlng = m_per_deg_lng(lat0);
         let mlat = m_per_deg_lat(lat0);
         // 第一段：东西向 100m，起点区域
@@ -880,7 +880,7 @@ mod tests {
     #[test]
     fn route_stays_on_segments() {
         let net = l_shape_net();
-        let r = route_on_roads(&net, (31.2304, 121.4737), &[], 300.0, 7).unwrap();
+        let r = route_on_roads(&net, (31.2304, 101.4737), &[], 300.0, 7).unwrap();
         assert!(r.points.len() > 5);
         // 每个点都必须落在某一段路上（端点之间线性插值也在路上）
         for p in &r.points {
@@ -895,7 +895,7 @@ mod tests {
     fn route_length_is_bounded() {
         let net = l_shape_net();
         for want in [100.0, 200.0, 400.0] {
-            let r = route_on_roads(&net, (31.2304, 121.4737), &[], want, 3).unwrap();
+            let r = route_on_roads(&net, (31.2304, 101.4737), &[], want, 3).unwrap();
             assert!(
                 r.length_m <= want * 1.1,
                 "走了 {:.0}m 超过目标 {want}m",
@@ -932,7 +932,7 @@ mod tests {
 
     use crate::test_support::{assert_isolated, TestDir};
 
-    const BBOX: (f64, f64, f64, f64) = (31.230, 121.473, 31.240, 121.484);
+    const BBOX: (f64, f64, f64, f64) = (31.230, 101.473, 31.240, 101.484);
 
     /// 路网缓存的读写必须全部落在**注入目录**里，并在首次写时自动建目录。
     #[test]

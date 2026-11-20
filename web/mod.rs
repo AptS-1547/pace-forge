@@ -685,7 +685,7 @@ fn handle_plan(
 
     // 中心点：请求里给的坐标 → 围栏环心 → 明确报错。
     //
-    // 这里原来兜底 `(30.5, 104.0)`（成都）。校区在齐齐哈尔，围栏一旦拉不到
+    // 这里原来兜底 `(30.5, 104.0)`（成都）。校区在东北某平原校区，围栏一旦拉不到
     // 就规划出一条跨省轨迹，用户看到的是「能生成、但点全错」。兜底坐标不该
     // 出现在业务路径上——报错比假轨迹有用。
     //
@@ -1927,7 +1927,7 @@ fn handle_run(
 
     // 中心点：请求里没给就用围栏反推。
     //
-    // 这里原来兜底成 `(30.5, 104.0)`（成都），而校区在齐齐哈尔。围栏拉取
+    // 这里原来兜底成 `(30.5, 104.0)`（成都），而校区在东北某平原校区。围栏拉取
     // 一旦失败，闭环就变成「成都 → 各打卡点 → 成都」，规划器报
     // 「最短闭环 1777736m」，用户看到一条跨越半个中国的轨迹。
     //
@@ -2612,8 +2612,8 @@ mod fence_coord_tests {
     ///    这条立刻红。
     #[test]
     fn fence_ring_must_be_converted_to_gcj() {
-        // 齐齐哈尔一带（issue 里那位用户的学校）
-        let ring_bd = [(47.3794, 123.9502), (47.3800, 123.9510), (47.3790, 123.9520)];
+        // 东北某平原校区一带（issue 里那位用户的学校）
+        let ring_bd = [(47.3794, 103.9502), (47.3800, 103.9510), (47.3790, 103.9520)];
         let ring_gcj: Vec<(f64, f64)> = ring_bd.iter().map(|&(a, b)| bd09_to_gcj02(a, b)).collect();
 
         assert_eq!(ring_gcj.len(), ring_bd.len(), "点数不能变");
@@ -2637,7 +2637,7 @@ mod fence_coord_tests {
     /// 精确可逆，那做不到，也不该由这条测试来保证。
     #[test]
     fn fence_ring_roundtrip_rounds_back() {
-        let p = (47.3794, 123.9502);
+        let p = (47.3794, 103.9502);
         let (ga, go) = bd09_to_gcj02(p.0, p.1);
         let (ba, bo) = gcj02_to_bd09(ga, go);
         assert!(
@@ -2691,7 +2691,7 @@ mod center_input_tests {
     /// 不转换的代价。若哪天有人把转换删了，这条会立刻炸。
     #[test]
     fn each_coord_system_lands_somewhere_different() {
-        let (lat, lng) = (47.3864, 123.9586);
+        let (lat, lng) = (47.3864, 103.9586);
         let gcj = input_to_bd09(lat, lng, "gcj02").unwrap();
         let wgs = input_to_bd09(lat, lng, "wgs84").unwrap();
         let bd = input_to_bd09(lat, lng, "bd09").unwrap();
@@ -2726,8 +2726,8 @@ mod center_input_tests {
     #[test]
     fn unknown_system_falls_back_to_gcj02() {
         // 前端下拉以外的值不该让整个请求炸掉，按最常见的 GCJ-02 处理
-        let a = input_to_bd09(47.3864, 123.9586, "whatever").unwrap();
-        let b = input_to_bd09(47.3864, 123.9586, "gcj02").unwrap();
+        let a = input_to_bd09(47.3864, 103.9586, "whatever").unwrap();
+        let b = input_to_bd09(47.3864, 103.9586, "gcj02").unwrap();
         assert_eq!(a, b);
     }
 }

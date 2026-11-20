@@ -1525,7 +1525,6 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         &track_points.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>(),
     )
     .round() as i64;
-
     let timed: Vec<(f64, f64, i64)> = track_points
         .iter()
         .map(|q| (q.lat, q.lon, q.time_ms))
@@ -2531,7 +2530,7 @@ mod tests {
     #[test]
     fn stadium_radius_keeps_standard_400m_track() {
         let lat0 = 47.386;
-        let lng0 = 123.956;
+        let lng0 = 103.956;
         let klat = crate::track::geo::m_per_deg_lat(lat0);
         let klng = crate::track::geo::m_per_deg_lng(lat0);
         let mk = |dy: f64, dx: f64| Checkpoint {
@@ -2582,7 +2581,7 @@ mod tests {
     #[test]
     fn stadium_detects_oval_from_four_corners() {
         let lat0 = 47.386;
-        let lng0 = 123.956;
+        let lng0 = 103.956;
         let klat = crate::track::geo::m_per_deg_lat(lat0);
         let klng = crate::track::geo::m_per_deg_lng(lat0);
         let mk = |dy: f64, dx: f64| Checkpoint {
@@ -2623,7 +2622,7 @@ mod tests {
     #[test]
     fn stadium_rejects_scattered_checkpoints() {
         let lat0 = 47.386;
-        let lng0 = 123.956;
+        let lng0 = 103.956;
         let klat = crate::track::geo::m_per_deg_lat(lat0);
         let klng = crate::track::geo::m_per_deg_lng(lat0);
         let mk = |dy: f64, dx: f64| Checkpoint {
@@ -2659,7 +2658,7 @@ mod tests {
     #[test]
     fn stadium_snaps_infield_checkpoint_and_logs() {
         let lat0 = 47.386;
-        let lng0 = 123.956;
+        let lng0 = 103.956;
         let klat = crate::track::geo::m_per_deg_lat(lat0);
         let klng = crate::track::geo::m_per_deg_lng(lat0);
         let mk = |dy: f64, dx: f64| Checkpoint {
@@ -2705,12 +2704,12 @@ mod tests {
     /// 分支，这条主要是防将来放宽阈值后悄悄漏打卡。
     #[test]
     fn stadium_cp_fits_rejects_far_checkpoint() {
-        let pts = vec![(47.386, 123.956), (47.387, 123.956)];
+        let pts = vec![(47.386, 103.956), (47.387, 103.956)];
         let cps = vec![Checkpoint {
             lat: 47.396,
-            lng: 123.956,
+            lng: 103.956,
             glat: 47.396,
-            glon: 123.956,
+            glon: 103.956,
             name: "远处".into(),
         }];
         let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
@@ -2740,7 +2739,7 @@ mod tests {
         let clean_total = clean * spec.laps;
         for spacing in [5.2f64, 10.0, 14.9] {
             for seed in [42u64, 20261119, 7] {
-                let pts = crate::track::campus_oval_track((47.386, 123.956), &spec, spacing, seed);
+                let pts = crate::track::campus_oval_track((47.386, 103.956), &spec, spacing, seed);
                 let len = crate::track::geo::path_length(&pts);
                 assert!(
                     len < clean_total * 1.03 + 40.0,
@@ -3030,7 +3029,7 @@ mod single_point_source_tests {
             laps: 4.723,
         };
         // 几何仍用 5m 密采样（拐角/形状靠它），上报点按 5 秒取。
-        let xy = crate::track::campus_oval_track((47.3794, 123.9502), &spec, 5.0, 2026);
+        let xy = crate::track::campus_oval_track((47.3794, 103.9502), &spec, 5.0, 2026);
         let times =
             crate::track::sample_times(DURATION_SEC, START_MS, crate::track::SAMPLE_INTERVAL_SEC);
         let mut track: Vec<TrackPoint> = crate::track::sample_by_time(

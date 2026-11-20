@@ -2291,7 +2291,7 @@ async function selectRec(r, el) {
       $('detail').innerHTML = detailHtml(d, pts.length);
     } else {
       // 画不出线时**不要移动地图**。这里原来 setView 到成都 (30.5,104.0)，
-      // 一个齐齐哈尔的记录点进去，地图直接跳到四川，比不画线更迷惑。
+      // 一个东北某平原校区的记录点进去，地图直接跳到四川，比不画线更迷惑。
       // 保持当前视图即可，用户自己知道这条记录在哪跑的。
       $('detail').innerHTML = detailHtml(d, pts.length) +
         (pts.length === 1
@@ -2379,7 +2379,7 @@ function findTrack(obj) {
 ///
 /// 真机的点位对象长这样（OBS 里 25 个字段那份，见
 /// re/zjwh740/evidence/obs_real_20261002.json）：
-///   { lat: -1.0, lng: -1.0, gLat: "48.123456", gLng: "124.123456", ... }
+///   { lat: -1.0, lng: -1.0, gLat: "48.123456", gLng: "104.123456", ... }
 /// `lat`/`lng` 固定填 -1，是 App 的「未定位」哨兵；真实坐标在 gLat/gLng。
 /// 服务端另有一批响应把 lat/lon 填 0（api/coord.rs 顶部注释写了）。
 /// 这两个值都不是坐标，不能拿来画图、也不能算「有点位」。

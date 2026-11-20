@@ -1405,7 +1405,7 @@ mod nudge_tests {
     /// 就是这种量级——不是几十米的大直角。
     fn bent_shape() -> Vec<(f64, f64)> {
         let lat0: f64 = 38.9000;
-        let lon0 = 121.5000;
+        let lon0 = 101.5000;
         let mlat = 1.0 / 110_540.0; // 1m 的纬度
         let mlon = 1.0 / (111_320.0 * lat0.to_radians().cos());
         let mut dense = Vec::new();
@@ -1661,11 +1661,11 @@ mod checkpoint_hit_tests {
 
     fn official_cps() -> Vec<(f64, f64)> {
         vec![
-            (47.385718, 123.956956),
-            (47.386792, 123.959479),
-            (47.384723, 123.956519),
-            (47.386375, 123.958661),
-            (47.385626, 123.955836),
+            (47.385718, 103.956956),
+            (47.386792, 103.959479),
+            (47.384723, 103.956519),
+            (47.386375, 103.958661),
+            (47.385626, 103.955836),
         ]
     }
 
@@ -1694,7 +1694,7 @@ mod checkpoint_hit_tests {
     ) -> Result<(Vec<TrackPoint>, i64, SnapReport), String> {
         let req = PlanRequest {
             center_lat: 47.3801,
-            center_lng: 123.9521,
+            center_lng: 103.9521,
             checkpoints: as_checkpoints(cps),
             total_distance_m: dist,
             total_sec: dur,
@@ -2344,7 +2344,7 @@ mod sample_rate_tests {
             heading: 0.3,
             laps: 4.723,
         };
-        stadium::campus_oval_track((47.3794, 123.9502), &spec, 5.0, 2026)
+        stadium::campus_oval_track((47.3794, 103.9502), &spec, 5.0, 2026)
     }
 
     /// 走一遍生产链路的那一段：等时间采样 → 起步压平。
