@@ -1525,6 +1525,17 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         &track_points.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>(),
     )
     .round() as i64;
+
+    // 长度漂移诊断：目标里程 vs 几何压缩/吸附后的实测里程。两者差得远
+    // （粗采样、急剧转弯、被禁区推挤）时，报文里的 totalDis 就会和表单
+    // 上填的公里数对不上，先在这一行里看见，不用等提交后回看。
+    {
+        let drift = (real_len as f64 - p.distance_m) / p.distance_m.max(1.0) * 100.0;
+        log(&format!(
+            "[length] 目标 {:.0}m → 实测 {real_len}m（{:+.1}%）",
+            p.distance_m, drift
+        ));
+    }
     let timed: Vec<(f64, f64, i64)> = track_points
         .iter()
         .map(|q| (q.lat, q.lon, q.time_ms))
