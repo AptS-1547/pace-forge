@@ -1061,7 +1061,25 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         // 几何规划——不能因为查不到路网就不跑了。
         // 障碍轮廓：建筑 + 水体。路线生成完后再避让，不能让轨迹从楼里穿过。
         // 数据源是 Overpass（30 天缓存），拉不到就跳过，不阻断跑单。
-        let blockers: Vec<Vec<(f64, f64)>> = {
+        // 纯几何模式（`prefer_roads=false`）：网络连不上 OSM / 瓦片时，
+        // 这一步要白等三次超时才拿不到任何东西。用户明确不要路网，就只读
+        // 本地标注禁区，形状与「Overpass 失败后」完全一致。
+        let blockers: Vec<Vec<(f64, f64)>> = if !p.prefer_roads {
+            log("[block] 纯几何模式：跳过 OSM 建筑/水体查询");
+            let local = crate::track::roadnet::load_local_blockers();
+            let v: Vec<Vec<(f64, f64)>> = local
+                .iter()
+                .map(|poly| {
+                    poly.iter()
+                        .map(|&(la, ln)| crate::api::coord::gcj02_to_bd09(la, ln))
+                        .collect()
+                })
+                .collect();
+            if !v.is_empty() {
+                log(&format!("[block] 本地标注禁区 {} 块", v.len()));
+            }
+            v
+        } else {
             let bbox = crate::track::roadnet::bbox_of(&fence_ring, 60.0);
             log("[block] 查 OSM 建筑/水体轮廓…");
             let mut v: Vec<Vec<(f64, f64)>> = Vec::new();

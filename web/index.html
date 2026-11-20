@@ -499,6 +499,9 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
         <input id="rAutoDur" type="checkbox" checked> 时长自动
         <span id="durHint" class="hint"></span>
       </label>
+
+      <label class="chkline" title="不拉 OSM 路网、不拉高德瓦片，直接按几何连打卡点。网络连不上这两个源时最快，代价是轨迹不沿真实道路">
+        <input id="rNoRoads" type="checkbox"> 纯几何（跳过路网）</label>
       <label>时长 分<input id="rDur" type="number" value="12" step="0.1" min="3" max="180" readonly></label>
       <label>步数<input id="rSteps" type="number" step="10" min="100" placeholder="自动"
         title="留空则按配速区间推算步数，一般不用填"></label>
@@ -847,6 +850,7 @@ $('planBtn').onclick = async () => {
         distance: dist, duration: dur,
         steps: (Number.isFinite(steps) && steps > 0) ? steps : 0,
         mode: $('rMode').value, lane: parseInt($('rLane').value, 10) || 1,
+        preferRoads: !$('rNoRoads').checked,
         runMode: parseInt($('rRunMode').value, 10) || 1,
         startAtMs: (st ? st.startMs : undefined),
         ...locBody(),
@@ -971,6 +975,7 @@ $('runBtn').onclick = async () => {
         sportType: 1,
         mode: $('rMode').value,
         lane: parseInt($('rLane').value, 10) || 1,
+        preferRoads: !$('rNoRoads').checked,
         ...altBody(),
         startAtMs: (st ? st.startMs : undefined),
         ...locBody(),

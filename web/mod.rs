@@ -749,6 +749,7 @@ fn handle_plan(
                 custom_path: parse_custom_path(body),
                 alt_range: parse_alt_range(body),
                 prefer_stadium: body["mode"].as_str() == Some("stadium"),
+                prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
                 ..Default::default()
             };
             let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
@@ -1456,6 +1457,7 @@ fn handle_batch(
             start_at_ms,
             alt_range: parse_alt_range(body),
             prefer_stadium: body["mode"].as_str() == Some("stadium"),
+                prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
             ..Default::default()
         };
 
@@ -1970,6 +1972,7 @@ fn handle_run(
         custom_path,
         alt_range: parse_alt_range(body),
         prefer_stadium: body["mode"].as_str() == Some("stadium"),
+                prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
         ..Default::default()
     };
 
