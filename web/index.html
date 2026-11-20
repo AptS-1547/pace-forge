@@ -723,11 +723,17 @@ $('logout').onclick = async () => {
     // 必须走 api() 那条链路：口令部署下裸 fetch 不带 X-Pace-Token，
     // 请求在 check_auth 就被拒，服务端 token / 上游会话 / 当前账号一律
     // 没清，页面却以为自己退出成功了。
-    await fetch('/api/logout', {
+    const res = await fetch('/api/logout', {
       method: 'POST',
       cache: 'no-store',
       headers: authHeaders()
     });
+    // 服务端可能没确认（网络/接口失败）。本地照清，但得让用户知道会话
+    // 还活着——不说一声，半小时内重登就会撞 10121 锁一小时。
+    const r = await res.json().catch(() => ({ remoteLogout: false }));
+    if (!r.remoteLogout) {
+      alert('本地已退出，但服务端没有确认（网络或接口失败）。\n半小时内别重登，否则可能被锁一小时。');
+    }
   } catch (_) {}
   // 清掉本地残留，避免任何 form/地图状态带回来
   try { localStorage.clear(); sessionStorage.clear(); } catch (_) {}
@@ -1199,8 +1205,10 @@ async function accountAction(act, id) {
       // 退出登录：通知服务端让 token 失效，本地只清登录态，密码留着。
       // 不走这一步直接删账号的话，服务端会话还活着，账号仍被标记「已登录」，
       // 下次登录触发 10121 并锁一小时。
-      await api('/api/accounts/' + encodeURIComponent(id) + '/logout', { method: 'POST' });
-      m.textContent = '已退出登录，密码已保留，随时可以重登';
+      const r = await api('/api/accounts/' + encodeURIComponent(id) + '/logout', { method: 'POST' });
+      m.textContent = r.remoteLogout
+        ? '已退出登录，密码已保留，随时可以重登'
+        : '本地已退出，服务端未确认（半小时内别重登）';
     } else if (act === 'toggle') {
       await api('/api/accounts/' + encodeURIComponent(id) + '/toggle', { method: 'POST' });
       m.textContent = '';
