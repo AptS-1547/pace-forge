@@ -38,6 +38,7 @@ tag 复核都得能直接打开。
 | [OBS-FORMAT.md](notes/OBS-FORMAT.md) | OBS 明细对象的 10 个键、gzip→base64 层级、未覆盖项（issue #13） |
 | [TEST-ISOLATION.md](notes/TEST-ISOLATION.md) | 测试隔离的做法 |
 | [TRAJECTORY-DISPLAY.md](notes/TRAJECTORY-DISPLAY.md) | App 里轨迹显示的取数路径 |
+| [CROSSCHECK.md](notes/CROSSCHECK.md) | 跨记录自检：连续天数、起跑时刻集中度、里程离散度、轨迹重合 |
 | [trajectory-status.html](trajectory-status.html) | 轨迹显示状态的一张自测页 |
 
 ## 为什么这些不放进 Releases

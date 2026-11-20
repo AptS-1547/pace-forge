@@ -120,6 +120,7 @@ fn main() {
             stadium_probe(laps, lane);
         }
         "config" => pace_forge::config::print_table(),
+        "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
         "version" | "-V" | "--version" => {
             println!("pace-forge {}", pace_forge::VERSION);
         }
@@ -136,6 +137,7 @@ fn main() {
             println!("  pace-forge rand [km] [min] [--days N]       补跑：当天 7-20 点随机时刻");
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
             println!("  pace-forge config              列出全部 PACE_* 开关与当前取值");
+            println!("  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合");
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
@@ -419,6 +421,76 @@ fn do_logout() {
 }
 
 /// 违规名单自查。提交成功不代表没被标记——跑批判定是事后做的。
+/// 跨记录自检：读一份记录 JSON，打印横向指标。纯离线，不登录。
+fn do_crosscheck(file: Option<&str>) {
+    use pace_forge::api::crosscheck as cc;
+    let Some(path) = file else {
+        eprintln!("用法: pace-forge crosscheck <records.json>\n文件可以是 JSON 数组，也可以是 {{\"records\":[...]}}。");
+        std::process::exit(2);
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("读不到 {path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{path} 不是合法 JSON: {e}");
+            std::process::exit(1);
+        }
+    };
+    let records = cc::parse_records(&v);
+    if records.is_empty() {
+        eprintln!("没读到记录：需要至少有 startTime（或 beginTime）和 totalDis（或 distance）。");
+        std::process::exit(1);
+    }
+    let tz = cc::tz_offset_sec();
+    let first = records.iter().map(|r| r.start_ms).min().unwrap_or(0);
+    let last = records.iter().map(|r| r.start_ms).max().unwrap_or(0);
+    let (y1, m1, d1) = cc::local_date(first, tz);
+    let (y2, m2, d2) = cc::local_date(last, tz);
+    let span = (last - first) / 86_400_000 + 1;
+    println!("[记录] {} 条，{y1}-{m1:02}-{d1:02} ~ {y2}-{m2:02}-{d2:02}（跨 {span} 天）", records.len());
+
+    let (best, cur) = cc::streak_days(&records, tz);
+    println!("[连续] 最长 {best} 天，当前一段 {cur} 天");
+
+    let (hour, share) = cc::start_hour_concentration(&records, tz);
+    println!("[起跑时刻] 最集中 {hour:02}:00，占 {:.0}%", share * 100.0);
+
+    let dists: Vec<f64> = records.iter().map(|r| r.distance_m).collect();
+    let (dm, dcv) = cc::dispersion(&dists);
+    println!("[里程] 均值 {:.0}m，离散 {:.1}%", dm, dcv * 100.0);
+
+    let paces: Vec<f64> = records
+        .iter()
+        .filter(|r| r.distance_m > 0.0 && r.duration_sec > 0)
+        .map(|r| r.duration_sec as f64 / (r.distance_m / 1000.0))
+        .collect();
+    let (pm, pcv) = cc::dispersion(&paces);
+    println!(
+        "[配速] 均值 {}'{:02}\"/km，离散 {:.1}%",
+        (pm / 60.0) as i64,
+        (pm % 60.0).round() as i64,
+        pcv * 100.0
+    );
+
+    match cc::max_pair_overlap(&records, cc::OVERLAP_RADIUS_M) {
+        Some((a, b, ov, pairs)) => println!(
+            "[重合] 第 {} 条 vs 第 {} 条 最高 {:.0}%（{pairs} 对，{:.0}m 缓冲）",
+            a + 1,
+            b + 1,
+            ov * 100.0,
+            cc::OVERLAP_RADIUS_M
+        ),
+        None => println!("[重合] 带轨迹的记录不足两条，算不了"),
+    }
+    println!("\n只给数，不给阈值：判不判异常取决于各校规则和自己的实测定论。");
+}
+
 fn do_cheat() {
     let sess = pace_forge::api::session::load_session();
     if !sess.is_valid() {

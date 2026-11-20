@@ -395,6 +395,9 @@ pace-forge run 3 18 -y     # 加 -y 跳过确认
 # 只预演
 pace-forge dry 2 12
 
+# 跨记录自检（读一份记录 JSON，离线）
+pace-forge crosscheck records.json
+
 # 操场参数
 pace-forge stadium 5 2     # 第 2 道跑 5 圈
 
