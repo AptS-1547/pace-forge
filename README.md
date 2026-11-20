@@ -362,7 +362,12 @@ Pull request、推送到 `main` 和手动运行发布工作流会生成供检查
 
 ### 从源码构建
 
-需要安装 Rust/Cargo；Windows 还需要 MSVC C++ 构建工具。
+需要安装 Rust/Cargo，**最低 1.88**（`Cargo.toml` 的 `rust-version`）：依赖链里 `icu_*`
+系列要求 1.88，低于这个版本 cargo 在解析阶段就报错退出，不是编译报错。Windows 还需要
+MSVC C++ 构建工具。
+
+在 Termux/手机上自编译时，先看 `rustc --version`：系统的 `pkg install rust` 版本常常
+低于 1.88，用 rustup 装 1.88 以上再编。
 
 ```bash
 git clone https://github.com/IRmsk/pace-forge.git
