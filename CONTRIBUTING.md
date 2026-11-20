@@ -33,3 +33,15 @@
 - **逆向**：7.4.01+ 的 APK、爱加密壳、`libnetseckit` 签名层的任何进展，直接开 issue 贴结论，比 PR 更受欢迎。
 - **协议核对**：对着真机样本核字段语义——`api/submit.rs` 注释里有逐点对拍表和允许误差，拿你的设备跑一条来对照就能发现新差异。
 - **实测反馈**：带 `[track]` 日志和截图的反馈，比「不好使」值钱一百倍。
+
+## 提交前的本地检查
+
+```bash
+git config core.hooksPath .githooks   # 只需一次
+```
+
+之后每次 `git commit` 会先跑 `tools/check_secrets.py`，扫到 GitHub token、云厂商 key、
+私钥块、11 位手机号就拦下。CI 有同一道（`secrets` job），本地这层只是让人早一步知道。
+
+命中的原文不会打出来，只报文件名、行号和类型——日志本身经常被贴进 issue，
+把 key 打进日志等于换个地方泄露。测试用的假号码写进了 `ALLOW_SUBSTR`，新增假号码也加那里。
