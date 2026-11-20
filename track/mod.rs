@@ -1394,6 +1394,33 @@ mod window_tests {
         assert_eq!(startup_sec(1200), 186);
         assert_eq!(startup_sec(1800), 279);
     }
+
+    /// 同一张诊断表的扩展版（issue #4 第 3 问）：除了窗口时长和零速度点数，
+    /// 再给起步窗口的里程预算、首段配速，以及出窗后的正常配速——调窗口口径
+    /// 时看的是这几个数会不会产生「首段配速 80 分/公里」这种一眼假的东西。
+    ///
+    /// 里程按参考配速 6'00"/km 折算，只用于比较趋势，不是校准值。
+    /// `cargo test --release startup_window_budget_table -- --nocapture`
+    #[test]
+    fn startup_window_budget_table() {
+        const REF_PACE_SEC_PER_KM: f64 = 360.0;
+        for total in [555i64, 1200, 1800] {
+            let w = startup_sec(total);
+            let pts = (0..=total).step_by(5).filter(|t| *t < w).count();
+            let total_m = total as f64 / REF_PACE_SEC_PER_KM * 1000.0;
+            let startup_m = total_m * STARTUP_DIST_RATIO;
+            // 首段配速：窗口秒数 ÷ 窗口里程（分/公里）
+            let first_pace_min = (w as f64 / 60.0) / (startup_m / 1000.0);
+            // 出窗后的正常配速：剩余秒数 ÷ 剩余里程
+            let rest_pace_min =
+                ((total - w) as f64 / 60.0) / ((total_m - startup_m) / 1000.0);
+            let tag = if total == 555 { "实测样本时长" } else { "外推，无样本" };
+            println!(
+                "总时长 {total}s（{tag}）→ 窗口 {w}s / {pts} 个零速度点 / 里程预算 {startup_m:.0}m / 首段 {first_pace_min:.0}'/km，出窗后 {rest_pace_min:.2}'/km",
+            );
+            assert!(startup_m > 0.0 && first_pace_min > rest_pace_min);
+        }
+    }
 }
 
 #[cfg(test)]
