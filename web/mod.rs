@@ -746,6 +746,7 @@ fn handle_plan(
                 start_at_ms,
                 custom_path: parse_custom_path(body),
                 alt_range: parse_alt_range(body),
+                prefer_stadium: body["mode"].as_str() == Some("stadium"),
                 ..Default::default()
             };
             let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
@@ -1452,6 +1453,7 @@ fn handle_batch(
             run_mode,
             start_at_ms,
             alt_range: parse_alt_range(body),
+            prefer_stadium: body["mode"].as_str() == Some("stadium"),
             ..Default::default()
         };
 
@@ -1965,6 +1967,7 @@ fn handle_run(
         start_at_ms,
         custom_path,
         alt_range: parse_alt_range(body),
+        prefer_stadium: body["mode"].as_str() == Some("stadium"),
         ..Default::default()
     };
 

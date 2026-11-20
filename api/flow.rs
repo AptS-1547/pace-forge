@@ -73,6 +73,14 @@ pub struct RunParams {
     /// 用户清楚哪栋楼在哪，手画比算法猜靠谱——尤其 OSM 在该校区
     /// 零建筑数据、几何规划只能凭直线连点的时候。
     pub custom_path: Option<Vec<(f64, f64)>>,
+    /// 是否尝试「按打卡点反推操场」。
+    ///
+    /// 控制台有「自动规划 / 操场绕圈」两个选项，这里必须如实反映用户选的那个：
+    /// 早先只判 `run_mode == 1`，于是选了「自动规划」也会被拿去试操场，打卡点
+    /// 恰好围成长方形就被判成跑道，画出一条不在任何跑道上的椭圆——用户的
+    /// 选择被静默改写，界面还显示「操场绕圈」。CLI 没有这个选项，默认 `true`
+    /// 保持原来的自动尝试行为。
+    pub prefer_stadium: bool,
     /// 海拔区间 `(最低, 最高)`，米。`None` 用默认 42±21m。
     pub alt_range: Option<(f64, f64)>,
 }
@@ -92,6 +100,15 @@ pub struct RunParams {
 /// 路线规划。fork 那边无条件绕圈是因为他的账号打卡点全在操场周围（外框
 /// 几十米）；校园各处的打卡点（跨度几百米）硬套会让轨迹飞到不知道哪里，
 /// 必须能识别出来。
+/// 是否尝试按打卡点反推操场。
+///
+/// 两个条件缺一不可：记分跑（`run_mode == 1`）且用户选的是「操场绕圈」。
+/// 只判前者会把「自动规划」也翻成操场——打卡点凑成矩形就会被几何判据当成
+/// 跑道，在不是操场的地方画椭圆（用户看到的「我选了自由路线，怎么绕操场」）。
+fn should_try_stadium(run_mode: i64, prefer_stadium: bool) -> bool {
+    run_mode == 1 && prefer_stadium
+}
+
 fn try_stadium_track(
     cps: &[Checkpoint],
     distance_m: f64,
@@ -563,6 +580,7 @@ impl Default for RunParams {
             start_at_ms: None,
             custom_path: None,
             alt_range: None,
+            prefer_stadium: true,
         }
     }
 }
@@ -866,8 +884,12 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 各处），自动回退到下面的路线规划——不是所有学校都绕操场跑。
     // 请求了操场却没成，必须让界面知道（`stadium_fallback`），否则用户以为
     // 自己跑的是标准跑道，实际走的是绕楼路线。
+    //
+    // 只有用户**明确选了操场**才试（`prefer_stadium`）。选「自动规划」时
+    // 不走这条：打卡点围成长方形是常见布局（教学楼四角、宿舍区），几何判据
+    // 会把它认成跑道，然后在不是操场的地方画椭圆。
     let mut stadium_fallback = false;
-    let oval: Option<Vec<(f64, f64)>> = if p.run_mode == 1 {
+    let oval: Option<Vec<(f64, f64)>> = if should_try_stadium(p.run_mode, p.prefer_stadium) {
         let seed0 = if p.seed != 0 { p.seed } else { start_ms as u64 };
         let got = try_stadium_track(&cps, p.distance_m, p.sample_step_m, seed0, log);
         stadium_fallback = got.is_none();
@@ -2389,6 +2411,17 @@ mod obs_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：只有用户明确选了操场才反推跑道。
+    ///
+    /// 「自动规划」被 `run_mode == 1` 一条判据带到 `try_stadium_track`，
+    /// 打卡点围成矩形就判成操场，画出一条不在跑道上的椭圆。
+    #[test]
+    fn stadium_attempt_requires_explicit_choice() {
+        assert!(should_try_stadium(1, true), "选了操场绕圈，试");
+        assert!(!should_try_stadium(1, false), "选了自动规划，不试");
+        assert!(!should_try_stadium(2, true), "户外跑没有操场可绕");
+    }
 
     /// 回归：补跑时刻必须按校时偏移搬到服务器轴上。
     ///
