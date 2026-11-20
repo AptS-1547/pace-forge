@@ -17,6 +17,25 @@ use crate::crypto::envelope::{seal, SessionKeys};
 use sha2::{Digest, Sha256};
 use crate::crypto::{decrypt, sign::token_sign, SignFields};
 
+/// IMEI 的 Luhn 校验位。
+///
+/// 从右往左数第二位开始，每隔一位翻倍，超过 9 就减 9 再求和；校验位是
+/// 让总和被 10 整除的那个数字。前 14 位传入，返回第 15 位。
+fn luhn_check_digit(body: &[u8]) -> u8 {
+    let mut sum: u32 = 0;
+    for (i, d) in body.iter().rev().enumerate() {
+        let mut v = *d as u32;
+        if i % 2 == 0 {
+            v *= 2;
+            if v > 9 {
+                v -= 9;
+            }
+        }
+        sum += v;
+    }
+    ((10 - sum % 10) % 10) as u8
+}
+
 /// 设备指纹。首次运行随机生成后应持久化，否则容易被判为异常设备。
 #[derive(Debug, Clone)]
 pub struct DeviceProfile {
@@ -32,9 +51,10 @@ pub struct DeviceProfile {
     pub user_agent: String,
     /// 安卓安装 ID：真机是 16 位小写 hex。
     ///
-    /// 原来一个都没有。真机这八项是从系统 API 直接读的，服务端把它们当
-    /// 设备指纹的一部分；缺失时不会直接拒单，而是在采样点维度打上
-    /// 「来源可疑」的兜底标记——排查时很容易一路追到轨迹上去。
+    /// 真机这八项是从系统 API 直接读的，服务端把它们当设备指纹的一部分。
+    /// 「缺失会被打上来源可疑标记」这条**没有证据**——既没有客户端逻辑、
+    /// 也没有回执或对照实验支撑，只有同类工具的口头经验（issue #17 还给了
+    /// 反例：官方客户端这些请求头常为空串）。按未验证假设处理，别当协议规则。
     pub android_id: String,
     /// 蓝牙 MAC（大写下划线分隔以外的常见形式）。
     pub bl_mac: String,
@@ -104,13 +124,28 @@ impl DeviceProfile {
         self.wifi_mac = mac("wifi", ":");
         self.bl_mac = mac("bt", ":");
         self.mac_address = mac("nic", ":");
-        // IMEI 十五位数字，TAC 前缀取常见值
-        let digits: String = h("imei")
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .take(15)
+        // IMEI：15 位数字 = TAC 8 位 + 序列号 6 位 + Luhn 校验位 1 位。
+        //
+        // 原来取 15 个数字再加 "86" 前缀，`0<13` 只补不截，得到 17 位——
+        // 任何长度或 Luhn 校验面前都是非法值（issue #16）。这里前 14 位
+        // 固定以 "86" 开头，其余从摘要取，最后一位按 Luhn 算出来。
+        let mut body: Vec<u8> = vec![8, 6];
+        body.extend(
+            h("imei")
+                .chars()
+                .filter_map(|c| c.to_digit(10))
+                .take(12)
+                .map(|d| d as u8),
+        );
+        while body.len() < 14 {
+            body.push(0);
+        }
+        let check = luhn_check_digit(&body);
+        self.imei = body
+            .iter()
+            .chain(std::iter::once(&check))
+            .map(|d| d.to_string())
             .collect();
-        self.imei = format!("86{digits:0<13}");
         // 安装/更新时间：从 device_id 派生一个落在 2023-2024 的固定时刻
         let base = 1_690_000_000_000i64; // 2023-07
         let off: i64 = u32::from_str_radix(&h("inst")[..8], 16).unwrap_or(0) as i64;
@@ -295,8 +330,8 @@ impl Client {
             ("User-Agent".into(), self.device.user_agent.clone()),
             ("timeStamp".into(), now_ms.to_string()),
             ("nonce".into(), nonce),
-            // 真机从系统 API 读的八项设备指纹。缺这些不会直接拒单，但服务
-            // 端会把整次 run 的采样点打上「来源可疑」的兜底标记。
+            // 真机从系统 API 读的八项设备指纹。缺了会不会被标「来源可疑」
+            // 没有证据可依（见字段注释），这里只是按真机有值来填。
             ("androidId".into(), self.device.android_id.clone()),
             ("blMac".into(), self.device.bl_mac.clone()),
             ("wifiMac".into(), self.device.wifi_mac.clone()),
@@ -482,6 +517,37 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
     use crate::test_support::{assert_isolated, TestDir};
+
+    /// 回归（issue #16）：IMEI 必须 15 位并通过 Luhn。
+    ///
+    /// 原来取 15 个数字再加 "86" 前缀，`0<13` 只补不截，产出 17 位，
+    /// 任何校验面前都是非法值。DeviceId 不受影响，仍是持久化那个。
+    #[test]
+    fn imei_is_15_digits_and_luhn_valid() {
+        let td = TestDir::new("imei");
+        let p = DeviceProfile::for_account_in(td.home(), "scope");
+        assert_eq!(p.imei.len(), 15, "IMEI 位数不对: {}", p.imei);
+        assert!(
+            p.imei.chars().all(|c| c.is_ascii_digit()),
+            "IMEI 含非数字: {}",
+            p.imei
+        );
+        // 整串 Luhn：从右往左第二位起翻倍，总和须被 10 整除。
+        let digits: Vec<u8> = p.imei.chars().map(|c| c as u8 - b'0').collect();
+        let mut sum = 0u32;
+        for (i, d) in digits.iter().rev().enumerate() {
+            let mut v = *d as u32;
+            if i % 2 == 1 {
+                v *= 2;
+                if v > 9 {
+                    v -= 9;
+                }
+            }
+            sum += v;
+        }
+        assert_eq!(sum % 10, 0, "Luhn 校验不通过: {}", p.imei);
+        assert_eq!(luhn_check_digit(&[4, 9, 0, 1, 5, 4, 2, 0, 3, 2, 3, 7, 5, 1]), 8);
+    }
 
     /// 服务端集群故障要在**解密之前**就认出来。
     ///

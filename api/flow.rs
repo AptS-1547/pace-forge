@@ -792,6 +792,15 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             None
         }
         Err(e) => {
+            // 计分跑必须知道自己学校的围栏才谈得上「围栏内计分」。接口失败时
+            // 静默按自由跑提交，结果是服务端按自由跑处理、用户白烧一次额度，
+            // 还看不到哪一步降级了（issue #8）。这里只拦「拿不到」，学校确实
+            // 没配围栏是 `Ok(空)`，仍按原行为继续。
+            if p.run_mode == 1 {
+                return Err(format!(
+                    "计分跑必须拿到官方围栏，但接口失败：{e}\n                     这不是重试能绕过的问题——先确认登录态和校区选择，再重新生成"
+                ));
+            }
             log(&format!("⚠ [fence] 接口失败，按自由跑继续: {e}"));
             None
         }
