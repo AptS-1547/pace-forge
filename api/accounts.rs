@@ -356,12 +356,21 @@ pub fn open_password(enc: &str) -> Result<String, String> {
 ///
 /// 读路径**不建目录**：目录不存在就是「没存过账号」，直接返回空库。
 pub fn load() -> Book {
+    // 设了 PACE_FORGE_DATA_DIR 就整个跟着走，否则「账号库在旧目录、新数据在新目录」
+    if let Some(dir) = crate::api::session::data_dir_override() {
+        return load_in_dir(&dir);
+    }
     load_in(&home_dir())
 }
 
 /// 同上，但 HOME 基目录由调用方指定（测试注入隔离目录用）。
 pub(crate) fn load_in(base: &Path) -> Book {
-    let p = book_path_in(base);
+    load_in_dir(&data_dir_in(base))
+}
+
+/// 直接给数据目录（不再追加 `.pace-forge`）。`PACE_FORGE_DATA_DIR` 走这条。
+pub(crate) fn load_in_dir(dir: &Path) -> Book {
+    let p = dir.join("accounts.json");
     let Ok(text) = std::fs::read_to_string(&p) else {
         return Book::default();
     };
@@ -389,6 +398,9 @@ pub(crate) fn load_in(base: &Path) -> Book {
 /// 目录创建走 [`ensure_dir`]，文件写入走 [`write_file_private`]（0600）——
 /// 与 `session.json` 用的是同一套原语，不再各写一遍。
 pub fn save(book: &Book) -> Result<(), String> {
+    if let Some(dir) = crate::api::session::data_dir_override() {
+        return save_in_dir(&dir, book);
+    }
     save_in(&home_dir(), book)
 }
 
@@ -397,14 +409,18 @@ pub fn save(book: &Book) -> Result<(), String> {
 /// **测试必须用这个而不是 `save()`**：`save()` 写的是真实
 /// `$HOME/.pace-forge/accounts.json`。
 pub(crate) fn save_in(base: &Path, book: &Book) -> Result<(), String> {
-    let dir = data_dir_in(base);
+    save_in_dir(&data_dir_in(base), book)
+}
+
+/// 直接给数据目录（不再追加 `.pace-forge`）。
+pub(crate) fn save_in_dir(dir: &Path, book: &Book) -> Result<(), String> {
     // 首次运行目录还不存在，这里负责建出来（写前必须确保）
-    ensure_dir(&dir)?;
-    let p = dir.join("accounts.json");
+    ensure_dir(dir)?;
     // 落盘时补上密钥指纹（调用方不用关心）
     let mut to_write = book.clone();
     to_write.key_id = Some(key_id());
     let text = serde_json::to_string_pretty(&to_write).map_err(|e| e.to_string())?;
+    let p = dir.join("accounts.json");
 
     // 先写临时文件再改名，避免写一半断电把库毁了
     let tmp = p.with_extension("json.tmp");

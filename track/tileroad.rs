@@ -214,11 +214,16 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
                 .call();
             match resp {
                 Ok(r) => match read_all(r.into_reader()) {
-                    Ok(b) if b.len() > 512 => {
+                    // 空白格也是合法结果：高德在没有道路渲染的区域会回
+                    // ~179B 的纯色 PNG。原来用「>512 字节」判失败，于是
+                    // 西部/新校区整片判失败、还进 10 分钟冷却（#2 实测）。
+                    // 改成「能解码成图就收」——图里没路，后面的识别自然得出空集。
+                    Ok(b) if !b.is_empty() && image::load_from_memory(&b).is_ok() => {
                         got = Some(b);
                         break;
                     }
-                    Ok(_) => last = format!("{url} 返回内容过短"),
+                    Ok(b) if b.is_empty() => last = format!("{url} 返回空响应"),
+                    Ok(_) => last = format!("{url} 返回的不是可解码图片"),
                     Err(e) => last = format!("{url} 读取失败: {e}"),
                 },
                 Err(e) => last = format!("{url} 请求失败: {e}"),
@@ -1440,6 +1445,28 @@ mod tests {
             format!("{ZOOM}_123_456.png")
         );
         assert!(!t.data().exists(), "只算路径不该创建目录");
+    }
+
+    /// 空白瓦片是合法结果：高德在没有道路渲染的区域回 ~179B 的纯色 PNG。
+    /// 「长度小 = 失败」的判据会把整片区域判失败并进冷却（#2 实测），
+    /// 所以判据必须是「能不能解码」。
+    #[test]
+    fn tiny_blank_png_is_a_valid_tile() {
+        // 1×1 白色 PNG（比阈值 512B 小得多）
+        const BLANK: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        assert!(BLANK.len() < 512, "样例本身要小于旧阈值");
+        assert!(
+            image::load_from_memory(BLANK).is_ok(),
+            "空白图必须能被解码，否则新判据会把正常响应判成失败"
+        );
+        // 反过来：同样小的垃圾字节不能当成功
+        assert!(image::load_from_memory(&[0u8; 179]).is_err());
     }
 
     /// 缓存里那份超过 512B 但解码失败的坏瓦片，必须删掉而不是留下毒化缓存：
