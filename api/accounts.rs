@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::session::{data_dir_in, ensure_dir, home_dir, write_file_private};
 
@@ -176,7 +176,8 @@ pub fn ready(&self) -> Vec<&Account> {
 ///
 /// **纯路径计算，不碰磁盘。** 测试用它把路径注入到一次性临时目录，从而完全
 /// 不碰真实 `$HOME/.pace-forge/accounts.json`。
-pub(crate) fn book_path_in(base: &std::path::Path) -> PathBuf {
+#[cfg(test)]
+pub(crate) fn book_path_in(base: &std::path::Path) -> std::path::PathBuf {
     data_dir_in(base).join("accounts.json")
 }
 
