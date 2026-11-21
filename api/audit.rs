@@ -45,6 +45,10 @@ pub struct Metrics {
     pub overlap: Option<(usize, usize, f64)>,
     /// 反向跑的一对：`(下标 a, 下标 b, 重合度)`，重合度高但方向相反
     pub reversed: Option<(usize, usize, f64)>,
+    /// 全部两两结果，按重合度降序。`findings` 靠它逐对判断——
+    /// 只留「最高那一对」会漏报：一对反向的挡住第一名，后面同向的真复制就永远
+    /// 不报警（#14 指出的方向性错误）。
+    pub pairs: Vec<(usize, usize, f64, bool)>,
     pub near_midnight: usize,
     pub tz: i64,
     pub tz_desc: String,
@@ -77,14 +81,22 @@ pub const AUDIT_CODES: [&str; 7] = [
     "AUDIT_MIDNIGHT",
 ];
 
-/// 首尾互换仍贴近 → 同一条线反着跑。
+/// 首 / 中 / 尾三点互换后都贴近 → 同一条线反着跑。
+///
+/// **不能只比首尾**：记分跑绕的是闭合跑道，首点≈末点，于是任意两条同跑道
+/// 记录（同向也好反向也好）首尾距离都接近 0，「反向」恒为真（#14 实测）。
+///
+/// 取样的索引也要避开中心对称位：`i` 与 `n-1-i` 在 `i=(n-1)/2` 时是同一个
+/// 点，那样中点判据等于又比了一次首尾。用 `n/6, n/3, n/2` 三处，两两间
+/// 隔得够远，同向时必然落在轨迹的不同位置。
 fn is_reversed(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
-    if a.len() < 2 || b.len() < 2 {
+    let n = a.len().min(b.len());
+    if n < 4 {
         return false;
     }
-    let head_to_tail = crate::track::geo::distance(a[0], *b.last().unwrap());
-    let tail_to_head = crate::track::geo::distance(*a.last().unwrap(), b[0]);
-    head_to_tail <= REVERSE_TOL_M && tail_to_head <= REVERSE_TOL_M
+    [n / 6, n / 3, n / 2]
+        .iter()
+        .all(|&i| crate::track::geo::distance(a[i], b[n - 1 - i]) <= REVERSE_TOL_M)
 }
 
 /// 两两重合：返回 `(i, j, 重合度, 是否反向)`，按重合度降序。
@@ -148,6 +160,7 @@ pub fn metrics(records: &[RunRecord]) -> Metrics {
             m.reversed = Some((i, j, ov));
         }
     }
+    m.pairs = pairs;
     m.near_midnight = cc::near_midnight_count(records, tz);
     m
 }
@@ -202,20 +215,34 @@ pub fn findings(m: &Metrics) -> Vec<Finding> {
             ),
         });
     }
-    if let Some((i, j, ov)) = m.overlap {
-        if ov >= OVERLAP_WARN && !matches!(m.reversed, Some((ri, rj, _)) if ri == i && rj == j) {
-            out.push(Finding {
-                code: "AUDIT_OVERLAP",
-                level: Level::Warn,
-                text: format!(
-                    "第 {} 条和第 {} 条轨迹重合 {:.0}% 且方向一致（阈值 {:.0}%）。同一条线同向跑两遍是最明显的复制特征。",
-                    i + 1,
-                    j + 1,
-                    ov * 100.0,
-                    OVERLAP_WARN * 100.0
-                ),
-            });
-        }
+    // 逐对看，不只看最高那一对：同向高重合才是复制特征，反向是真人行为。
+    let mut cloned: Vec<(usize, usize, f64)> = m
+        .pairs
+        .iter()
+        .filter(|(_, _, ov, rev)| *ov >= OVERLAP_WARN && !*rev)
+        .map(|(i, j, ov, _)| (*i, *j, *ov))
+        .collect();
+    let total = cloned.len();
+    cloned.truncate(5);
+    for (i, j, ov) in cloned {
+        out.push(Finding {
+            code: "AUDIT_OVERLAP",
+            level: Level::Warn,
+            text: format!(
+                "第 {} 条和第 {} 条轨迹重合 {:.0}% 且方向一致（阈值 {:.0}%）。同一条线同向跑两遍是最明显的复制特征。",
+                i + 1,
+                j + 1,
+                ov * 100.0,
+                OVERLAP_WARN * 100.0
+            ),
+        });
+    }
+    if total > 5 {
+        out.push(Finding {
+            code: "AUDIT_OVERLAP",
+            level: Level::Warn,
+            text: format!("另有 {} 对同向高重合未逐条列出，用 `tracks` 看全表。", total - 5),
+        });
     }
     if let Some((i, j, ov)) = m.reversed {
         out.push(Finding {
@@ -248,7 +275,10 @@ pub fn suggestions(m: &Metrics, found: &[Finding]) -> Vec<String> {
     let has = |code: &str| found.iter().any(|f| f.code == code);
 
     if has("AUDIT_STREAK") {
-        out.push("下一条隔一天再跑（今天是第 {} 天连着），让连续性断一次。".into());
+        out.push(format!(
+            "下一条隔一天再跑（今天是第 {} 天连着），让连续性断一次。",
+            m.streak_cur
+        ));
     }
     if has("AUDIT_HOUR") {
         let alt = (m.hour + 4) % 24;
@@ -374,6 +404,54 @@ mod tests {
         assert!(pairs.windows(2).all(|w| w[0].2 >= w[1].2), "要按重合度降序");
     }
 
+    /// 闭合圈：操场绕圈首点≈末点。同向两圈不能被判成「反向」，
+    /// 否则 `AUDIT_OVERLAP` 被永久跳过（#14 实测到的方向性错误）。
+    fn circle(offset_m: f64, n: usize, rev: bool) -> Vec<(f64, f64)> {
+        let mut v: Vec<(f64, f64)> = (0..=n)
+            .map(|i| {
+                let t = i as f64 / n as f64 * std::f64::consts::TAU;
+                (
+                    offset_m / 110_000.0 + 0.0003 * t.cos(),
+                    0.0003 * t.sin() * 1.4,
+                )
+            })
+            .collect();
+        if rev {
+            v.reverse();
+        }
+        v
+    }
+
+    #[test]
+    fn closed_loop_same_direction_is_not_reversed() {
+        let records = vec![
+            rec(0, 7, 2000.0, 700, circle(0.0, 60, false)),
+            rec(3, 18, 2600.0, 900, circle(0.0, 60, false)),
+        ];
+        let m = metrics(&records);
+        let f = findings(&m);
+        assert!(
+            !f.iter().any(|x| x.code == "AUDIT_REVERSE"),
+            "同向的闭合圈不是反向: {f:?}"
+        );
+        assert!(
+            f.iter().any(|x| x.code == "AUDIT_OVERLAP"),
+            "闭合圈同向高重合必须报复制: {f:?}"
+        );
+    }
+
+    #[test]
+    fn closed_loop_reverse_direction_is_info_only() {
+        let records = vec![
+            rec(0, 7, 2000.0, 700, circle(0.0, 60, false)),
+            rec(3, 18, 2600.0, 900, circle(0.0, 60, true)),
+        ];
+        let m = metrics(&records);
+        let f = findings(&m);
+        assert!(f.iter().any(|x| x.code == "AUDIT_REVERSE"), "{f:?}");
+        assert!(!f.iter().any(|x| x.code == "AUDIT_OVERLAP"), "反向不算复制: {f:?}");
+    }
+
     #[test]
     fn suggestions_point_at_concrete_actions() {
         let records: Vec<RunRecord> = (0..5)
@@ -382,6 +460,8 @@ mod tests {
         let m = metrics(&records);
         let s = suggestions(&m, &findings(&m));
         assert!(s.iter().any(|x| x.contains("隔一天")), "{s:?}");
+        // 不能把 format! 写漏成字面量（#14 抓到的）
+        assert!(!s.iter().any(|x| x.contains("{}")), "冒出了未填充的占位符: {s:?}");
         assert!(s.iter().any(|x| x.contains("换方向")), "{s:?}");
         assert!(s.iter().any(|x| x.contains("里程按")), "{s:?}");
         // 没有命中时也要给一句，不能空手回去
