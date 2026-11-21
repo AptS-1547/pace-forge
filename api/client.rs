@@ -62,8 +62,6 @@ pub struct DeviceProfile {
     pub wifi_mac: String,
     /// 设备 IMEI。协议允许空串，但真机读得到。
     pub imei: String,
-    /// 网卡 MAC（登录 body 里的 `mac_address`）。
-    pub mac_address: String,
     /// App 安装时间（毫秒）。必须跨请求稳定，每次变等于自报改机。
     pub app_install_time: i64,
     /// App 上次更新时间（毫秒）。
@@ -123,7 +121,6 @@ impl DeviceProfile {
         };
         self.wifi_mac = mac("wifi", ":");
         self.bl_mac = mac("bt", ":");
-        self.mac_address = mac("nic", ":");
         // IMEI：15 位数字 = TAC 8 位 + 序列号 6 位 + Luhn 校验位 1 位。
         //
         // 原来取 15 个数字再加 "86" 前缀，`0<13` 只补不截，得到 17 位——
@@ -170,7 +167,6 @@ impl DeviceProfile {
             bl_mac: String::new(),
             wifi_mac: String::new(),
             imei: String::new(),
-            mac_address: "02:00:00:00:00:00".into(),
             app_install_time: 0,
             app_update_time: 0,
             custom_device_id: String::new(),
