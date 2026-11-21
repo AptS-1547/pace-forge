@@ -10,6 +10,9 @@
 
 ## 未发布（main）
 
+- **[仅修复]** 删掉 `DeviceProfile` 里从未上行的 `mac_address`；README 写清设备身份口径（cpuModel 发 ABI、MAC 为虚拟网卡、不做机型表）
+- **[仅修复]** 新增 fivePointJson 内外层键序断言：形状变了才红，改数值不红
+- **[仅文档]** `config` 表尾补一句：`PACE_OUT`/`PACE_FAST` 是 preflight 检查码，不是开关
 - **[仅修复]** `config` 表补上 `PACE_FORGE_DATA_DIR`；值解析不了时标「无效值（实际用 X）」，不再显示成生效
 - **[仅修复]** `check_secrets.py` 不在 git 仓库时退回全量扫描，不再抛 Python 堆栈；全量扫描跳过 `node_modules`/`vendor`/`dist`/.venv 等目录
 - **[行为变化]** `export-records` 条数非法或超出 1..100 直接退出 2；目标文件已存在时拒绝写入，需 `--force`

@@ -166,6 +166,7 @@ pub fn print_table() {
         println!("    默认 {}：{}", e.default, e.effect);
     }
     println!("\n以上为全部开关。清单外的 PACE_* 不会被读取——以这张表为准。");
+    println!("（`PACE_OUT`、`PACE_FAST` 这类是 preflight 检查码，不是环境变量，别混。）");
 }
 
 /// 无效值回落到哪个值：有可比较默认值就用它，没有就说明「默认行为」。

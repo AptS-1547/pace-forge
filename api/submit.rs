@@ -2678,6 +2678,56 @@ mod point_shape_tests {
         // 起点仍然是 7
         assert_eq!(sub.points[0]["type"], 7, "起点 type 必须还是 7");
     }
+
+    /// 键序锁：形状变了要红，改数值不要红。
+    ///
+    /// 全量报文快照太重（时间戳、随机种子、设备 ID 都得先固定），只锁两条
+    /// 序列化顺序：内层每个点的键序、外层 envelope 的键序。App 少画一个点
+    /// 这类回归，历史上有两次就是键序/结构被动过（`lon` 开头 vs 字母序）。
+    #[test]
+    fn five_point_key_order_is_fixed() {
+        let pts: Vec<TrackPoint> = (0..300)
+            .map(|i| tp(31.2304 + i as f64 * 6.0e-5, 101.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .collect();
+        let marks = [30usize, 90, 150, 220, 290];
+        let fixed: Vec<FixedPoint> = marks
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| FixedPoint {
+                lat: pts[i].lat,
+                lon: pts[i].lon,
+                point_name: format!("P{i}"),
+                glat: 0.0,
+                glon: 0.0,
+                is_fixed: if k == 0 { 1 } else { 0 },
+            })
+            .collect();
+        let p0 = params();
+        let sim = test_sim(&p0, &pts);
+        let sub = build(&p0, &pts, &fixed, &sim).unwrap();
+
+        let env: Value = serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap())
+            .unwrap();
+        let env_keys: Vec<&String> = env.as_object().unwrap().keys().collect();
+        assert_eq!(
+            env_keys,
+            vec!["fivePointJson", "freedomShowFence", "geoFencesJson", "runAreaId", "useZip"],
+            "fivePointJson 外层键序变了"
+        );
+
+        let inner: Vec<Value> =
+            serde_json::from_str(env["fivePointJson"].as_str().unwrap()).unwrap();
+        assert_eq!(inner.len(), 5, "五个点都要在");
+        let keys: Vec<&String> = inner[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            vec![
+                "lon", "lat", "isFixed", "pointName", "glon", "glat",
+                "position", "flag", "id", "isPass", "state"
+            ],
+            "内层点位键序变了（App 按位置解析时少画点）"
+        );
+    }
 }
 
 #[cfg(test)]
