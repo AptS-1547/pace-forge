@@ -16,6 +16,7 @@
 - **[行为变化]** 网页「设备机型」一节：按账号选机型并落盘，选中后填平台代号即可让 `cpuModel` 发 SoC 型号；映射写 `<数据目录>/device_models.json`，只影响本机；改机型不动 `device_id`（`GET/POST /api/device`）
 - **[行为变化]** 新增 `PACE_DEVICE_MODEL` 与 `data/devices.json`：命中时 `cpuModel` 发 SoC 型号（`kalama`→`SM8550`，17 条平台映射），未收录仍发 ABI `arm64-v8a` 并提示；机型层只收有出处的条目，当前为空。`pace-forge devices` 打印表与补表方法（#18）
 
+- **[行为变化]** 新增 `PACE_DEVICE_HW_HEADERS=empty`：四个可选硬件头改发空串（默认仍发派生值，`DeviceId` 不动）
 - **[仅修复]** 删掉 `DeviceProfile` 里从未上行的 `mac_address`；README 写清设备身份口径（cpuModel 发 ABI、MAC 为虚拟网卡、不做机型表）
 - **[仅修复]** 新增 fivePointJson 内外层键序断言：形状变了才红，改数值不红
 - **[仅文档]** `config` 表尾补一句：`PACE_OUT`/`PACE_FAST` 是 preflight 检查码，不是开关

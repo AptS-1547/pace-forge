@@ -17,6 +17,17 @@ use crate::crypto::envelope::{seal, SessionKeys};
 use sha2::{Digest, Sha256};
 use crate::crypto::{decrypt, sign::token_sign, SignFields};
 
+/// 可选硬件标识头的开关：`PACE_DEVICE_HW_HEADERS=empty` 时发空串。
+///
+/// 只影响 androidId / blMac / wifiMac / IMEI 四个头；DeviceId 与
+/// CustomDeviceId 不在此列——前者是设备锁，后者本来就是客户端自造值。
+fn hw_id(value: &str) -> String {
+    match std::env::var("PACE_DEVICE_HW_HEADERS").ok().as_deref() {
+        Some("empty") => String::new(),
+        _ => value.to_string(),
+    }
+}
+
 /// IMEI 的 Luhn 校验位。
 ///
 /// 从右往左数第二位开始，每隔一位翻倍，超过 9 就减 9 再求和；校验位是
@@ -393,12 +404,15 @@ impl Client {
             ("User-Agent".into(), self.device.user_agent.clone()),
             ("timeStamp".into(), now_ms.to_string()),
             ("nonce".into(), nonce),
-            // 真机从系统 API 读的八项设备指纹。缺了会不会被标「来源可疑」
-            // 没有证据可依（见字段注释），这里只是按真机有值来填。
-            ("androidId".into(), self.device.android_id.clone()),
-            ("blMac".into(), self.device.bl_mac.clone()),
-            ("wifiMac".into(), self.device.wifi_mac.clone()),
-            ("IMEI".into(), self.device.imei.clone()),
+            // 可选硬件标识：官方客户端有整段空串的会话（issue #17 的 59 条
+            // 请求里五项全空），所以「发空」是一种真实状态；但空与派生各有
+            // 风险，默认保持派生——同一台设备一半头有值一半空，比全空更像
+            // 拼出来的。要拿对照数据时设 PACE_DEVICE_HW_HEADERS=empty，
+            // 四个硬件头一起清空，DeviceId 不动（它是设备锁，不参与这条实验）。
+            ("androidId".into(), hw_id(&self.device.android_id)),
+            ("blMac".into(), hw_id(&self.device.bl_mac)),
+            ("wifiMac".into(), hw_id(&self.device.wifi_mac)),
+            ("IMEI".into(), hw_id(&self.device.imei)),
             ("appInstallTime".into(), self.device.app_install_time.to_string()),
             ("appUpdateTime".into(), self.device.app_update_time.to_string()),
             ("CustomDeviceId".into(), self.device.custom_device_id.clone()),
@@ -580,6 +594,17 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
     use crate::test_support::{assert_isolated, TestDir};
+
+    /// 硬件头开关：默认派生、设 `empty` 清空，DeviceId 不受影响。
+    #[test]
+    fn hw_headers_switch_only_touches_optional_ids() {
+        // 环境变量是进程级的，测试里设置/清除都只在断言窗口内
+        assert_eq!(hw_id("abc"), "abc");
+        std::env::set_var("PACE_DEVICE_HW_HEADERS", "empty");
+        assert_eq!(hw_id("abc"), "");
+        std::env::remove_var("PACE_DEVICE_HW_HEADERS");
+        assert_eq!(hw_id("abc"), "abc");
+    }
 
     /// 回归（issue #16）：IMEI 必须 15 位并通过 Luhn。
     ///

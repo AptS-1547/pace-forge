@@ -358,8 +358,9 @@ android.hardware.bluetooth             蓝牙
   OUI。借前缀只是更像的假，不是真的。
 - IMEI 15 位、TAC 以 `86` 开头、末位 Luhn 校验，由 `device_id` 确定性派生，
   同一账号每次一致。
-- `androidId`/`blMac`/`wifiMac`/`IMEI` 这几个头真机有值，官方客户端也有常为
-  空串的情况；填值只为贴近真机形态，不声称能绕过风控。
+- `androidId`/`blMac`/`wifiMac`/`IMEI` 这几个头默认发派生值；官方客户端的会话里
+  也有五项全空的情况，要发空串做对照实验时设 `PACE_DEVICE_HW_HEADERS=empty`
+  （只清这四个头，`DeviceId` 不动）。填值只为贴近真机形态，不声称能绕过风控。
 
 ## 下载与安装
 

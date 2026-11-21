@@ -102,6 +102,13 @@ const ENTRIES: &[Entry] = &[
         kind: Kind::Float,
     },
     Entry {
+        name: "PACE_DEVICE_HW_HEADERS",
+        default: "derived（发派生值）",
+        effect: "empty = 四个可选硬件头（androidId/blMac/wifiMac/IMEI）发空串，做对照实验用",
+        default_value: Some("derived"),
+        kind: Kind::Enum(&["derived", "empty"]),
+    },
+    Entry {
         name: "PACE_RUN_MODE",
         default: "2",
         effect: "CLI run 的 runMode：1=计分跑，2=户外跑",
