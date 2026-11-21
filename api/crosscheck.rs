@@ -16,6 +16,44 @@ pub fn tz_offset_sec() -> i64 {
     crate::api::obs::tz_offset_sec()
 }
 
+/// 时区来源说明：设了、设了但解析失败、没设用默认，三种都说清楚。
+///
+/// 日期和「起跑时刻」的小时都由这个偏移推出来，输出不带来源的话，换个时区
+/// 跑同一个文件会得到另一个「事实」，而人看不出是环境变了。
+pub fn tz_description() -> String {
+    let offset = tz_offset_sec();
+    let sign = if offset >= 0 { '+' } else { '-' };
+    let abs = offset.abs();
+    let label = format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60);
+    match std::env::var("PACE_TZ_OFFSET_SEC") {
+        Ok(raw) if raw.parse::<i64>().is_ok() && raw != "28800" => {
+            format!("{label}（PACE_TZ_OFFSET_SEC={raw}）")
+        }
+        Ok(raw) => format!("{label}（PACE_TZ_OFFSET_SEC={raw}，与默认一致）"),
+        Err(_) => format!("{label}（PACE_TZ_OFFSET_SEC 未设，用默认）"),
+    }
+}
+
+/// 配速格式化：先整体四舍五入到秒，再拆分/秒。
+///
+/// 「先取模再四舍五入」会打出 `7'60"`（59.6 秒进位却没进位到分）。
+pub fn format_pace(sec_per_km: f64) -> String {
+    let total = sec_per_km.round() as i64;
+    format!("{}'{:02}\"", total / 60, total % 60)
+}
+
+/// 起跑时刻距本地零点不足一小时的记录条数。跨零点时日期归属不稳定，
+/// 输出里该提一句，别让「2026-09-21」看起来像客观事实。
+pub fn near_midnight_count(records: &[RunRecord], tz_offset_sec: i64) -> usize {
+    records
+        .iter()
+        .filter(|r| {
+            let secs = (r.start_ms / 1000 + tz_offset_sec).rem_euclid(86_400);
+            !(3_600..=86_400 - 3_600).contains(&secs)
+        })
+        .count()
+}
+
 /// 本地日期 `(年, 月, 日)`，给命令行打印用。
 pub fn local_date(start_ms: i64, tz_offset_sec: i64) -> (i64, u32, u32) {
     let secs = start_ms / 1000 + tz_offset_sec;
@@ -239,6 +277,30 @@ pub fn max_pair_overlap(records: &[RunRecord], radius_m: f64) -> Option<(usize, 
         }
     }
     Some((best.0, best.1, best.2, pairs))
+}
+
+#[cfg(test)]
+mod pace_fmt_tests {
+    use super::*;
+
+    /// 59.6 秒要进位成 `1'00"`，不是 `0'60"`。
+    #[test]
+    fn pace_rounds_whole_seconds_first() {
+        assert_eq!(format_pace(479.6), "8'00\"");
+        assert_eq!(format_pace(480.4), "8'00\"");
+        assert_eq!(format_pace(383.0), "6'23\"");
+    }
+
+    /// 跨零点前后一小时都算「贴近零点」。
+    #[test]
+    fn near_midnight_window() {
+        let r = |ms: i64| RunRecord { start_ms: ms, distance_m: 0.0, duration_sec: 0, track: vec![] };
+        // 2026-09-21 23:40 +08:00 = 15:40Z
+        let late = 1_790_005_200_000_i64;
+        let recs = vec![r(late), r(late - 86_400_000), r(late + 3 * 3_600_000)];
+        assert_eq!(near_midnight_count(&recs, 28_800), 2);
+        assert_eq!(near_midnight_count(&recs[..1], 0), 0);
+    }
 }
 
 #[cfg(test)]

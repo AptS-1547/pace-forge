@@ -26,6 +26,38 @@ fn parse_num(args: &[String], idx: usize, default: f64, name: &str) -> f64 {
     }
 }
 
+/// 同 `parse_num`，但要求整数。
+fn parse_int(args: &[String], idx: usize, default: i64, name: &str) -> i64 {
+    match args.get(idx) {
+        None => default,
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("参数错误：{name} 「{raw}」不是整数");
+                std::process::exit(2);
+            }
+        },
+    }
+}
+
+/// 读 `--flag N` 这类旗标后的整数；没写旗标用默认值，写了但解析不了直接报错。
+fn flag_int(args: &[String], flag: &str, default: i64) -> i64 {
+    let Some(i) = args.iter().position(|a| a == flag) else {
+        return default;
+    };
+    let Some(raw) = args.get(i + 1) else {
+        eprintln!("参数错误：{flag} 后面要跟一个整数");
+        std::process::exit(2);
+    };
+    match raw.parse::<i64>() {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("参数错误：{flag} 的值「{raw}」不是整数");
+            std::process::exit(2);
+        }
+    }
+}
+
 /// 校验公里/分钟，和库层 `RunParams::validate` 保持同一套上限。
 fn checked_km_min(dist_km: f64, dur_min: f64) -> (f64, f64) {
     if !(0.0..=42.0).contains(&dist_km) {
@@ -83,18 +115,13 @@ fn main() {
             let dist_km = parse_num(&args, 2, 2.0, "距离(km)");
             let dur_min = parse_num(&args, 3, 12.0, "时长(min)");
             let (dist_km, dur_min) = checked_km_min(dist_km, dur_min);
-            let days: i64 = args
-                .iter()
-                .position(|a| a == "--days")
-                .and_then(|i| args.get(i + 1))
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+            let days: i64 = flag_int(&args, "--days", 0);
             let yes = args.iter().any(|a| a == "-y" || a == "--yes");
             do_at(&hhmm, days, dist_km, dur_min, yes);
         }
         "ago" => {
             // ago <分钟> <km> <min>
-            let mins: i64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(60);
+            let mins: i64 = parse_int(&args, 1, 60, "分钟数");
             let dist_km = parse_num(&args, 2, 2.0, "距离(km)");
             let dur_min = parse_num(&args, 3, 12.0, "时长(min)");
             let (dist_km, dur_min) = checked_km_min(dist_km, dur_min);
@@ -103,25 +130,20 @@ fn main() {
         }
         "rand" => {
             // rand <km> <min> [--days N]
-            let dist_km: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(2.0);
-            let dur_min: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(12.0);
-            let days: i64 = args
-                .iter()
-                .position(|a| a == "--days")
-                .and_then(|i| args.get(i + 1))
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+            let dist_km = parse_num(&args, 1, 2.0, "距离(km)");
+            let dur_min = parse_num(&args, 2, 12.0, "时长(min)");
+            let days: i64 = flag_int(&args, "--days", 0);
             let yes = args.iter().any(|a| a == "-y" || a == "--yes");
             do_rand(days, dist_km, dur_min, yes);
         }
         "stadium" => {
-            let laps: f64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5.0);
-            let lane: u8 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let laps = parse_num(&args, 1, 5.0, "圈数");
+            let lane = parse_int(&args, 2, 1, "道次") as u8;
             stadium_probe(laps, lane);
         }
         "config" => pace_forge::config::print_table(),
         "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
-        "export-records" => do_export_records(args.get(1), args.get(2)),
+        "export-records" => do_export_records(&args[1..]),
         "version" | "-V" | "--version" => {
             println!("pace-forge {}", pace_forge::VERSION);
         }
@@ -450,6 +472,7 @@ fn do_crosscheck(file: Option<&str>) {
         std::process::exit(1);
     }
     let tz = cc::tz_offset_sec();
+    println!("[时区] {}", cc::tz_description());
     let first = records.iter().map(|r| r.start_ms).min().unwrap_or(0);
     let last = records.iter().map(|r| r.start_ms).max().unwrap_or(0);
     let (y1, m1, d1) = cc::local_date(first, tz);
@@ -473,22 +496,21 @@ fn do_crosscheck(file: Option<&str>) {
         .map(|r| r.duration_sec as f64 / (r.distance_m / 1000.0))
         .collect();
     let (pm, pcv) = cc::dispersion(&paces);
-    println!(
-        "[配速] 均值 {}'{:02}\"/km，离散 {:.1}%",
-        (pm / 60.0) as i64,
-        (pm % 60.0).round() as i64,
-        pcv * 100.0
-    );
+    println!("[配速] 均值 {}/km，离散 {:.1}%", cc::format_pace(pm), pcv * 100.0);
 
     match cc::max_pair_overlap(&records, cc::OVERLAP_RADIUS_M) {
         Some((a, b, ov, pairs)) => println!(
-            "[重合] 第 {} 条 vs 第 {} 条 最高 {:.0}%（{pairs} 对，{:.0}m 缓冲）",
+            "[重合] 第 {} 条 vs 第 {} 条 最高 {:.0}%（{pairs} 对，{:.0}m 缓冲；仅空间形状，不含时间对齐）",
             a + 1,
             b + 1,
             ov * 100.0,
             cc::OVERLAP_RADIUS_M
         ),
         None => println!("[重合] 带轨迹的记录不足两条，算不了"),
+    }
+    let near_midnight = cc::near_midnight_count(&records, tz);
+    if near_midnight > 0 {
+        println!("[提示] {near_midnight} 条记录起跑时刻距本地零点不足 1 小时，日期归属受时区影响");
     }
     println!("\n只给数，不给阈值：判不判异常取决于各校规则和自己的实测定论。");
 }
@@ -497,10 +519,35 @@ fn do_crosscheck(file: Option<&str>) {
 ///
 /// 列表接口不带轨迹，逐条拉详情；详情里有没有轨迹取决于服务端配置，没有就
 /// 留空——`crosscheck` 会把它排除在重合度之外，其余指标照算。
-fn do_export_records(count: Option<&String>, output: Option<&String>) {
+fn do_export_records(rest: &[String]) {
     use pace_forge::api::{client, crosscheck as cc, records, session};
-    let n: u32 = count.and_then(|s| s.parse().ok()).unwrap_or(20).clamp(1, 100);
-    let out_path = output.map(|s| s.as_str()).unwrap_or("records.json");
+    // 「没写」和「写错」分开：以前 `parse().ok().unwrap_or(20)` 把两者并成一条路，
+    // 用户以为导了 50 条、实际导了 20 条，还没有任何提示。
+    let force = rest.iter().any(|a| a == "--force");
+    let positional: Vec<&String> = rest.iter().filter(|a| !a.starts_with("--")).collect();
+    if positional.len() > 2 {
+        eprintln!("参数过多：export-records [N] [out.json] [--force]");
+        std::process::exit(2);
+    }
+    let n: u32 = match positional.first() {
+        None => 20,
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(v) if (1..=100).contains(&v) => v,
+            Ok(v) => {
+                eprintln!("条数必须在 1..100 之间，收到 {v}");
+                std::process::exit(2);
+            }
+            Err(_) => {
+                eprintln!("条数不是整数：「{raw}」");
+                std::process::exit(2);
+            }
+        },
+    };
+    let out_path = positional.get(1).map(|s| s.as_str()).unwrap_or("records.json");
+    if std::path::Path::new(out_path).exists() && !force {
+        eprintln!("{out_path} 已存在，加 --force 覆盖，或换一个文件名");
+        std::process::exit(2);
+    }
 
     let sess = session::load_session();
     if !sess.is_valid() {
