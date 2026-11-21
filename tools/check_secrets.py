@@ -50,11 +50,35 @@ ALLOW_SUBSTR = (
 HEX_TOKEN = re.compile(r"[0-9a-f]{24,}")
 
 
-def tracked_files() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files"], capture_output=True, text=True, check=True
-    ).stdout
+# 全量扫描时跳过的目录：依赖树、构建产物、虚拟环境都不属于「本仓的代码」
+SKIP_DIRS = {
+    ".git", "target", "node_modules", "vendor", "dist", "build",
+    ".venv", "venv", "__pycache__", ".cargo", ".idea", ".vscode",
+}
+
+
+def tracked_files() -> list[Path] | None:
+    """git 跟踪的文件；不在 git 仓库或没装 git 时返回 None。
+
+    release 的 zip/tar 包里没有 `.git`，而脚本是随包发出去的；pre-commit
+    也直接调它。以前这里让 `FileNotFoundError` / `CalledProcessError` 一路
+    冒到顶，用户看到的是 Python 堆栈，而不是「换个目录跑」。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files"], capture_output=True, text=True, check=True
+        ).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+        return None
     return [Path(p) for p in out.splitlines() if p]
+
+
+def walk_all() -> list[Path]:
+    return [
+        p
+        for p in Path(".").rglob("*")
+        if not any(part in SKIP_DIRS for part in p.parts)
+    ]
 
 
 def scan(paths: list[Path]) -> list[str]:
@@ -82,9 +106,14 @@ def scan(paths: list[Path]) -> list[str]:
 
 def main() -> int:
     if "--all" in sys.argv:
-        paths = [p for p in Path(".").rglob("*") if ".git" not in p.parts and "target" not in p.parts]
+        paths = walk_all()
     else:
-        paths = tracked_files()
+        got = tracked_files()
+        if got is None:
+            print("不在 git 仓库里（或没装 git），退回全量扫描；跳过的目录见 SKIP_DIRS。")
+            paths = walk_all()
+        else:
+            paths = got
     hits = scan(paths)
     if hits:
         print("发现疑似凭证/个人信息，先处理再提交：\n")
