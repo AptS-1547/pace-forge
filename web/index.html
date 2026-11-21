@@ -458,6 +458,34 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
     <div id="accMsg" class="msg"></div>
   </div>
 
+  <div class="panel" id="devPanel">
+    <h2>设备机型 <span class="hint" style="font-weight:400">cpuModel</span></h2>
+    <div class="kv"><span>当前发出</span><b id="devCpu">…</b></div>
+    <div class="kv"><span>机型来源</span><b id="devSrc" class="hint">未设置（ABI 兜底）</b></div>
+    <div class="runform" style="margin-top:8px">
+      <input id="devSearch" placeholder="搜型号定位：Xiaomi 13 / 2211133C" aria-label="搜索机型">
+      <select id="devBrand" aria-label="品牌"><option value="">品牌…</option></select>
+      <select id="devModel" aria-label="机型"><option value="">先选品牌</option></select>
+      <select id="devPlatformSel" aria-label="平台"><option value="">平台（可选）</option></select>
+      <button id="devApply">应用</button>
+      <button class="ghost" id="devClear">恢复 ABI</button>
+    </div>
+    <div id="devMsg" class="msg"></div>
+  </div>
+
+  <div class="panel" id="egressPanel">
+    <h2>网络出口 <span class="hint" style="font-weight:400">提交走哪条线路</span></h2>
+    <div class="kv"><span>当前出口</span><b id="egIp">…</b></div>
+    <div class="kv"><span>代理</span><b id="egProxy" class="hint">未设置（直连）</b></div>
+    <div class="runform" style="margin-top:8px">
+      <input id="egInput" placeholder="http://host:port（留空=直连）" aria-label="代理地址">
+      <button id="egSave">保存</button>
+      <button class="ghost" id="egProbe">重新探测</button>
+    </div>
+    <div id="egMsg" class="msg"></div>
+  </div>
+  </div>
+
   <div class="panel" id="semPanel">
     <h2>记分跑 · 学期进度</h2>
     <div id="semOut" class="planout"><div class="hint">点顶部「查学期」加载</div></div>
@@ -894,6 +922,7 @@ $('planBtn').onclick = async () => {
       ${policyHtml}
       <div class="kv"><span>实际里程</span><b>${r.actualLength} m</b></div>
       <div class="kv"><span>轨迹点数</span><b>${r.pointCount}</b></div>
+      <div class="kv"><span>地图</span><b class="ok">${r.coords && r.coords.length ? `已画 ${r.coords.length} 点（取消勾选「预览轨迹」可隐藏）` : '没有轨迹点可画'}</b></div>
       <div class="kv"><span>时间桶</span><b>${r.bucketCount}</b></div>
       <div class="kv"><span>平均步频</span><b>${(r.avgCadence ?? 0).toFixed(1)} 步/分</b></div>
       <div class="kv"><span>步数自相关</span><b>${acTxt}</b></div>
@@ -1043,6 +1072,140 @@ function fenceIsGcj(f) {
   return !!(f && Array.isArray(f.ringGcj) && f.ringGcj.length);
 }
 
+  // ── 网络出口（代理） ──────────────────────────────────────────────
+  // 保存后重建所有 client，提交链路下一次请求就走新出口；探测接口本身仍直连。
+  async function egLoad() {
+    try {
+      const d = await api('/api/egress-ip');
+      $('egIp').textContent = d.ok ? `${d.ip}（${d.source}）` : '未知';
+      $('egProxy').textContent = d.proxy || '未设置（直连）';
+      $('egProxy').className = d.proxy ? 'ok' : 'hint';
+    } catch (e) {
+      $('egIp').textContent = '读取失败';
+    }
+  }
+  async function egSave(proxy) {
+    try {
+      const d = await api('/api/egress', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proxy })
+      });
+      $('egMsg').className = 'msg ok';
+      $('egMsg').textContent = `${d.note}（重建 ${d.rebuilt} 个会话）`;
+      await egLoad();
+    } catch (e) {
+      $('egMsg').className = 'msg err';
+      $('egMsg').textContent = '保存失败：' + e.message;
+    }
+  }
+  if ($('egInput')) {
+    $('egSave').onclick = () => {
+      const v = $('egInput').value.trim();
+      $('egMsg').textContent = '';
+      egSave(v || null);
+    };
+    $('egProbe').onclick = () => { egLoad(); };
+    egLoad();
+  }
+
+  // ── 设备机型（按品牌分组的两个下拉） ──────────────────────────────
+  // 品牌 → 机型 两级联动，平台单独一个下拉（内置 17 条）。
+  // 只改 cpuModel，不动 device_id；映射按账号落在本机。
+  const DEV = { brands: [], platforms: [], model: '' };
+  function devRender(d) {
+    DEV.model = d.model || '';
+    $('devCpu').textContent = d.cpuModel || 'arm64-v8a';
+    const hit = d.catalogHit;
+    $('devSrc').textContent = d.model
+      ? `${d.model}${hit ? ` · ${hit.brand} ${hit.name}` : '（官方目录未收录）'}`
+      : '未设置（ABI 兜底）';
+    $('devSrc').className = d.abiFallback ? 'hint' : 'ok';
+  }
+  function devFillSelect(el, placeholder, items, labelOf, valueOf) {
+    el.innerHTML = '';
+    el.appendChild(new Option(placeholder, ''));
+    for (const it of items) el.appendChild(new Option(labelOf(it), valueOf(it)));
+  }
+  async function devInit() {
+    try {
+      const d = await api('/api/device');
+      DEV.brands = d.brands || [];
+      DEV.platforms = d.platforms || [];
+      devRender(d);
+      devFillSelect($('devBrand'), '品牌…', DEV.brands,
+        b => `${b.name}（${b.count}）`, b => b.name);
+      devFillSelect($('devPlatformSel'), '平台（可选）', DEV.platforms,
+        p => `${p.name}（${p.code} → ${p.soc}）`, p => p.code);
+      // 当前机型所属品牌预选，省得每次重新找
+      if (d.catalogHit) {
+        const opt = [...$('devBrand').options].find(o => o.value.toLowerCase() === String(d.catalogHit.brand).toLowerCase());
+        if (opt) { $('devBrand').value = opt.value; await devPickBrand(opt.value); }
+      }
+    } catch (e) {
+      $('devMsg').className = 'msg err';
+      $('devMsg').textContent = '读取机型列表失败：' + e.message;
+    }
+  }
+  async function devPickBrand(brand) {
+    const sel = $('devModel');
+    if (!brand) { devFillSelect(sel, '先选品牌', [], () => '', () => ''); return; }
+    sel.innerHTML = '';
+    sel.appendChild(new Option('加载中…', ''));
+    try {
+      const d = await api('/api/device?brand=' + encodeURIComponent(brand));
+      devFillSelect(sel, '机型…', d.results || [],
+        r => `${r.name} · ${r.model}`, r => r.model);
+    } catch (e) {
+      devFillSelect(sel, '读取失败', [], () => '', () => '');
+      $('devMsg').className = 'msg err';
+      $('devMsg').textContent = e.message;
+    }
+  }
+  async function devSave(model, platform) {
+    try {
+      const d = await api('/api/device', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, platform: platform || undefined })
+      });
+      devRender(d);
+      $('devMsg').className = 'msg ok';
+      $('devMsg').textContent = d.note || '已保存';
+    } catch (e) {
+      $('devMsg').className = 'msg err';
+      $('devMsg').textContent = '保存失败：' + e.message;
+    }
+  }
+  if ($('devBrand')) {
+    // 搜索直接用目录检索，输什么都在列表里出现；清空就回到按品牌浏览。
+    let devTimer = null;
+    $('devSearch').oninput = () => {
+      clearTimeout(devTimer);
+      const q = $('devSearch').value.trim();
+      devTimer = setTimeout(async () => {
+        if (!q) { await devPickBrand($('devBrand').value); return; }
+        try {
+          const d = await api('/api/device?q=' + encodeURIComponent(q));
+          devFillSelect($('devModel'), '搜索结果', d.results || [],
+            r => `${r.name} · ${r.model}`, r => r.model);
+        } catch (e) {
+          $('devMsg').className = 'msg err';
+          $('devMsg').textContent = e.message;
+        }
+      }, 300);
+    };
+    $('devBrand').onchange = () => { $('devSearch').value = ''; devPickBrand($('devBrand').value); };
+    $('devApply').onclick = () => {
+      const model = $('devModel').value;
+      if (!model) { $('devMsg').className = 'msg err'; $('devMsg').textContent = '先选一个机型'; return; }
+      devSave(model, $('devPlatformSel').value);
+    };
+    $('devClear').onclick = () => {
+      $('devMsg').textContent = '';
+      devSave(null);
+    };
+    devInit();
+  }
+
 function drawPreview(coords, fence, checkpoints) {
   if (!map) return;
   // 后端在手绘、操场、部分预览分支返回的是 `checkpoints: []`——空数组在 JS 里
@@ -1072,13 +1235,19 @@ function drawPreview(coords, fence, checkpoints) {
   if (coords && coords.length) {
     trackLayer = L.layerGroup();
     L.polyline(coords, { color: tok('--accent'), weight: 4, opacity: 0.9 }).addTo(trackLayer);
-    if ($('showTrack') && $('showTrack').checked) trackLayer.addTo(map);
+    // 生成成功就把线亮出来：这个复选框默认不勾，用户点完「生成轨迹」只看到
+    // 自检通过、地图上一片空白，会以为生成失败（#2 报的就是这个）。想隐藏
+    // 再取消勾选即可，下一次生成会重新亮。
+    const cbTrack = $('showTrack');
+    if (cbTrack && !cbTrack.checked) cbTrack.checked = true;
+    trackLayer.addTo(map);
   }
 
   // 打卡点
   if (cps && cps.length) {
     for (const c of cps) {
-      // 高德瓦片是 GCJ-02 网格，所以打点要用 gcjLat/gcjLng（/api/plan 两个
+    
+  // 高德瓦片是 GCJ-02 网格，所以打点要用 gcjLat/gcjLng（/api/plan 两个
       // 都给了：lat/lng 是 BD-09，gcjLat/gcjLng 是 GCJ-02）。字段名与有效性
       // 统一交给 coordOf，取不到有效坐标就跳过，不拿占位值往图上画。
       const ll = coordOf(c);

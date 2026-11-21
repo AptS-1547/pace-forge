@@ -83,6 +83,9 @@ impl DeviceProfile {
     pub(crate) fn for_account_in(base: &std::path::Path, scope: &str) -> Self {
         let device_id = persistent_device_id_in(base, scope);
         let mut d = Self { device_id: device_id.clone(), ..Self::base() };
+        // 账号级机型：设了就发 SoC 型号，没设仍然是 ABI（与历史行为一致）。
+        // device_id 不参与这次计算，所以换机型不会换设备。
+        d.cpu_model = resolve_cpu_model(device_model_in(base, scope).as_deref());
         d.fill_derived_identity(&device_id);
         d
     }
@@ -159,7 +162,7 @@ impl DeviceProfile {
             logic_pixel: "393x873".into(),
             is_root: "0".into(),
             os_type: "0".into(),
-            cpu_model: "arm64-v8a".into(),
+            cpu_model: crate::api::device_table::cpu_model_from_env(),
             device_name: "Android Device".into(),
             os_version: "13".into(),
             user_agent: "okhttp/4.12.0".into(),
@@ -203,6 +206,70 @@ pub fn uuid_v4() -> String {
 /// 文件——早期版本就是这么放的，改了会让所有老用户被判成新设备（10121）。
 ///
 /// **纯路径计算，不碰磁盘。** 测试用它把路径注入到一次性临时目录。
+/// 账号级机型配置文件：`<base>/.pace-forge-device-model-<hash>`，内容是
+/// model code（或平台代号）一行纯文本，空表示不指定（cpuModel 发 ABI）。
+///
+/// 为什么按账号而不是环境变量：`PACE_*` 是**进程级**的，Web 多账号会共用
+/// 同一个机型，等于所有账号同一台手机；而设备身份本来就该一账号一台。
+pub(crate) fn device_model_path_in(base: &std::path::Path, scope: &str) -> std::path::PathBuf {
+    let name = if scope.is_empty() {
+        ".pace-forge-device-model".to_string()
+    } else {
+        format!(".pace-forge-device-model-{}", short_hash(scope))
+    };
+    base.join(name)
+}
+
+/// 读账号级机型。没有配置文件、或文件里是空串都返回 `None`。
+pub(crate) fn device_model_in(base: &std::path::Path, scope: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(device_model_path_in(base, scope)).ok()?;
+    let t = raw.trim().to_string();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// 写账号级机型。`None` 或空串表示清掉（回到 ABI）。
+pub fn save_account_model(scope: &str, model: Option<&str>) -> Result<(), String> {
+    let base = crate::api::session::home_dir();
+    save_account_model_in(&base, scope, model)
+}
+
+pub(crate) fn save_account_model_in(
+    base: &std::path::Path,
+    scope: &str,
+    model: Option<&str>,
+) -> Result<(), String> {
+    let path = device_model_path_in(base, scope);
+    match model.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => crate::api::session::write_file_private(&path, m.as_bytes()),
+        None => match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("清机型配置失败 {}: {e}", path.display())),
+        },
+    }
+}
+
+/// 当前账号的机型配置（给 Web 界面显示用）。
+pub fn account_model(scope: &str) -> Option<String> {
+    device_model_in(&crate::api::session::home_dir(), scope)
+}
+
+/// 机型 code / 平台代号 → 实际发出去的 cpuModel。查不到就是 ABI。
+pub fn resolve_cpu_model(model: Option<&str>) -> String {
+    model
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .and_then(|m| {
+            crate::api::device_table::soc_for_model(m)
+                .or_else(|| crate::api::device_table::soc_for_platform(m).map(str::to_string))
+        })
+        .unwrap_or_else(|| crate::api::device_table::ABI_FALLBACK.to_string())
+}
+
 pub(crate) fn device_id_path_in(base: &std::path::Path, scope: &str) -> std::path::PathBuf {
     let name = if scope.is_empty() {
         ".pace-forge-device-id".to_string()
@@ -281,9 +348,9 @@ impl Client {
             device,
             creds: Credentials::default(),
             require_signature: false,
-            agent: ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_secs(20))
-                .build(),
+            // 提交链路统一从这里建 agent：设了 PACE_EGRESS_PROXY 就走代理，
+            // 没设与以前逐字节等价。见 api/egress.rs 顶部说明。
+            agent: crate::api::egress::agent(std::time::Duration::from_secs(20)),
         }
     }
 

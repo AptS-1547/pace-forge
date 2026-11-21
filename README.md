@@ -241,6 +241,22 @@ pace-forge dry 2 12      # 只走自检，不发任何写请求
 
 「明确驳回」才释放时间段：有业务错误码、能确定没入账的（`11016` 不在时段、`10003` 签名错误、`10603` 被限流等）。网络错误、HTTP 异常、响应看不懂一律**保留 pending**。
 
+## 出口代理
+
+人在外地、但有一条能回到学校同城的线路时，可以把提交链路走那条线路：
+
+```bash
+export PACE_EGRESS_PROXY=http://10.0.0.2:7890     # 只支持 http:// 的 CONNECT 代理
+export PACE_FORGE_TOKEN=...
+pace-forge web 0.0.0.0:9999
+```
+
+- 只有**提交链路**走这个出口，探测归属地仍直连，所以顶栏那行显示的是「代理的出口」；
+- 出口可以是本机直连、HTTP 代理，或自己搭的隧道；程序只负责把流量送过去；
+- 换出口后提交立即走新的，但同一个进程只有一个出口生效；
+- 没设就直连，行为和以前逐字节一致；值写错会打一行 `[egress]` 并按直连走（不静默）；
+- 归属地是否与校区同城由 `audit` 提示，不同城只提示、不拦提交。
+
 ## 违规名单自查
 
 提交成功不代表没被标记——很多判定是事后跑批判定的。服务端有 `POST /api/v78/cheat/cheatlist`，本项目把它接出来了：
@@ -319,9 +335,25 @@ android.hardware.bluetooth             蓝牙
 
 设备身份字段的口径，写在这里免得每个读代码的人都猜一遍：
 
-- `cpuModel` 发的是 ABI（`arm64-v8a`），不是 SoC 型号。真机这里是 `SM8550`
-  这类芯片名。本仓不做机型→SoC 表：没有真机截图佐证的映射就是编，编一个
-  比留 ABI 更像真的假。要改，先有带证据的机型表。
+- `cpuModel`：默认仍发 ABI（`arm64-v8a`）。要发 SoC 型号，设
+  `PACE_DEVICE_MODEL=<机型或平台代号>`，程序查 `data/devices.json`：
+  `platforms` 是平台代号 → SoC（`kalama` → `SM8550`，公开命名，已收 17 条），
+  `models` 是机型 code → 平台代号（**每条必须有出处**，出处为空的不采信，
+  当前为空表）。查不到就退回 ABI 并提示「未收录」——不编。
+  补表方法：`bash tools/collect_device.sh`（真机 adb 一条命令，输出可直接粘进
+  `models`），把 src 换成你的出处（截图/日期），`pace-forge devices` 可核对。
+  为什么只收有出处的：没有真机佐证的映射就是编，编一个比留 ABI 更像真的假。
+
+  网页里也能改：账号面板下面新增「设备机型」一节——搜 model code（`2211133C`）或
+  机型名（`Xiaomi 13`），选中后填平台代号（`kalama`）保存，`cpuModel` 立刻生效。
+  这份映射按账号落盘（`.pace-forge-device-model-<hash>`），机型→平台映射落在
+  `<数据目录>/device_models.json`，**只影响本机，不进仓库**。改机型不动 `device_id`。
+
+  另有一层**官方目录** `data/device_catalog.json`（Google Play 设备目录的中国品牌
+  子集，4565 条 model code → codename / 营销名 / 品牌，抓取日期见文件内 `fetched`）。
+  它只用来**认设备**：`PACE_DEVICE_MODEL=2211133C` 会显示「Xiaomi 13（fuxi）」，
+  手填错了会提示「目录未命中」。目录里没有芯片字段，所以它**不参与** SoC 判定——
+  从 codename 猜平台一样是编。重新生成：`python3 tools/import_play_catalog.py <csv>`。
 - 三个 MAC 首字节都是本地管理位（`0x02`），语义是「虚拟网卡」，不借任何厂商
   OUI。借前缀只是更像的假，不是真的。
 - IMEI 15 位、TAC 以 `86` 开头、末位 Luhn 校验，由 `device_id` 确定性派生，
@@ -406,6 +438,11 @@ pace-forge run 3 18 -y     # 加 -y 跳过确认
 
 # 只预演
 pace-forge dry 2 12
+
+# 账号体检：连续性/时段/离散/重合，命中只提示；suggest 多一段动作建议
+pace-forge audit records.json
+pace-forge suggest records.json
+pace-forge tracks records.json        # 两两重合矩阵，区分同向与反向
 
 # 跨记录自检：先导出（逐条拉详情取轨迹），再离线算
 pace-forge export-records 20 records.json
@@ -541,7 +578,7 @@ if report.blocked() {
 cargo test
 ```
 
-321 个单测，覆盖：
+461 个单测，覆盖：
 
 - KDF 三段函数（含黄金向量）
 - 信封与签名（含真实样本）
@@ -568,7 +605,7 @@ cargo test
 | 加解密 / 签名 | ✅ 真实接口实测通过 |
 | 极验求解 | ✅ 全本地，实测到密码校验 |
 | 登录 / 会话 | ✅ 含单设备冲突处理 |
-| 轨迹合成 | ✅ 321 单测 |
+| 轨迹合成 | ✅ 461 单测 |
 | 提交自检 | ✅ 八类 |
 | 策略 / 围栏 / 点位 / OBS | ✅ 接口实现完成 |
 | 完整提交 | ✅ `run` 命令已接入 |

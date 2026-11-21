@@ -116,6 +116,20 @@ const ENTRIES: &[Entry] = &[
         kind: Kind::Bool,
     },
     Entry {
+        name: "PACE_EGRESS_PROXY",
+        default: "未设置（直连）",
+        effect: "http://host:port。提交链路走这个出口，本机直连 / 代理 / 隧道都行；非法值只报一次并按直连走",
+        default_value: None,
+        kind: Kind::Str,
+    },
+    Entry {
+        name: "PACE_DEVICE_MODEL",
+        default: "未设置（cpuModel 发 ABI）",
+        effect: "机型 code 或平台代号。命中 data/devices.json 时 cpuModel 发 SoC 型号（SM8550），未收录仍发 ABI 并提示",
+        default_value: None,
+        kind: Kind::Str,
+    },
+    Entry {
         name: "PACE_FORGE_DATA_DIR",
         default: "未设置（$HOME/.pace-forge）",
         effect: "账号库、session、devices 的落盘根目录；设错就会「账号全没了」",

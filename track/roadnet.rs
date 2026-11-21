@@ -19,9 +19,18 @@ pub(crate) const OVERPASS_HOSTS: [&str; 3] = [
 
 /// 单个端点的超时。原来这里是 60~70 秒，再乘 3 个镜像、3 类查询（建筑、
 /// 水体、路网），国内网络打不开 Overpass 时一次生成能卡近十分钟——用户看到
-/// 的就是「点了生成，半天没反应」。校园 bbox 的查询正常几秒就回，10 秒足够，
-/// 超时直接换下一个端点。
-const HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// 的就是「点了生成，半天没反应」。校园 bbox 的查询正常几秒就回，6 秒足够。
+const HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// 竞速窗口：三个端点**同时**打，先回先用。
+///
+/// 之前是串行 for 循环，每个端点各等 `HOST_TIMEOUT`：全线不通时 3×10=30 秒
+/// 才进冷却，用户报的「8~9 秒超时」就是单端点在排队。并发之后总等待等于
+/// 最快的那个端点，不通时最坏也只有这一个窗口。
+///
+/// 窗口与单端点超时取同一个值：窗口结束后线程最多再活一个 `HOST_TIMEOUT`
+/// 就自行退出，不会在后台堆线程。
+const RACE_WINDOW: std::time::Duration = HOST_TIMEOUT;
 
 /// 三个端点全线失败后的冷却时长：这段时间内不再打 Overpass，直接走瓦片/几何。
 ///
@@ -43,7 +52,49 @@ fn cooling_at(now_ms: u64, down_at_ms: u64) -> bool {
     down_at_ms != 0 && now_ms.saturating_sub(down_at_ms) < DOWN_COOLDOWN_MS
 }
 
-/// 打 Overpass：短超时、轮询端点、全线失败后进入冷却。
+/// 打单个端点。
+fn post_one(host: &str, body: &str) -> Result<String, String> {
+    match ureq::post(host)
+        .set("User-Agent", "pace-forge/0.1 (route planning)")
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .timeout(HOST_TIMEOUT)
+        .send_string(body)
+    {
+        Ok(r) => match r.into_string() {
+            Ok(t) if t.contains("\"elements\"") => Ok(t),
+            Ok(_) => Err(format!("{host} 内容异常")),
+            Err(e) => Err(format!("{host} 读取失败: {e}")),
+        },
+        Err(e) => Err(format!("{host} 请求失败: {e}")),
+    }
+}
+
+/// 从竞速通道里取第一个成功结果，同时收集各端点的失败原因。
+///
+/// 只依赖 channel，不碰网络：测试里喂假结果就能覆盖「先到即用」「全失败」
+/// 「窗口内一个都没回」三种情形。
+fn select_first_ok(
+    rx: &std::sync::mpsc::Receiver<(usize, Result<String, String>)>,
+    window: std::time::Duration,
+) -> (Option<String>, Vec<String>) {
+    let deadline = std::time::Instant::now() + window;
+    let mut errs = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(left) {
+            Ok((_idx, Ok(text))) => return (Some(text), errs),
+            Ok((_idx, Err(e))) => errs.push(e),
+            // 超时，或者所有发送端都已退出（小概率：端点比窗口先全挂）
+            Err(_) => break,
+        }
+    }
+    (None, errs)
+}
+
+/// 打 Overpass：并发竞速、窗口超时、全线失败后进入冷却。
 fn overpass_post(body: &str, what: &str) -> Result<String, String> {
     if cooling_at(
         now_ms_u64(),
@@ -54,24 +105,28 @@ fn overpass_post(body: &str, what: &str) -> Result<String, String> {
             DOWN_COOLDOWN_MS / 60_000
         ));
     }
-    let mut last_err = String::new();
-    for host in OVERPASS_HOSTS {
-        match ureq::post(host)
-            .set("User-Agent", "pace-forge/0.1 (route planning)")
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .timeout(HOST_TIMEOUT)
-            .send_string(body)
-        {
-            Ok(r) => match r.into_string() {
-                Ok(t) if t.contains("\"elements\"") => return Ok(t),
-                Ok(_) => last_err = format!("{host} 内容异常"),
-                Err(e) => last_err = format!("{host} 读取失败: {e}"),
-            },
-            Err(e) => last_err = format!("{host} 请求失败: {e}"),
-        }
+    let (tx, rx) = std::sync::mpsc::channel();
+    for (idx, host) in OVERPASS_HOSTS.iter().enumerate() {
+        let tx = tx.clone();
+        let host = *host;
+        let body = body.to_string();
+        // 不 join：窗口一到就返回，慢端点自行超时退出（最长再等 HOST_TIMEOUT）。
+        std::thread::spawn(move || {
+            let _ = tx.send((idx, post_one(host, &body)));
+        });
+    }
+    drop(tx);
+
+    let (ok, errs) = select_first_ok(&rx, RACE_WINDOW);
+    if let Some(text) = ok {
+        return Ok(text);
     }
     DOWN_AT_MS.store(now_ms_u64(), std::sync::atomic::Ordering::Relaxed);
-    Err(format!("所有 Overpass 端点都失败（{what}，最后一次: {last_err}）"))
+    let last = errs.last().cloned().unwrap_or_else(|| "窗口内没有端点返回".into());
+    Err(format!(
+        "所有 Overpass 端点都失败（{what}，并发竞速 {}s，最后一次: {last}）",
+        RACE_WINDOW.as_secs()
+    ))
 }
 
 /// 打算走的路类型。excluding motorway/trunk：校园里没有，且人不能跑。
@@ -813,6 +868,46 @@ mod tests {
             !cooling_at(t, t - DOWN_COOLDOWN_MS),
             "到点解冻，重新给 Overpass 机会"
         );
+    }
+
+    /// 竞速：一个端点先回成功，即使前面有失败也不等其余端点。
+    #[test]
+    fn race_returns_first_success_without_waiting() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send((0, Err("主站 502".to_string()))).unwrap();
+        tx.send((1, Ok("{\"elements\":[]}".to_string()))).unwrap();
+        // 故意不 drop(tx)：还有一个「慢端点」没回，竞速不能等它。
+        let t0 = std::time::Instant::now();
+        let (ok, errs) = select_first_ok(&rx, std::time::Duration::from_secs(5));
+        drop(tx);
+        assert!(ok.expect("应取到成功结果").contains("elements"));
+        assert_eq!(errs.len(), 1, "失败原因要一并收集: {errs:?}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "不该等到窗口结束");
+    }
+
+    /// 竞速：窗口内没有任何成功，返回空并保留失败原因。
+    #[test]
+    fn race_collects_errors_when_all_fail() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send((0, Err("a 超时".to_string()))).unwrap();
+        tx.send((1, Err("b 502".to_string()))).unwrap();
+        tx.send((2, Err("c 内容异常".to_string()))).unwrap();
+        drop(tx);
+        let (ok, errs) = select_first_ok(&rx, std::time::Duration::from_secs(1));
+        assert!(ok.is_none());
+        assert_eq!(errs.len(), 3);
+        assert_eq!(errs.last().unwrap(), "c 内容异常");
+    }
+
+    /// 竞速：窗口到期一个结果都没有，要按时退出，不能死等。
+    #[test]
+    fn race_times_out_at_window() {
+        let (_tx, rx) = std::sync::mpsc::channel::<(usize, Result<String, String>)>();
+        let t0 = std::time::Instant::now();
+        let (ok, errs) = select_first_ok(&rx, std::time::Duration::from_millis(120));
+        assert!(ok.is_none() && errs.is_empty());
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(110));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "窗口就是上限");
     }
 
     fn l_shape_net() -> RoadNet {

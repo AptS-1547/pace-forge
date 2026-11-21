@@ -40,8 +40,41 @@ impl State {
     }
 
     /// 从磁盘恢复所有账号的登录态。
+    ///
+    /// 两条来源都要看：登录成功时会写 `session.json`，但 `accounts.json` 里那一
+    /// 条不一定已经跟上（uid/token 为空）。只看 book 的话，重启一次就掉登录，
+    /// 用户得重新过一次极验——而 session.json 里明明有完整 token。
     fn restore() -> Self {
-        let book = crate::api::accounts::load();
+        let mut book = crate::api::accounts::load();
+        let sess = crate::api::session::load_session();
+        if !sess.uid.is_empty() && !sess.token.is_empty() {
+            let matched = book
+                .accounts
+                .iter_mut()
+                .find(|a| a.id == sess.uid || (!a.username.is_empty() && a.name == sess.name));
+            if let Some(a) = matched {
+                if !a.logged_in() {
+                    a.uid = sess.uid.clone();
+                    a.token = sess.token.clone();
+                    a.unid = sess.unid.clone();
+                }
+            } else {
+                // 账号库里没有对应条目（旧版本只存了 session），补一条，密码留空
+                book.accounts.push(crate::api::accounts::Account {
+                    id: sess.uid.clone(),
+                    username: sess.username.clone(),
+                    password_enc: String::new(),
+                    uid: sess.uid.clone(),
+                    token: sess.token.clone(),
+                    unid: sess.unid.clone(),
+                    name: sess.name.clone(),
+                    school: sess.campus_name.clone(),
+                    last_login_ms: 0,
+                    last_submit_ms: 0,
+                    enabled: true,
+                });
+            }
+        }
         let mut clients = std::collections::HashMap::new();
         for a in &book.accounts {
             if a.logged_in() {
@@ -57,6 +90,37 @@ impl State {
             println!("[web] 恢复 {} 个账号，当前={id}", clients.len());
         }
         Self { book, clients, current }
+    }
+
+    /// 改了设备字段（机型）之后重建这个账号的 client：下一次请求就带新 cpuModel。
+    ///
+    /// 只重建 clients 里的条目，不动 book 里的凭据——设备字段和登录态是两回事。
+    fn rebuild_client(&mut self, uid: &str) {
+        let found = self
+            .book
+            .accounts
+            .iter()
+            .find(|a| a.id == uid || a.username == uid)
+            .map(|a| (a.id.clone(), a.uid.clone(), a.token.clone(), a.unid.clone()));
+        if let Some((id, u, t, un)) = found {
+            self.clients.insert(id, make_client(&u, &t, &un));
+        }
+    }
+
+    /// 全部账号重建 client（改出口后调用）。返回重建个数。
+    fn rebuild_all_clients(&mut self) -> usize {
+        let list: Vec<(String, String, String, String)> = self
+            .book
+            .accounts
+            .iter()
+            .map(|a| (a.id.clone(), a.uid.clone(), a.token.clone(), a.unid.clone()))
+            .collect();
+        let mut n = 0;
+        for (id, u, t, un) in list {
+            self.clients.insert(id, make_client(&u, &t, &un));
+            n += 1;
+        }
+        n
     }
 
     /// 当前账号。
@@ -511,6 +575,21 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Get, "/api/fences") => handle_fences(request, state, &query),
         (Method::Get, "/api/points") => handle_points(request, state, &query),
         (Method::Get, "/api/records") => handle_records(request, state, &query),
+        (Method::Post, "/api/egress") => {
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
+            handle_egress_put(request, state, &body)
+        }
+        (Method::Get, "/api/device") => handle_device_get(request, state, &query),
+        (Method::Post, "/api/device") => {
+            let body = match read_json(&mut request) {
+                Ok(v) => v,
+                Err(e) => return json_err_code(request, 400, &e),
+            };
+            handle_device_put(request, state, &body)
+        }
         (Method::Get, "/api/cheat") => handle_cheat(request, state, &query),
         (Method::Get, "/api/blockers") => handle_blockers_get(request),
         (Method::Post, "/api/blockers") => {
@@ -544,7 +623,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             handle_raw(request, state, &body)
         }
         (Method::Get, "/api/health") => json_ok(request, json!({"ok": true, "version": crate::VERSION})),
-        // 出口 IP 自检（#10）：显示提交时服务端用的公网 IP，不伪造、不选路。
+        // 出口 IP 自检（#10）：显示提交时服务端用的公网 IP，并标出是否走了代理。
         // 探测失败返回 ok:false，前端显示「出口未知」，不阻塞任何功能。
         (Method::Get, "/api/egress-ip") => {
             json_ok(request, crate::api::egress::cached_json())
@@ -1086,9 +1165,7 @@ fn handle_plan(
     }))
 }
 
-
 // ---------- 记分跑：学期进度 ----------
-
 
 // ---------- 账号管理 ----------
 
@@ -1508,7 +1585,6 @@ fn handle_batch(
         "results": results,
     }))
 }
-
 
 // ---------- 补跑时刻 ----------
 
@@ -2027,6 +2103,151 @@ fn handle_run(
 /// 但记录列表带了 uuid 和 startTime，拼出 objectKey 就能直接从 OBS 取。
 /// App 自己走不走这条路还没定论，见 docs/notes/TRAJECTORY-DISPLAY.md。
 /// 读本地手绘禁区。
+/// 保存出口配置。改完要重建所有 client——agent 是建 client 时创建的，
+/// 不重建的话新出口要到下次重启才生效。
+fn handle_egress_put(
+    request: tiny_http::Request,
+    state: Shared,
+    body: &Value,
+) -> Result<(), String> {
+    use crate::api::egress;
+    let spec = body["proxy"].as_str().map(str::trim).filter(|p| !p.is_empty());
+    if let Err(e) = egress::save_proxy(spec) {
+        return json_err(request, &e);
+    }
+    let n = {
+        let mut st = lock_state(&state);
+        st.rebuild_all_clients()
+    };
+    json_ok(
+        request,
+        json!({
+            "proxy": egress::current_proxy(),
+            "desc": egress::proxy_description(),
+            "rebuilt": n,
+            "note": if spec.is_some() {
+                "已保存，提交链路下一次请求起走这个出口"
+            } else {
+                "已清除，回到直连"
+            },
+        }),
+    )
+}
+
+/// 当前账号的机型配置（`?q=` 有值时顺带搜官方目录）。
+fn handle_device_get(request: tiny_http::Request, state: Shared, query: &str) -> Result<(), String> {
+    use crate::api::{client, device_table};
+    let (scope, cur_model) = {
+        let st = lock_state(&state);
+        match st.current_account() {
+            Some(a) => (device_scope(&a.id), client::account_model(&device_scope(&a.id))),
+            None => (String::new(), None),
+        }
+    };
+    let cpu = client::resolve_cpu_model(cur_model.as_deref());
+    let hit = cur_model
+        .as_deref()
+        .and_then(device_table::catalog_lookup)
+        .map(|e| {
+            json!({
+                "name": e.name, "brand": e.brand, "codename": e.codename
+            })
+        });
+    let mut out = json!({
+        "scope": scope,
+        "model": cur_model,
+        "cpuModel": cpu,
+        "abiFallback": cpu == device_table::ABI_FALLBACK,
+        "catalogHit": hit,
+        "devices": device_table::catalog().len(),
+    });
+    // 三种查询：?brand= 取该品牌机型；?q= 关键词搜；都没有就列品牌 + 平台。
+    let q = query_param(query, "q").unwrap_or_default();
+    let brand = query_param(query, "brand").unwrap_or_default();
+    let list = if !brand.trim().is_empty() {
+        device_table::models_of_brand(&brand, 300)
+    } else if q.trim().is_empty() {
+        Vec::new()
+    } else {
+        device_table::search_catalog(&q, 12)
+    };
+    let found: Vec<Value> = list
+        .into_iter()
+        .map(|(code, e)| {
+            json!({"model": code, "name": e.name, "brand": e.brand, "codename": e.codename})
+        })
+        .collect();
+    out["results"] = json!(found);
+    if brand.trim().is_empty() && q.trim().is_empty() {
+        let brands: Vec<Value> = device_table::brands()
+            .into_iter()
+            .map(|(name, count)| json!({"name": name, "count": count}))
+            .collect();
+        let platforms: Vec<Value> = device_table::platforms()
+            .into_iter()
+            .map(|(code, soc, name, vendor)| {
+                json!({"code": code, "soc": soc, "name": name, "vendor": vendor})
+            })
+            .collect();
+        out["brands"] = json!(brands);
+        out["platforms"] = json!(platforms);
+        out["suggested"] = json!(device_table::suggested(9)
+            .into_iter()
+            .map(|(code, e)| json!({"model": code, "name": e.name, "brand": e.brand}))
+            .collect::<Vec<_>>());
+    }
+    json_ok(request, out)
+}
+
+/// 设置当前账号的机型。`model` 为空/null 表示清掉（回到 ABI）。
+fn handle_device_put(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
+    use crate::api::client;
+    let scope = {
+        let st = lock_state(&state);
+        match st.current_account() {
+            Some(a) => device_scope(&a.id),
+            None => return json_err(request, "请先登录再设置机型"),
+        }
+    };
+    let model = body["model"].as_str().map(str::trim).filter(|m| !m.is_empty());
+    if let Some(m) = model {
+        if m.len() > 64 || m.chars().any(|c| c.is_control()) {
+            return json_err(request, "机型 code 不合法（最长 64，不能含控制字符）");
+        }
+    }
+    // 给了平台代号就顺手记一条用户级映射（内置表查不到 SoC 时用得上）
+    if let (Some(m), Some(plat)) = (
+        model,
+        body["platform"].as_str().map(str::trim).filter(|p| !p.is_empty()),
+    ) {
+        if let Err(e) = crate::api::device_table::set_user_model(m, plat) {
+            return json_err(request, &e);
+        }
+    }
+    if let Err(e) = client::save_account_model(&scope, model) {
+        return json_err(request, &e);
+    }
+    // 重建当前 client，让新的 cpuModel 立刻生效（下一次请求就是新机型）
+    {
+        let mut st = lock_state(&state);
+        st.rebuild_client(&scope);
+    }
+    let cpu = client::resolve_cpu_model(model);
+    let hit = model.and_then(crate::api::device_table::catalog_lookup).map(|e| {
+        json!({"name": e.name, "brand": e.brand, "codename": e.codename})
+    });
+    json_ok(
+        request,
+        json!({
+            "model": model,
+            "cpuModel": cpu,
+            "abiFallback": cpu == crate::api::device_table::ABI_FALLBACK,
+            "catalogHit": hit,
+            "note": "只改 cpuModel，不改 device_id；已生效到下一次请求"
+        }),
+    )
+}
+
 fn handle_blockers_get(request: tiny_http::Request) -> Result<(), String> {
     let polys = crate::track::roadnet::load_local_blockers();
     json_ok(
@@ -2285,7 +2506,7 @@ fn query_param(query: &str, key: &str) -> Option<String> {
         let mut it = pair.splitn(2, '=');
         let k = it.next()?;
         if k == key {
-            it.next().map(|v| v.to_string())
+            it.next().map(url_decode)
         } else {
             None
         }
@@ -2575,6 +2796,23 @@ mod origin_tests {
         assert!(!origin_matches_host(Some("https://evil.example"), Some("127.0.0.1:9999")));
         // 有 Origin 却没有 Host —— 不认
         assert!(!origin_matches_host(Some("http://127.0.0.1:9999"), None));
+    }
+}
+
+#[cfg(test)]
+mod url_decode_tests {
+    use super::url_decode;
+
+    #[test]
+    fn decodes_space_plus_and_percent() {
+        assert_eq!(url_decode("xiaomi%2013"), "xiaomi 13");
+        assert_eq!(url_decode("xiaomi+13"), "xiaomi 13");
+        assert_eq!(url_decode("2211133C"), "2211133C");
+        // 中文（UTF-8 多字节）
+        assert_eq!(url_decode("%E5%B0%8F%E7%B1%B3"), "小米");
+        // 坏的转义原样留着，不 panic
+        assert_eq!(url_decode("100%"), "100%");
+        assert_eq!(url_decode("%zz"), "%zz");
     }
 }
 

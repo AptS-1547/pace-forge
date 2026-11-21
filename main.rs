@@ -142,7 +142,11 @@ fn main() {
             stadium_probe(laps, lane);
         }
         "config" => pace_forge::config::print_table(),
+        "devices" => print!("{}", pace_forge::api::device_table::report()),
         "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
+        "audit" => do_audit(false, args.get(1).map(|s| s.as_str())),
+        "suggest" => do_audit(true, args.get(1).map(|s| s.as_str())),
+        "tracks" => do_tracks(args.get(1).map(|s| s.as_str())),
         "export-records" => do_export_records(&args[1..]),
         "version" | "-V" | "--version" => {
             println!("pace-forge {}", pace_forge::VERSION);
@@ -160,8 +164,12 @@ fn main() {
             println!("  pace-forge rand [km] [min] [--days N]       补跑：当天 7-20 点随机时刻");
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
             println!("  pace-forge config              列出全部 PACE_* 开关与当前取值");
+            println!("  pace-forge devices             机型/SoC 表：内容、当前 cpuModel、怎么补表");
             println!("  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合");
             println!("  pace-forge export-records [N] [out.json]  导出最近 N 条记录（含轨迹）给 crosscheck");
+            println!("  pace-forge audit <json>        账号体检：连续性/时段/离散/重合，命中只提示");
+            println!("  pace-forge suggest <json>      同上，再加一段「下一条怎么跑」的动作建议");
+            println!("  pace-forge tracks <json>       两两重合矩阵，区分同向与反向");
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
@@ -446,6 +454,149 @@ fn do_logout() {
 
 /// 违规名单自查。提交成功不代表没被标记——跑批判定是事后做的。
 /// 跨记录自检：读一份记录 JSON，打印横向指标。纯离线，不登录。
+/// 读 `export-records` 的产物给 audit/suggest/tracks 用。
+///
+/// 三条命令的输入形状一样，解析和报错也应当一样——抽出来免得三份各写一遍，
+/// 日后改字段别名要改三处。
+fn read_audit_records(
+    file: Option<&str>,
+    usage: &str,
+) -> Vec<pace_forge::api::crosscheck::RunRecord> {
+    use pace_forge::api::crosscheck as cc;
+    let Some(path) = file else {
+        eprintln!("用法: {usage}\n文件可以是 JSON 数组，也可以是 {{\"records\":[...]}}，（`pace-forge export-records` 导出的就是后者）。");
+        std::process::exit(2);
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("读不到 {path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{path} 不是合法 JSON: {e}");
+            std::process::exit(1);
+        }
+    };
+    let records = cc::parse_records(&v);
+    if records.is_empty() {
+        eprintln!("没读到记录：需要至少有 startTime（或 beginTime）和 totalDis（或 distance）。");
+        std::process::exit(1);
+    }
+    records
+}
+
+/// `audit` / `suggest` 共用：前者只打发现，后者多打一段动作建议。
+fn do_audit(with_suggestions: bool, file: Option<&str>) {
+    use pace_forge::api::audit;
+    use pace_forge::api::crosscheck as cc;
+
+    let usage = if with_suggestions {
+        "pace-forge suggest <records.json>"
+    } else {
+        "pace-forge audit <records.json>"
+    };
+    let records = read_audit_records(file, usage);
+    let m = audit::metrics(&records);
+
+    println!("[时区] {}", m.tz_desc);
+    println!("[记录] {} 条，跨 {} 天", m.count, m.span_days);
+    println!("[连续] 最长 {} 天，当前一段 {} 天", m.streak_best, m.streak_cur);
+    println!(
+        "[起跑时刻] 最集中 {:02}:00，占 {:.0}%",
+        m.hour,
+        m.hour_share * 100.0
+    );
+    println!("[里程] 均值 {:.0}m，离散 {:.1}%", m.dist_mean, m.dist_cv * 100.0);
+    println!(
+        "[配速] 均值 {}/km，离散 {:.1}%",
+        cc::format_pace(m.pace_mean),
+        m.pace_cv * 100.0
+    );
+    match m.overlap {
+        Some((a, b, ov)) => {
+            let tail = if m.reversed.map(|(ri, rj, _)| (ri, rj)) == Some((a, b)) {
+                "（反向，真人行为）"
+            } else {
+                "（同向）"
+            };
+            println!(
+                "[重合] 第 {} 条 vs 第 {} 条 {:.0}%{tail}（{:.0}m 缓冲，不含时间对齐）",
+                a + 1,
+                b + 1,
+                ov * 100.0,
+                cc::OVERLAP_RADIUS_M
+            );
+        }
+        None => println!("[重合] 带轨迹的记录不足两条，算不了"),
+    }
+
+    let found = audit::findings(&m);
+    println!();
+    if found.is_empty() {
+        println!("[发现] 没有命中阈值。");
+    } else {
+        for f in &found {
+            let tag = match f.level {
+                audit::Level::Warn => "!",
+                audit::Level::Info => "·",
+            };
+            println!("{tag} [{}] {}", f.code, f.text);
+        }
+    }
+
+    if with_suggestions {
+        println!();
+        println!("[建议]");
+        for (i, s) in audit::suggestions(&m, &found).iter().enumerate() {
+            println!("  {}. {s}", i + 1);
+        }
+    }
+    println!("\n阈值是经验值不是协议规则：命中只说明「审核的人会先看这条」，不代表会被判异常。");
+    println!("检查码 `AUDIT_*` 与 preflight 的 `PACE_*` 不是一套东西，别混。");
+}
+
+/// `tracks`：两两重合矩阵。同向同线是复制特征，反向是真人行为，分开列。
+fn do_tracks(file: Option<&str>) {
+    use pace_forge::api::audit;
+    use pace_forge::api::crosscheck as cc;
+
+    let records = read_audit_records(file, "pace-forge tracks <records.json>");
+    let pairs = audit::overlap_pairs(&records, cc::OVERLAP_RADIUS_M);
+    let with_track = records.iter().filter(|r| r.track.len() >= 2).count();
+
+    println!("[时区] {}", cc::tz_description());
+    println!(
+        "[重合] {} 条记录，其中 {} 条带轨迹（{:.0}m 缓冲，仅空间形状）",
+        records.len(),
+        with_track,
+        cc::OVERLAP_RADIUS_M
+    );
+    if pairs.is_empty() {
+        println!("带轨迹的记录不足两条，没有可比的对。");
+        return;
+    }
+    println!();
+    println!("  #a  #b    重合度  方向");
+    for (i, j, ov, rev) in &pairs {
+        let flag = if *rev { "反向（正常）" } else { "同向" };
+        println!("  {:>2}  {:>2}   {:>6.1}%  {flag}", i + 1, j + 1, ov * 100.0);
+    }
+    let cloned = pairs.iter().filter(|(_, _, ov, rev)| *ov >= audit::OVERLAP_WARN && !*rev).count();
+    println!();
+    if cloned > 0 {
+        println!(
+            "! [AUDIT_OVERLAP] 有 {cloned} 对同向重合 ≥ {:.0}%，建议下一条换方向或换线。",
+            audit::OVERLAP_WARN * 100.0
+        );
+    } else {
+        println!("没发现同向高重合的对。");
+    }
+}
+
 fn do_crosscheck(file: Option<&str>) {
     use pace_forge::api::crosscheck as cc;
     let Some(path) = file else {
