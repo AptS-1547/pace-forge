@@ -269,6 +269,41 @@ pub fn findings(m: &Metrics) -> Vec<Finding> {
     out
 }
 
+/// 解析 `tracks` 的子命令参数：`[records.json] [--top N]`。
+///
+/// 参数写错必须报错，不能当成「没写」——`--top abc` 静默回落会打出全部
+/// 4950 对，和 v0.1.9 立的规矩相反（写错与没写后果差得远，见 #23）。
+///
+/// 放在 lib 里而不是 `main.rs`：CI 跑的是 `cargo test --lib`，写在 main 里
+/// 的测试不会被执行。
+pub fn parse_tracks_args(args: &[String]) -> Result<(Option<String>, Option<usize>), String> {
+    let mut file: Option<String> = None;
+    let mut top: Option<usize> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--top" => {
+                let v = it.next().ok_or("--top 缺少次数，例如 --top 20")?;
+                let n: usize = v
+                    .parse()
+                    .map_err(|_| format!("--top 不是整数：「{v}」"))?;
+                if !(1..=5000).contains(&n) {
+                    return Err(format!("--top 需在 1..5000 之间，收到 {n}"));
+                }
+                top = Some(n);
+            }
+            s if s.starts_with("--") => return Err(format!("未知参数：{s}")),
+            s => {
+                if file.is_some() {
+                    return Err(format!("多余的参数：{s}（只接一个记录文件）"));
+                }
+                file = Some(s.to_string());
+            }
+        }
+    }
+    Ok((file, top))
+}
+
 /// 把发现翻成动作。每条都指向「下一条记录怎么跑」，不是抽象建议。
 pub fn suggestions(m: &Metrics, found: &[Finding]) -> Vec<String> {
     let mut out = Vec::new();
@@ -467,6 +502,37 @@ mod tests {
         // 没有命中时也要给一句，不能空手回去
         let clean = suggestions(&metrics(&[]), &[]);
         assert!(!clean.is_empty());
+    }
+
+    #[test]
+    fn tracks_args_accept_valid_forms() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_tracks_args(&args(&[])).unwrap(), (None, None));
+        assert_eq!(
+            parse_tracks_args(&args(&["rec.json"])).unwrap(),
+            (Some("rec.json".to_string()), None)
+        );
+        assert_eq!(
+            parse_tracks_args(&args(&["rec.json", "--top", "20"])).unwrap(),
+            (Some("rec.json".to_string()), Some(20))
+        );
+        // 顺序反过来也要认
+        assert_eq!(
+            parse_tracks_args(&args(&["--top", "3", "rec.json"])).unwrap(),
+            (Some("rec.json".to_string()), Some(3))
+        );
+    }
+
+    /// 写错要报错，不能静默变成「没写」。
+    #[test]
+    fn tracks_args_reject_bad_values() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(parse_tracks_args(&args(&["rec.json", "--top"])).is_err(), "缺值");
+        assert!(parse_tracks_args(&args(&["rec.json", "--top", "abc"])).is_err(), "非整数");
+        assert!(parse_tracks_args(&args(&["rec.json", "--top", "0"])).is_err(), "下界");
+        assert!(parse_tracks_args(&args(&["rec.json", "--top", "99999"])).is_err(), "上界");
+        assert!(parse_tracks_args(&args(&["--bogus", "rec.json"])).is_err(), "未知参数");
+        assert!(parse_tracks_args(&args(&["a.json", "b.json"])).is_err(), "多余文件");
     }
 
     #[test]
