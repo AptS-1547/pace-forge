@@ -340,7 +340,17 @@ pub fn suggestions(m: &Metrics, found: &[Finding]) -> Vec<String> {
     if out.is_empty() {
         out.push("这几条指标没到阈值，照现在的节奏跑就行；阈值只是经验值，不是协议规则。".into());
     }
-    out.push("出口 IP 那条另看：`pace-forge audit` 不探网络，顶栏那行才代表提交时的真实出口。".into());
+    // 出口：这是三个风控维度里唯一能当场查的（时段/频率要靠自己记）。
+    // 不联网，只读配置——`audit` 是离线命令，探测留给顶栏。
+    match crate::api::egress::current_proxy() {
+        Some(p) => out.push(format!(
+            "提交走代理出口（{p}）——它的归属地必须和校区同城，不同城就别跑；确认一次，别每次都赌。"
+        )),
+        None => out.push(
+            "提交走本机网络——开 `pace-forge web` 看顶栏那行出口 IP，不在校区同城就先换网络再跑。"
+                .into(),
+        ),
+    }
     out
 }
 
@@ -499,6 +509,11 @@ mod tests {
         assert!(!s.iter().any(|x| x.contains("{}")), "冒出了未填充的占位符: {s:?}");
         assert!(s.iter().any(|x| x.contains("换方向")), "{s:?}");
         assert!(s.iter().any(|x| x.contains("里程按")), "{s:?}");
+        // 出口那条无论配没配代理都要给（这是三个风控维度里唯一能当场查的）
+        assert!(
+            s.iter().any(|x| x.contains("出口")),
+            "suggest 必须提示出口：{s:?}"
+        );
         // 没有命中时也要给一句，不能空手回去
         let clean = suggestions(&metrics(&[]), &[]);
         assert!(!clean.is_empty());
