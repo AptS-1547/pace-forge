@@ -260,7 +260,12 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
             let idx = nearest_index(&flat, (cp.lat, cp.lng));
             let gap = distance(flat[idx], (cp.lat, cp.lng));
             if gap <= req.sample_step_m * 2.0 + 1.0 {
-                nudge_to(&mut flat, idx, (cp.lat, cp.lng), 2);
+                // 过渡半径要给够：吸附位移可能有十几米，spread=2 时只覆盖
+                // ±2 个采样点（约 10m），相邻点被强行拽走 → 轨迹在点位处出现
+                // 一个尖角。App/服务端看图就不认这个「经过」。
+                // 放到 6（±30m）让位移按 1/(k+1) 摊平，形状是绕过点位而不是
+                // 折过去。
+                nudge_to(&mut flat, idx, (cp.lat, cp.lng), 6);
                 anchor_idx.push(idx);
             } else {
                 // 采样点离打卡点太远，说明规划路径没真正经过它 —— 宁可报错也不伪造
