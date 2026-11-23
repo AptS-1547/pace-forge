@@ -280,7 +280,7 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
     // 存成 blockers.json；这里对所有走 planner 的路径（Web 预览、CLI、兜底）
     // 统一生效，跟 flow::build 里那条路保持一致。
     let blockers = crate::track::roadnet::load_local_blockers();
-    let (flat, times) = if blockers.is_empty() || flat.len() < 3 {
+    let (mut flat, times) = if blockers.is_empty() || flat.len() < 3 {
         (flat, times)
     } else {
         let before_len = crate::track::geo::path_length(&flat);
@@ -302,6 +302,17 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
             (avoided, times)
         }
     };
+
+    // 最后再钉一次终点。
+    //
+    // 上面第 6 步的 `avoid_blockers` 会**插点**（绕楼），插完末点就不再是
+    // 我们 push 进去的终点了——实测偏出去 565m，App 里看就是「没跑到终点」。
+    // 放在这里（所有后处理之后、转 TrackPoint 之前）才真正锁得住。
+    if let Some(e) = req.end {
+        if let Some(last) = flat.last_mut() {
+            *last = e;
+        }
+    }
 
     let points: Vec<TrackPoint> = flat
         .iter()

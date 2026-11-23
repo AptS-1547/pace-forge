@@ -1057,7 +1057,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             checkpoints: cps.clone(),
             actual_length_m: actual,
         }
-    } else if fence_ring.len() >= 3 {
+    } else if fence_ring.len() >= 3 && p.end.is_none() {
+        // 终点由下面的 `plan()` 收尾：围栏内规划是「沿边界内缩 + 蛇形填充」，
+        // 收尾直接接回起点，没有「停在某个点」的概念。指定终点时改走 plan，
+        // 它会把末点钉在终点上。
         log(&format!(
             "[track] 围栏内规划 {}m，{} 个必经点…",
             p.distance_m,
