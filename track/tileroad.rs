@@ -964,7 +964,7 @@ pub fn route_through_ex(
             }
             // 别选远超剩余量的点：排除终点区域后候选变少，选太远的一下
             // 就把里程冲过头（实测目标 2000 跑出 2663）。
-            if d > need * 1.2 {
+            if d > need {
                 continue;
             }
             // 选最接近剩余里程的。这里不设偏差上限——路网就这么大，
@@ -977,7 +977,7 @@ pub fn route_through_ex(
             }
         }
         let Some((_, m)) = pick else { break };
-        let Some(tail) = astar_penalized(g, last, m, &used, 4.0, &HashSet::new()) else {
+        let Some(tail) = astar_penalized(g, last, m, &used, 25.0, &HashSet::new()) else {
             break;
         };
         for w in tail.windows(2) {
