@@ -2597,6 +2597,28 @@ pub fn run_full(
                     log("√ [verify] 这一条服务端认可：无作弊标记、无扣量、规则全达标");
                 } else {
                     log(&format!("! [verify] 服务端有意见：{}", bad.join("；")));
+                    // 把「哪条规则没过」映射成「下一步改什么」。
+                    // 没有映射时不硬猜——服务端文案会变，猜错比不说更糟。
+                    let text = bad.join(" ");
+                    let mut tips: Vec<&str> = Vec::new();
+                    if text.contains("配速") {
+                        tips.push("配速不达标：调时长或距离，让平均配速落进区间（reasonList 里写了范围）");
+                    }
+                    if text.contains("步频") {
+                        tips.push("步频不达标：检查 sportType 与步数设置，服务端按每分钟步数判");
+                    }
+                    if text.contains("点位") || text.contains("打卡") {
+                        tips.push("点位没全过：把锚点挪开、换一条路线，或看 [fixed-point] 那行的下标");
+                    }
+                    if text.contains("最少要跑") || text.contains("分钟") {
+                        tips.push("距离/时长不够：目标值要是服务端下发的最低要求，别自己往下调");
+                    }
+                    if text.contains("作弊") || text.contains("扣") {
+                        tips.push("被扣量/判作弊：这一条已经记进违规计数，先停手查 [cheat] 与设备环境");
+                    }
+                    for t in tips {
+                        log(&format!("    → {t}"));
+                    }
                 }
             }
             Err(e) => log(&format!("[verify] 回读失败（记录已提交，不影响成绩）: {e}")),
