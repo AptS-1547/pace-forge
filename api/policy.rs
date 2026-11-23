@@ -45,6 +45,12 @@ pub struct PolicyInfo {
     pub step_range: Option<(i64, i64)>,
     /// 最短有效时长（秒）。服务端 `minRunTime`。
     pub min_run_time: i64,
+    /// 跑步冻结截止时间（毫秒戳）。`0` = 未冻结。
+    ///
+    /// 服务端在 `runRuleModel.freezeRunTime` 里下发；> 当前时间说明账号处于
+    /// 「跑步冻结」期，App 里连开始按钮都是倒计时的。冻结期提交只会往违规
+    /// 名单里再加一条。依据：Nyx4 探测报告 §10.2（`runModePolicy.freezeRunTime`）。
+    pub freeze_run_time: i64,
 }
 
 /// 从 policy 响应里取字段，兼容 `data` 包一层和直接平铺两种情况。
@@ -83,6 +89,12 @@ pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
         pace_range,
         step_range: parse_steo_range(&rule),
         min_run_time: rule.get("minRunTime").and_then(|t| t.as_i64()).unwrap_or(0),
+        freeze_run_time: rule
+            .get("freezeRunTime")
+            .and_then(|t| t.as_i64())
+            // 有的版本放在顶层
+            .or_else(|| get_field(biz, "freezeRunTime").and_then(|t| t.as_i64()))
+            .unwrap_or(0),
     })
 }
 
@@ -277,6 +289,7 @@ pub fn fallback_policy() -> PolicyInfo {
         // 兜底按实测下发值：记分跑 stepTop=250 / stepBottom=60
         step_range: Some((60, 250)),
         min_run_time: 0,
+        freeze_run_time: 0,
     }
 }
 

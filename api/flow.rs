@@ -2027,6 +2027,24 @@ pub fn run_full(
     //
     // 都只做「明确异常才拦」：查询失败按未知放行并打日志，不能因为一个
     // 只读接口挂了就让人跑不了步。
+    // 跑步冻结：`freezeRunTime > 现在` 就别提交，冻结期提交等于自己往名单里加条。
+    {
+        let freeze = out.policy.freeze_run_time;
+        let now = crate::crypto::envelope::now_ms() as i64;
+        if freeze > now {
+            let left = (freeze - now) / 1000;
+            return Err(format!(
+                "账号处于跑步冻结期，还剩 {left} 秒（至 {}）：冻结期提交会被再记一次违规。\n    等解冻后再跑，或用 App 里的申诉通道。",
+                freeze / 1000
+            ));
+        }
+        if freeze > 0 {
+            log(&format!("√ [freeze] 无冻结（上次冻结已于 {} 结束）", freeze / 1000));
+        } else {
+            log("√ [freeze] 无冻结");
+        }
+    }
+
     {
         use crate::api::cheat::Status;
         match crate::api::cheat::query(client, 1, &mut |l| log(l)) {
