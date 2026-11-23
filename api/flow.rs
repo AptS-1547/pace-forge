@@ -73,6 +73,8 @@ pub struct RunParams {
     /// 用户清楚哪栋楼在哪，手画比算法猜靠谱——尤其 OSM 在该校区
     /// 零建筑数据、几何规划只能凭直线连点的时候。
     pub custom_path: Option<Vec<(f64, f64)>>,
+    /// 终点（可选）：给了就让轨迹收在这里，而不是绕回起点。
+    pub end: Option<(f64, f64)>,
     /// 是否尝试「按打卡点反推操场」。
     ///
     /// 控制台有「自动规划 / 操场绕圈」两个选项，这里必须如实反映用户选的那个：
@@ -585,6 +587,7 @@ impl Default for RunParams {
             prefer_roads: true,
             start_at_ms: None,
             custom_path: None,
+            end: None,
             alt_range: None,
             prefer_stadium: true,
         }
@@ -1279,6 +1282,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             start_ms,
             sport_type: p.sport_type,
             sample_step_m: p.sample_step_m,
+            end: p.end,
         };
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });

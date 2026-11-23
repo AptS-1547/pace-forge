@@ -599,6 +599,7 @@ mod tests {
             start_ms: 1_730_000_000_000,
             sport_type: 1,
             sample_step_m: 5.0,
+            end: None,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(1);
         use rand::SeedableRng;
