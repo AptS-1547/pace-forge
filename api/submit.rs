@@ -362,7 +362,15 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
                 "position": hits[i].map(|h| h as i64).unwrap_or(rank as i64),
                 "flag": flag_ms,
                 "id": FIXED_POINT_ID_BASE + rank as i64,
-                "isPass": hits[i].is_some(),
+                // `isPass` **恒发 true**：它是给 App 详情页画绿点用的，
+                // 服务端不认这个字段——它自己从轨迹判「有没有经过」
+                // （实测 reasonList 里那条「经过必经点位」就是它自己算的，
+                // 与我们的 isPass 无关）。
+                //
+                // 早先按 `hits[i].is_some()`（严格 10m 命中）发，于是起点/灰点
+                // 占掉采样点的那一个必然 false → App 画橙。同类实现
+                // Inverx/com.zjwh.android_wh_physicalfitness（★317）也是恒 true。
+                "isPass": true,
                 "state": 0,
             })
         })
