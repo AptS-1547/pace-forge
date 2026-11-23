@@ -2391,8 +2391,28 @@ pub fn run_full(
                         bad.push(format!("validDis={v:.0}m < totalDis={t:.0}m（被扣了 {:.0}m）", t - v));
                     }
                 }
+                // 记录状态：服务端把分类写在这里（App 记录列表的标签就来自它）。
+                // 0=正常；其余按探测报告的状态枚举解释，未知值原样显示。
+                let st = d.get("status").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let st_label = match st {
+                    0 => "正常",
+                    1 => "作弊",
+                    2 => "未打卡（点位）",
+                    3 => "未上传",
+                    4 => "配速过快",
+                    5 => "步频过慢",
+                    _ => "未知",
+                };
+                if let Some(info) = d.get("statusInfo").and_then(|v| v.as_str()) {
+                    if !info.is_empty() {
+                        log(&format!("  · 判定文案：{info}"));
+                    }
+                }
+                if st != 0 {
+                    bad.push(format!("status={st}（{st_label}）"));
+                }
                 log(&format!(
-                    "√ [verify] 服务端判定：isCheat={cheat} stepFreqStatus={step_st} validDis={}/{}",
+                    "√ [verify] 服务端判定：status={st}({st_label}) isCheat={cheat} stepFreqStatus={step_st} validDis={}/{}",
                     vd.map(|x| format!("{x:.0}m")).unwrap_or_else(|| "?".into()),
                     td.map(|x| format!("{x:.0}m")).unwrap_or_else(|| "?".into())
                 ));
