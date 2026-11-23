@@ -1687,15 +1687,40 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 后来口径分了流（见 submit::PointTypeScheme）：带必到点的跑法才撒
     // `type=2`，没有必到点的跑法不发。数标记就不再可靠，改成直接数必到点
     // 数组，不依赖采样点 `type` 的口径。
-    let n_fixed = probe_sub
+    let fp_items: Vec<Value> = probe_sub
         .save_record
         .get("fivePointJson")
         .and_then(|v| v.as_str())
         .and_then(|x| serde_json::from_str::<Value>(x).ok())
         .and_then(|v| v.get("fivePointJson").cloned())
         .and_then(|v| v.as_str().and_then(|x| serde_json::from_str::<Vec<Value>>(x).ok()))
-        .map(|v| v.len())
-        .unwrap_or(0);
+        .unwrap_or_default();
+    let n_fixed = fp_items.len();
+
+    // isPass 必须全 true —— App 详情页就按它画绿点。
+    //
+    // 少一个就少画一个绿点（4 绿 1 橙）。成因通常是：起点(`type=7`) 或起步
+    // 窗口的灰点(`type=-1`) 把某个必到点 10m 命中圈里唯一的采样点占掉了，
+    // `type=2` 还能靠 Relaxed 兜到圈外，但 `isPass` 用的是严格 10m，于是 false。
+    //
+    // 这种记录发出去等于白跑一次（App 里那个点是橙的），所以拦在本地。
+    let not_passed: Vec<String> = fp_items
+        .iter()
+        .filter(|p| p.get("isPass").and_then(|v| v.as_bool()) == Some(false))
+        .map(|p| {
+            p.get("pointName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(未命名)")
+                .to_string()
+        })
+        .collect();
+    if !not_passed.is_empty() {
+        return Err(format!(
+            "有 {} 个必到点是 isPass=false：{}。\n    App 详情页会显示成橙点，这次打卡等于没算。\n    成因通常是起点或起步窗口的采样点占掉了该点位 10m 内唯一的采样点。\n    处理：把「纬度/经度」锚点挪到离这些点位 20m 以外再跑，或者换一个场地。",
+            not_passed.len(),
+            not_passed.join("、")
+        ));
+    }
     if !fixed.is_empty() && n_fixed != fixed.len() {
         return Err(format!(
             "自检点位里必到点数量对不上（报文 {n_fixed} 个，应有 {} 个）：probe 的 fixed 传空了？",
