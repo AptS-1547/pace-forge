@@ -2140,7 +2140,15 @@ pub fn run_full(
                         .and_then(|x| x.as_i64())
                         .or_else(|| r.get("startTime").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok()))
                         .unwrap_or(0);
-                    if day_key_of(st) == today {
+                    // startTime 可能是秒也可能是毫秒（服务端两种都见过）。
+                    // 按数量级判断：小于 1e11 当秒处理，乘 1000——之前直接按
+                    // 毫秒算，结果全落到 1970 年，日上限永远显示 0m。
+                    let st_ms = if st > 0 && st < 100_000_000_000 {
+                        st * 1000
+                    } else {
+                        st
+                    };
+                    if day_key_of(st_ms) == today {
                         done += r
                             .get("totalDis")
                             .and_then(|x| x.as_f64())
