@@ -920,7 +920,17 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 不走这条：打卡点围成长方形是常见布局（教学楼四角、宿舍区），几何判据
     // 会把它认成跑道，然后在不是操场的地方画椭圆。
     let mut stadium_fallback = false;
-    let oval: Option<Vec<(f64, f64)>> = if should_try_stadium(p.run_mode, p.prefer_stadium) {
+    let want_stadium = should_try_stadium(p.run_mode, p.prefer_stadium);
+    // 指定了终点就别绕操场：操场是「按圈长铺满里程」的固定闭环，跑完自然回到
+    // 起点，没有收在某个点的说法。硬要收尾只能从环上拉一条直线过去，那是跳变。
+    // 所以这里的优先级是：**终点 > 操场**，并把原因写进日志。
+    let oval: Option<Vec<(f64, f64)>> = if want_stadium && p.end.is_some() {
+        let (elat, elng) = p.end.unwrap();
+        log(&format!(
+            "[track] 指定了终点（{elat:.6},{elng:.6}），跳过操场绕圈——操场是按圈长铺满的固定闭环，收不到终点"
+        ));
+        None
+    } else if want_stadium {
         let seed0 = if p.seed != 0 { p.seed } else { start_ms as u64 };
         let got = try_stadium_track(&cps, p.distance_m, p.sample_step_m, seed0, log);
         stadium_fallback = got.is_none();
@@ -1289,6 +1299,22 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         let _ = &mut rng;
         plan(&req, &mut rng)?
     };
+    // 指定了终点就核对一下末点：planner 里已经钉住了，但 flow 后面还有
+    // 避让/采样/吸附几道处理，任何一道都可能把末点挪开。这里的日志是给
+    // 「App 里没跑到终点」这类反馈用的第一手证据。
+    if let Some((elat, elng)) = p.end {
+        if let Some(last) = track.points.last() {
+            let d = crate::track::geo::distance((last.lat, last.lon), (elat, elng));
+            log(&format!(
+                "[track] 终点核对：末点 ({:.6},{:.6}) 与设定终点 ({elat:.6},{elng:.6}) 相距 {d:.1}m",
+                last.lat, last.lon
+            ));
+            if d > 30.0 {
+                log("! [track] 末点没落在设定终点上：后续避让/吸附把它挪开了，检查 blockers 是否盖住终点");
+            }
+        }
+    }
+
     log(&format!(
         "√ [track] {} 点，实测 {:.1}m（目标 {:.0}m，偏差 {:.2}%）",
         track.points.len(),
