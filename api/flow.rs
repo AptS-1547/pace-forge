@@ -2308,6 +2308,64 @@ pub fn run_full(
         SILENCE_SEC
     ));
 
+    // ⑩ 回读服务端判定。
+    //
+    // 服务端把裁定结果写在记录详情里：`isCheat`（作弊标志）、`stepFreqStatus`
+    // （步频判定）、`validDis`（服务端算的有效距离）、`reasonList`（逐条规则
+    // 的裁定）。这是唯一能确认「这一单到底算不算成绩」的依据——本地自检再
+    // 全也只是猜。只读，失败不影响已经入账的记录。
+    //
+    // 参考：黑盒探测报告里 get_one_record 返回 53 字段，reason 文案形如
+    // 「最少要跑2.00公里」「配速有效范围」。
+    if let Some(rrid) = out.record_id {
+        match super::records::get_record(client, rrid) {
+            Ok(d) => {
+                let num = |k: &str| d.get(k).and_then(|v| v.as_f64());
+                let cheat = d.get("isCheat").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let step_st = d.get("stepFreqStatus").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let vd = num("validDis");
+                let td = num("totalDis");
+                let mut bad: Vec<String> = Vec::new();
+                if cheat != 0 {
+                    bad.push(format!("isCheat={cheat}（被判作弊）"));
+                }
+                if step_st != 0 {
+                    bad.push(format!("stepFreqStatus={step_st}（步频异常）"));
+                }
+                if let (Some(v), Some(t)) = (vd, td) {
+                    if t > 0.0 && v + 1.0 < t {
+                        bad.push(format!("validDis={v:.0}m < totalDis={t:.0}m（被扣了 {:.0}m）", t - v));
+                    }
+                }
+                log(&format!(
+                    "√ [verify] 服务端判定：isCheat={cheat} stepFreqStatus={step_st} validDis={}/{}",
+                    vd.map(|x| format!("{x:.0}m")).unwrap_or_else(|| "?".into()),
+                    td.map(|x| format!("{x:.0}m")).unwrap_or_else(|| "?".into())
+                ));
+                if let Some(list) = d.get("reasonList").and_then(|v| v.as_array()) {
+                    for r in list {
+                        let ok = r.get("complete").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let reason = r.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+                        log(&format!(
+                            "  · {} {}",
+                            if ok { "✓" } else { "✗" },
+                            reason
+                        ));
+                        if !ok {
+                            bad.push(format!("规则未达标：{reason}"));
+                        }
+                    }
+                }
+                if bad.is_empty() {
+                    log("√ [verify] 这一条服务端认可：无作弊标记、无扣量、规则全达标");
+                } else {
+                    log(&format!("! [verify] 服务端有意见：{}", bad.join("；")));
+                }
+            }
+            Err(e) => log(&format!("[verify] 回读失败（记录已提交，不影响成绩）: {e}")),
+        }
+    }
+
     Ok(out)
 }
 
