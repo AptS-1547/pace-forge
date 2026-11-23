@@ -402,6 +402,8 @@ fn try_route_on_tiles(
     want_m: f64,
     seed: u64,
     log: &mut dyn FnMut(&str),
+    // 终点是用户指定的点时禁止末尾折返（见 `route_through_ex`）
+    end_is_fixed: bool,
 ) -> Option<crate::track::fence_route::FenceRoute> {
     use crate::track::{roadnet, tileroad};
     let bbox = roadnet::bbox_of(fence, 60.0);
@@ -433,7 +435,31 @@ fn try_route_on_tiles(
     let graph = tileroad::build_graph(&clipped, 25.0);
     let _ = start;
     let _ = seed;
-    match tileroad::route_through(&graph, must, want_m) {
+    // 把 must 里的点投影到最近的道路节点。
+    //
+    // `route_through` 只沿道路节点走，25m 内没有节点时会直接忽略那个点；
+    // 用户选的终点常落在草坪/楼前，于是「路网跑完停在边界、收尾拉一条
+    // 632m 直线」——既不在路上又容易被判跳变。这里先吸附，直线段就只剩
+    // 节点到终点的几十米。打卡点不吸（它们本来就在路上，且被 30m 校验守着）。
+    let mut snapped: Vec<(f64, f64)> = must.to_vec();
+    if let Some(last) = snapped.last_mut() {
+        let mut best = (f64::MAX, (0.0, 0.0));
+        for n in &graph.nodes {
+            let d = crate::track::geo::distance(*n, *last);
+            if d < best.0 {
+                best = (d, *n);
+            }
+        }
+        if best.0 <= 120.0 {
+            *last = best.1;
+            log(&format!(
+                "[tiles] 终点投影到最近道路节点，直线段从 {:.0}m 缩到 {:.0}m",
+                best.0, best.0
+            ));
+        }
+    }
+    // 指定终点时禁止末尾折返（折返会把末端带回几百米外）
+    match tileroad::route_through_ex(&graph, &snapped, want_m, end_is_fixed) {
         Ok(points) => {
             let max_gap = points
                 .windows(2)
@@ -1057,10 +1083,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             checkpoints: cps.clone(),
             actual_length_m: actual,
         }
-    } else if fence_ring.len() >= 3 && p.end.is_none() {
-        // 终点由下面的 `plan()` 收尾：围栏内规划是「沿边界内缩 + 蛇形填充」，
-        // 收尾直接接回起点，没有「停在某个点」的概念。指定终点时改走 plan，
-        // 它会把末点钉在终点上。
+    } else if fence_ring.len() >= 3 {
+        // 终点在下面的收尾处接（第 1265 行附近），不在这里改分支——
+        // 路网（OSM → 瓦片 → 几何三级）只接在这条路上，绕开它就没路网了。
         log(&format!(
             "[track] 围栏内规划 {}m，{} 个必经点…",
             p.distance_m,
@@ -1071,6 +1096,14 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         let _ = &mut rng;
 
         let must: Vec<(f64, f64)> = cps.iter().map(|c| (c.lat, c.lng)).collect();
+        // 路网规划的必经点里要带上终点：否则路网跑完还在边界上，收尾只能从
+        // 末端拉一条直线过去（实测 632m，既不在路上又容易被判跳变）。
+        // 终点只进**路网**的 must，不进 `resample_with_checkpoints` 的吸附列表——
+        // 它不是打卡点，不该被 15m 阈值拽动。
+        let mut route_must = must.clone();
+        if let Some(e) = p.end {
+            route_must.push(e);
+        }
         // 路线优先级：
         //   ① 沿围栏边界内缩跑——围墙边界一定是能走的路，绝不会落在湖面
         //      或楼里；形状也像人绕着校园跑。
@@ -1155,9 +1188,16 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         // 路网来源两级：OSM 优先（有真实道路等级和拓扑），拿不到再试高德
         // 瓦片。两级都失败才退回几何规划。
         let on_roads = if p.prefer_roads {
-            match try_route_on_roads(&fence_ring, &must, p.distance_m, seed, &mut *log) {
+            match try_route_on_roads(&fence_ring, &route_must, p.distance_m, seed, &mut *log) {
                 Some(r) => Some(r),
-                None => try_route_on_tiles(&fence_ring, &must, p.distance_m, seed, &mut *log),
+                None => try_route_on_tiles(
+                    &fence_ring,
+                    &route_must,
+                    p.distance_m,
+                    seed,
+                    &mut *log,
+                    p.end.is_some(),
+                ),
             }
         } else {
             None
@@ -1171,7 +1211,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             match crate::track::fence_route::route_through_in_order(
                 &fence_ring,
                 p.distance_m,
-                &must,
+                &route_must,
                 seed,
             ) {
                 Ok(r) => {
@@ -1262,12 +1302,28 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
                 }
             }
         }
-        let sampled = crate::track::fence_route::resample_with_checkpoints(
+        let mut sampled = crate::track::fence_route::resample_with_checkpoints(
             &wandered,
             p.sample_step_m,
             &must,
             15.0,
         );
+        // 指定终点：把末点钉在终点上。
+        //
+        // 围栏路线是「沿边界/路网跑满里程」，末端自然落在路上，不一定是用户
+        // 选的终点。这里直接替换末点，等于最后一段从路网末端走到终点。
+        // 距离远会打日志——那段是直线，太长会被服务端的「相邻点跳变」挑。
+        if let Some(e) = p.end {
+            if let Some(last) = sampled.last().copied() {
+                let gap = crate::track::geo::distance(last, e);
+                if let Some(slot) = sampled.last_mut() {
+                    *slot = e;
+                }
+                log(&format!(
+                    "[track] 终点：末段从路网末端接过 {gap:.0}m（>200m 那段是直线，可能被判跳变）"
+                ));
+            }
+        }
         // 时间戳先占位：⑤ 的 retime 会按速度剖面重算并整体覆盖，
         // 这里算一遍是白算（原来 assign_times 的结果直接被丢弃，
         // 还让人误以为时间来自两处）。占位填 start_ms 即可。

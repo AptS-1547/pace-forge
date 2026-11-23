@@ -835,6 +835,20 @@ pub fn route_through(
     must: &[(f64, f64)],
     want_m: f64,
 ) -> Result<Vec<(f64, f64)>, String> {
+    route_through_ex(g, must, want_m, false)
+}
+
+/// 同上，但可以**禁止末尾折返**。
+///
+/// `fix_end = true` 时，里程不够也不再「原路往回走一段」——因为用户指定了
+/// 终点，那段折返会把末端带回几百米外，终点就白设了。代价是实际里程可能
+/// 短于目标（少掉折返那部分），由调用方决定接不接受。
+pub fn route_through_ex(
+    g: &RoadGraph,
+    must: &[(f64, f64)],
+    want_m: f64,
+    fix_end: bool,
+) -> Result<Vec<(f64, f64)>, String> {
     if must.len() < 2 {
         return Err("至少要两个点".into());
     }
@@ -862,7 +876,17 @@ pub fn route_through(
     // 闭环回到起点是「来回跑」的根：5 个点跨度 500m、目标 2000m，回程
     // 1400m 无论怎么绕都要用主干道，实测重复率 47%，闭环比开放路径差
     // 一大截。真实跑步里跑完停在别处本来也常见。
-    for i in 0..must.len() - 1 {
+    // `fix_end` 时终点不参与「凑里程」：先把 must[..n-1] 连起来、绕够里程，
+    // 最后再单独 A* 走一段到终点。否则凑里程的 while 循环会把终点变成中途点，
+    // 收尾仍然要拉几百米直线（实测 583m）。
+    // fix_end 时主循环只连到倒数第二个必到点：终点必须留到最后一段，
+    // 否则「到达终点后还要继续凑里程」又会把它变成中途点。
+    let connect_end = if fix_end && must.len() >= 2 {
+        must.len() - 2
+    } else {
+        must.len() - 1
+    };
+    for i in 0..connect_end {
         let a = g.nearest(must[i]);
         let b = g.nearest(must[i + 1]);
 
@@ -914,6 +938,11 @@ pub fn route_through(
     let all_zones: HashSet<usize> = zones.iter().flatten().copied().collect();
     let mut total: f64 = path_len(g, &path);
     let mut hops = 0;
+    let end_zone: HashSet<usize> = if fix_end {
+        zones.last().cloned().unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
     while total < want_m - 150.0 && hops < 5 {
         hops += 1;
         let last = *path.last().unwrap();
@@ -925,7 +954,17 @@ pub fn route_through(
             if all_zones.contains(&m) || m == last {
                 continue;
             }
+            // fix_end：凑里程时不能钻进终点周围，否则最后一段又从终点
+            // 折回来，收尾还是要拉直线
+            if end_zone.contains(&m) {
+                continue;
+            }
             if !d.is_finite() || d < 120.0 {
+                continue;
+            }
+            // 别选远超剩余量的点：排除终点区域后候选变少，选太远的一下
+            // 就把里程冲过头（实测目标 2000 跑出 2663）。
+            if d > need * 1.2 {
                 continue;
             }
             // 选最接近剩余里程的。这里不设偏差上限——路网就这么大，
@@ -948,9 +987,22 @@ pub fn route_through(
         total = path_len(g, &path);
     }
 
+    // fix_end：最后单独走一段到终点（前面所有凑里程都在它之前完成）。
+    if fix_end && must.len() >= 2 {
+        let a = *path.last().unwrap();
+        let b = g.nearest(*must.last().unwrap());
+        if a != b {
+            if let Some(seg) = astar(g, a, b) {
+                path.extend(seg.into_iter().skip(1));
+            } else {
+                return Err("最后一段到终点的路网不连通".into());
+            }
+        }
+    }
+
     // 还差一截就从终点原路折返。折返只重复缺口的一半，重复率大约是
     // 缺口的 1/4，比按圈重复整圈好得多。
-    if total < want_m {
+    if total < want_m && !fix_end {
         let need = want_m - total;
         let mut acc = 0.0;
         let mut cut = path.len().saturating_sub(1);
