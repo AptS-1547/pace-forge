@@ -293,6 +293,27 @@ pub fn fallback_policy() -> PolicyInfo {
     }
 }
 
+/// 本月是否被抽中「信用分核验」。
+///
+/// 服务端每月随机抽检，命中时 App 会弹支付宝芝麻信用的核验页；不完成核验
+/// 那条记录的成绩会判不达标。这里是只读查询（`taskType=1` 是「跑步」域），
+/// 只用来提前提醒——自动化没法替真人做核验。
+///
+/// 依据：Nyx4 探测报告 §四.1（「每月随机核验」= 支付宝信用分，接口
+/// `creditscore/v70390/popup`，返回 `{needPopup: bool}`）。
+pub fn monthly_verify_needed(client: &Client) -> Result<bool, String> {
+    let raw = client.request(
+        "GET",
+        &format!("{}/api/v70390/creditscore/popup?taskType=1", hosts::RUN),
+        None,
+    )?;
+    let v = expect_ok(&raw)?;
+    Ok(v.get("data")
+        .and_then(|d| d.get("needPopup"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false))
+}
+
 /// 默认按校园跑拉策略。
 pub fn fetch_policy(client: &Client) -> Result<PolicyInfo, String> {
     fetch_policy_for(client, 1)

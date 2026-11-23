@@ -2027,6 +2027,16 @@ pub fn run_full(
     //
     // 都只做「明确异常才拦」：查询失败按未知放行并打日志，不能因为一个
     // 只读接口挂了就让人跑不了步。
+    // 月度抽检：命中就要真人做支付宝信用分核验，自动化替不了。
+    // 只提醒不拦——核验在提交之后做，拦住了反而让人没法跑完再看。
+    match crate::api::policy::monthly_verify_needed(client) {
+        Ok(true) => log(
+            "! [verify] 本月被抽中信用分核验：跑完要去 App 里做支付宝核验，\n    不做的话这条成绩可能判不达标（自动化替不了）",
+        ),
+        Ok(false) => log("√ [verify] 本月未被抽中核验"),
+        Err(e) => log(&format!("[verify] 核验状态查询失败（不影响提交）: {e}")),
+    }
+
     // 跑步冻结：`freezeRunTime > 现在` 就别提交，冻结期提交等于自己往名单里加条。
     {
         let freeze = out.policy.freeze_run_time;
