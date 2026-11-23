@@ -2025,6 +2025,71 @@ pub fn body_pace_note(
     ))
 }
 
+/// 本机今天的日期键 `YYYY-MM-DD`（东八区）。
+fn local_day_key() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    day_key_of(secs * 1000)
+}
+
+/// 毫秒戳 → 东八区日期键 `YYYY-MM-DD`。
+fn day_key_of(ms: i64) -> String {
+    let days = (ms / 1000 + 8 * 3600) / 86400;
+    // 从 1970-01-01 起算的民用历
+    let (mut y, mut d) = (1970i64, days);
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let len = if leap { 366 } else { 365 };
+        if d >= len {
+            d -= len;
+            y += 1;
+        } else {
+            break;
+        }
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let md = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1usize;
+    for (i, &len) in md.iter().enumerate() {
+        if d < len {
+            month = i + 1;
+            break;
+        }
+        d -= len;
+    }
+    format!("{y:04}-{month:02}-{:02}", d + 1)
+}
+
+#[cfg(test)]
+mod day_key_tests {
+    use super::day_key_of;
+
+    #[test]
+    fn epoch_is_1970_01_01() {
+        assert_eq!(day_key_of(0), "1970-01-01");
+    }
+
+    #[test]
+    fn leap_day_is_handled() {
+        // 2020-02-29 12:00 UTC = 东八区 20:00
+        let ms = 1_582_977_600_000i64; // 2020-02-29T12:00:00Z
+        assert_eq!(day_key_of(ms), "2020-02-29");
+        // 2021-02-28T00:00:00Z → 东八区 08:00，仍是 28 日（非闰年没有 29 日）
+        let ms2 = 1_614_499_200_000i64;
+        assert_eq!(day_key_of(ms2), "2021-02-28");
+    }
+
+    #[test]
+    fn ignores_utc_vs_local_but_uses_plus8() {
+        // 2026-11-23T15:30:00Z = 东八区 23:30 → 仍是 23 日
+        let ms = 1_795_447_800_000i64;
+        assert_eq!(day_key_of(ms), "2026-11-23");
+    }
+}
+
 /// 本机当前时间 `HH:MM:SS`（本地时区）。
 fn local_hms() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2060,6 +2125,44 @@ pub fn run_full(
     //
     // 都只做「明确异常才拦」：查询失败按未知放行并打日志，不能因为一个
     // 只读接口挂了就让人跑不了步。
+    // 日上限：多数学校 5000m/天（`maleDayUpper`/`femaleDayUpper`）。超了
+    // 服务端不一定会拒，但那条记录的有效里程会被截——白跑一趟。
+    // 只提示不拦：上限因校而异，且「今天已经跑过多少」以服务端列表为准，
+    // 拿不到就不判断。
+    match super::records::list_records(client, 1, 30, 1) {
+        Ok(v) => {
+            let today = local_day_key();
+            let mut done = 0.0f64;
+            if let Some(arr) = v.as_array() {
+                for r in arr {
+                    let st = r
+                        .get("startTime")
+                        .and_then(|x| x.as_i64())
+                        .or_else(|| r.get("startTime").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok()))
+                        .unwrap_or(0);
+                    if day_key_of(st) == today {
+                        done += r
+                            .get("totalDis")
+                            .and_then(|x| x.as_f64())
+                            .unwrap_or(0.0);
+                    }
+                }
+            }
+            let after = done + p.distance_m;
+            log(&format!(
+                "[quota] 今日已跑 {done:.0}m，本次 {:.0}m，合计 {after:.0}m（常见日上限 5000m）",
+                p.distance_m
+            ));
+            if after > 5000.0 {
+                log(&format!(
+                    "! [quota] 超出常见日上限（5000m）{}m：超出部分可能不计入有效里程",
+                    (after - 5000.0).round()
+                ));
+            }
+        }
+        Err(e) => log(&format!("[quota] 今日记录查询失败（不判断日上限）: {e}")),
+    }
+
     // 有效时段：服务端窗口外直接回 11016，本地先看一眼能省一次白跑。
     // 时段按学校下发（randomValidTimes），拿不到就不判断。
     match crate::api::policy::valid_time_window(client) {
