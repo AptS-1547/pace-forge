@@ -3216,7 +3216,6 @@ mod audit_tests {
             .collect()
     }
 
-    #[test]
     /// 提交体三个字节级字段：真机脱壳确认的形态，别改回去。
     ///
     /// 依据：JustLikeCheese fork `3616b217`/`b974617e`（7.4.20 真 dex 脱壳，
@@ -3245,6 +3244,7 @@ mod audit_tests {
         );
     }
 
+    #[test]
     fn audit_passes_on_freshly_built_body() {
         let p = params();
         let t = track();
