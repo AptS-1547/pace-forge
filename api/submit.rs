@@ -1571,34 +1571,19 @@ pub fn build_points(
     let scheme = point_type_scheme(!fixed.is_empty());
     // 这些下标会被 `type` 赋成 7/6/5/-1（起点、终点、第二个点、起步灰点），
     // 全部排在 `type=2` 之前。打卡点若落在这里就标不出标记，App 少画一个点。
-    let mut reserved: std::collections::HashSet<usize> = std::iter::once(0)
+    let reserved: std::collections::HashSet<usize> = std::iter::once(0)
         .chain(std::iter::once(1))
         .chain(std::iter::once(track.len().saturating_sub(1)))
         .chain(0..startup.min(track.len()))
         .collect();
-    // 必到点优先拿采样下标。
+    // **不要**把起步窗口的采样点让给必到点。
     //
-    // 起步窗口（前 ~90 秒）的点会被标成灰点 `type=-1`，它们全排在 `type=2`
-    // 之前。必到点如果正好落在这个窗口里，10m 圈内唯一的采样点就被灰点占了，
-    // 标记只能落到几十米外——实测「秋实城东南」44m、「教学楼湖拐点」45m，
-    // App 详情页于是把那两个点画成橙色。
+    // 试过一版（dd15c1c）：把「必到点 10m 内最近的采样点」从保留集里放开，
+    // 想让落在这个窗口里的必到点也能标上 type=2。结果是 App 从 5 绿变 4 绿 1 橙
+    // ——起点附近轨迹还没真正经过那个点，硬标一个 type=2 在那里，服务端/App
+    // 反而不认。回退后恢复正常（20:02 那条 5 绿就是回退前的行为）。
     //
-    // 这里把「必到点 10m 内最近的采样点」从保留集里放开，让 `type=2` 标得上。
-    // 起点(0) 和终点(末点) **不让**：服务端要它们分别是 `type=7` / `type=6`。
-    for f in fixed.iter() {
-        let mut best: Option<(usize, f64)> = None;
-        for (i, p) in track.iter().enumerate() {
-            let d = crate::track::geo::distance((p.lat, p.lon), (f.lat, f.lon));
-            if d < FIXED_POINT_HIT_M && best.map(|(_, bd)| d < bd).unwrap_or(true) {
-                best = Some((i, d));
-            }
-        }
-        if let Some((i, _)) = best {
-            if i != 0 && i + 1 != track.len() {
-                reserved.remove(&i);
-            }
-        }
-    }
+    // 真正该做的是「生成时让轨迹经过」，不是「在这里挪标记」。
     // 每个必到点的匹配结果（避开上面的保留下标）。用带结果的结构而不是
     // 光秃秃的下标数组：没命中的点也占一位，下面配 fixed[i] 才不会错位。
     let cp_marks = match_checkpoints(
