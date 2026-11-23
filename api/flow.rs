@@ -2018,6 +2018,32 @@ pub fn run_full(
     // 前七步与 dry_run 完全一致
     let mut out = dry_run(client, p, log)?;
 
+    // ❼.4 提交前两道闸门：被标记、被冻结，都不该继续。
+    //
+    // 这两件事一旦发生，继续提交只会往名单里再加一条：
+    // - cheatlist 的 `self` 非 null = 已被标记（很多判定是事后跑批做的，
+    //   「提交成功」不代表干净）
+    // - `freezeRunTime > 0` = 跑步冻结期，App 里连开始按钮都是倒计时的
+    //
+    // 都只做「明确异常才拦」：查询失败按未知放行并打日志，不能因为一个
+    // 只读接口挂了就让人跑不了步。
+    {
+        use crate::api::cheat::Status;
+        match crate::api::cheat::query(client, 1, &mut |l| log(l)) {
+            Ok(rep) => match rep.status() {
+                Status::Flagged => {
+                    return Err(format!(
+                        "服务端已把当前账号标记为违规（{}）：先处理，别继续提交。详见 [cheat] 那几行",
+                        rep.summary()
+                    ));
+                }
+                Status::NoRecord => log("√ [cheat] 违规名单自查：当前账号无记录"),
+                s => log(&format!("[cheat] 自查结果未知（{}），按放行处理", s.label())),
+            },
+            Err(e) => log(&format!("[cheat] 自查失败（不影响提交）: {e}")),
+        }
+    }
+
     if out.report.blocked() {
         return Err(format!("自检未通过，不提交：{}", out.report.summary()));
     }
