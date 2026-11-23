@@ -925,10 +925,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 起点，没有收在某个点的说法。硬要收尾只能从环上拉一条直线过去，那是跳变。
     // 所以这里的优先级是：**终点 > 操场**，并把原因写进日志。
     let oval: Option<Vec<(f64, f64)>> = if want_stadium && p.end.is_some() {
-        let (elat, elng) = p.end.unwrap();
-        log(&format!(
-            "[track] 指定了终点（{elat:.6},{elng:.6}），跳过操场绕圈——操场是按圈长铺满的固定闭环，收不到终点"
-        ));
+        if let Some((elat, elng)) = p.end {
+            log(&format!(
+                "[track] 指定了终点（{elat:.6},{elng:.6}），跳过操场绕圈——操场是按圈长铺满的固定闭环，收不到终点"
+            ));
+        }
         None
     } else if want_stadium {
         let seed0 = if p.seed != 0 { p.seed } else { start_ms as u64 };
