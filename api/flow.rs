@@ -2009,6 +2009,23 @@ pub fn body_pace_note(
     ))
 }
 
+/// 本机当前时间 `HH:MM:SS`（本地时区）。
+fn local_hms() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // 本机时区偏移：东八区用固定 +8（项目其余地方同样按 +8 处理日期）
+    let local = (secs + 8 * 3600) % 86400;
+    format!(
+        "{:02}:{:02}:{:02}",
+        local / 3600,
+        (local % 3600) / 60,
+        local % 60
+    )
+}
+
 pub fn run_full(
     client: &Client,
     p: &RunParams,
@@ -2027,6 +2044,22 @@ pub fn run_full(
     //
     // 都只做「明确异常才拦」：查询失败按未知放行并打日志，不能因为一个
     // 只读接口挂了就让人跑不了步。
+    // 有效时段：服务端窗口外直接回 11016，本地先看一眼能省一次白跑。
+    // 时段按学校下发（randomValidTimes），拿不到就不判断。
+    match crate::api::policy::valid_time_window(client) {
+        Some((start, end)) => {
+            let now = local_hms();
+            if crate::api::policy::in_window(&now, &start, &end) {
+                log(&format!("√ [window] 当前 {now} 在有效时段 {start}–{end} 内"));
+            } else {
+                return Err(format!(
+                    "当前 {now} 不在学校有效时段 {start}–{end} 内，服务端会回 11016（不在有效时段）。\n    换个时间再跑，别在这里白烧一次提交。"
+                ));
+            }
+        }
+        None => log("[window] 拿不到学校时段（不影响提交）"),
+    }
+
     // 月度抽检：命中就要真人做支付宝信用分核验，自动化替不了。
     // 只提醒不拦——核验在提交之后做，拦住了反而让人没法跑完再看。
     match crate::api::policy::monthly_verify_needed(client) {

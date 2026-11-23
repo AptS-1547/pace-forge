@@ -293,6 +293,37 @@ pub fn fallback_policy() -> PolicyInfo {
     }
 }
 
+/// 校级考勤配置里的有效时段（本地时区的 `HH:MM:SS` 起止）。
+///
+/// `GET /api/v70100/run/getHistoryConfig` 返回里 `randomValidTimes` 是数组
+/// （字段名就叫 random，不是笔误）。实测某校 `06:30:00 – 22:00:59`。
+/// 拿不到就返回 `None`，调用方按「不判断」处理——不能因为一个只读接口挂了
+/// 就让人跑不了步。
+pub fn valid_time_window(client: &Client) -> Option<(String, String)> {
+    let raw = client
+        .request(
+            "GET",
+            &format!("{}/api/v70100/run/getHistoryConfig", hosts::DISCOVERY),
+            None,
+        )
+        .ok()?;
+    let v = expect_ok(&raw).ok()?;
+    let arr = v
+        .get("data")
+        .and_then(|d| d.get("randomValidTimes"))
+        .or_else(|| v.get("randomValidTimes"))
+        .and_then(|x| x.as_array())?;
+    let first = arr.first()?;
+    let start = first.get("startTime").and_then(|x| x.as_str())?.to_string();
+    let end = first.get("endTime").and_then(|x| x.as_str())?.to_string();
+    Some((start, end))
+}
+
+/// 当前本地时间是否落在 `HH:MM:SS` 区间内（闭区间，跨零点不支持）。
+pub fn in_window(now_hms: &str, start: &str, end: &str) -> bool {
+    now_hms >= start && now_hms <= end
+}
+
 /// 本月是否被抽中「信用分核验」。
 ///
 /// 服务端每月随机抽检，命中时 App 会弹支付宝芝麻信用的核验页；不完成核验
@@ -304,7 +335,7 @@ pub fn fallback_policy() -> PolicyInfo {
 pub fn monthly_verify_needed(client: &Client) -> Result<bool, String> {
     let raw = client.request(
         "GET",
-        &format!("{}/api/v70390/creditscore/popup?taskType=1", hosts::RUN),
+        &format!("{}/api/creditscore/v70390/popup?taskType=1", hosts::RUN),
         None,
     )?;
     let v = expect_ok(&raw)?;
@@ -317,6 +348,22 @@ pub fn monthly_verify_needed(client: &Client) -> Result<bool, String> {
 /// 默认按校园跑拉策略。
 pub fn fetch_policy(client: &Client) -> Result<PolicyInfo, String> {
     fetch_policy_for(client, 1)
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::in_window;
+
+    #[test]
+    fn window_is_closed_interval() {
+        let (s, e) = ("06:30:00", "22:00:59");
+        assert!(in_window("06:30:00", s, e), "起点算在窗口内");
+        assert!(in_window("22:00:59", s, e), "终点算在窗口内");
+        assert!(in_window("12:00:00", s, e));
+        assert!(!in_window("06:29:59", s, e), "早于窗口不算");
+        assert!(!in_window("22:01:00", s, e), "晚于窗口不算");
+        assert!(!in_window("03:00:00", s, e));
+    }
 }
 
 #[cfg(test)]
