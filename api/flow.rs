@@ -1733,6 +1733,22 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         })
         .collect();
 
+    // 服务端的 reasonList 里「必经点位」和「普通点位」是分开判的，普通点还要
+    // 「至少通过 2 个」（实测某校第 2 条规则）。点位数由服务端下发，我们改不了，
+    // 但如果只给到 1 个普通点，这条无论如何都判不达标——提前说一声，别白跑。
+    {
+        let normal = fixed.iter().filter(|f| f.is_fixed == 0).count();
+        let must = fixed.len() - normal;
+        log(&format!(
+            "[points] 点位构成：{must} 个必经 + {normal} 个普通"
+        ));
+        if !fixed.is_empty() && normal < 2 {
+            log(&format!(
+                "! [points] 本场只有 {normal} 个普通点位，服务端规则要求「至少通过 2 个普通点位」——\n    这条大概率判不达标，换一天或换个跑法再看"
+            ));
+        }
+    }
+
     let probe_sub = super::submit::build(&probe, &track_points, &fixed, &sim)?;
     let view = super::submit::verify_view(&probe_sub.save_record, &probe_sub.points)?;
     log(&format!(
