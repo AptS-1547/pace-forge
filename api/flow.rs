@@ -1823,11 +1823,17 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         .filter(|p| p.get("type").and_then(|v| v.as_i64()) == Some(2))
         .count();
     if !fixed.is_empty() && marked < fixed.len() {
-        return Err(format!(
-            "必到点 {} 个，但报文里只有 {marked} 个 type=2 打卡标记：App 详情页会少画 {} 个绿点（成绩不受影响，是显示问题）。\n    成因：起点(type=7) 或起步窗口的灰点(type=-1) 占掉了该点位 10m 内唯一的采样点。\n    处理：把「纬度/经度」锚点挪到离这些点位 20m 以外再跑。",
+        // **只警告，不拦**。
+        //
+        // 这是显示层问题：服务端判 `complete=true`、成绩照算，只是 App 详情页
+        // 少画一个绿点。拦下来等于用户跑不了——代价比少画一个点大得多。
+        // 拦过一版，实测刘的号也被挡住（他的点位批次同样会命中），说明这个
+        // 条件在某些围栏形状下是常态，不适合当门槛。
+        eprintln!(
+            "! [points] 必到点 {} 个，报文里只有 {marked} 个 type=2 标记：App 详情页会少画 {} 个绿点（成绩不受影响）",
             fixed.len(),
-            fixed.len() - marked
-        ));
+            fixed.len().saturating_sub(marked)
+        );
     }
     if !fixed.is_empty() && n_fixed != fixed.len() {
         return Err(format!(
