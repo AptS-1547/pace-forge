@@ -8,7 +8,6 @@
 
 详细说明见 `docs/release-notes/<tag>.md`。
 
-## 未发布（main，待发 v0.1.11）
 
 > 核心：按 7.4.20 真机（脱壳 + 真机报文）对齐提交体与设备头。**实测一条 2km/12min
 > 提交成功、App 详情页 5 个绿点、无 201。** 如果升级后提交异常，回滚 v0.1.10。
@@ -23,6 +22,47 @@
 - **[仅修复]** `suggest` 补一条出口建议（三个风控维度里唯一能当场查的）
 - **[仅修复]** `tracks --top N`：缺值/非整数/越界/未知参数一律 `exit 2`，不再静默全量输出（#26 follow-up）
 - **[仅文档]** 新增 `docs/notes/REVERSE-BASELINE.md`：撤回三条旧结论（38 端点、从不用 v70320、dex 只有壳）、`consts.rs` 出处更正、两条真机采样点距差 3 倍的教训、设备侧抓包边界
+
+## v0.1.11（2026-11-25）
+
+> 核心：按 7.4.20 脱壳 dex 对齐提交体与五点位。实测 6 个账号提交成功、
+> App 详情页 5 绿、服务端 complete=true 且 validDis 全额。
+> 如果升级后提交异常，回滚 v0.1.10。
+
+### 行为变化（会影响报文字节）
+
+- 提交体四字段对齐真机 7.4.20：`segmentJson` 空串、`more=true`、`prizeName=null`、`appVersion` 默认 `7.4.20`（`PACE_APP_VERSION` 可覆盖）
+- **`isFixed` 默认全部发 0**：脱壳确认 App 按 `isFixed∈{1,2}` 分「必经点/普通点」两套图标，必经点那套固定画橙。全 0 后详情页 5 绿；代价是 reasonList 里「经过必经点位」显示 ✗，成绩不扣（实测 semesterValidDis 全额）。`PACE_FORCE_NORMAL_POINT=0` 可发回真实值
+- **`isPass` 恒发 true**：它是 App 本地 Room 字段，服务端不认；早先按严格命中发 false 会让详情页画橙
+- 自检新增逐点与 10 秒桶的配速/步频检查（`PACE_OUT_BODY` / `BUCKET_PACE_OUT` / `BUCKET_CADENCE_OUT`），阈值按真机基线定（点级 15%、桶级 40%），只提示不拦
+
+### 新增
+
+- **提交前四道闸门**：违规名单自查（`v78/cheat/cheatlist`）、跑步冻结（`policy.freezeRunTime`）、日上限（今日累计 + 本次 > 5000m 直接拦，`PACE_IGNORE_DAILY_LIMIT=1` 放行）、有效时段（`getHistoryConfig` 的 `randomValidTimes`）
+- **提交后回读服务端判定**：`get_one_record` 的 `isCheat` / `stepFreqStatus` / `status` / `validDis` / `reasonList` 逐条打印，不达标时给下一步动作
+- 月度信用分核验提醒（`creditscore/v70390/popup`）
+- 提交失败提示 3 天补传窗口
+- **终点可选**：跑完收到指定终点，不再强制绕回起点（路网必经点 + 禁末尾折返）
+- 手绘：橡皮擦（局部删点）、里程差提示、首尾缺口警告、改目标距离实时重算
+
+### 修复
+
+- `audit` 三处：闭合轨迹反向判定（原先恒判反向）、只看最高一对导致漏报、`suggest` 打出字面 `{}`
+- `tracks --top N` 参数校验
+- `PACE_FORGE_DATA_DIR` 真正生效
+- 空白瓦片当合法结果（高德无道路区回 ~179B 纯色 PNG）
+- 路网凑里程加重重复惩罚（重复路段 41% → 25%，折返 3 → 0）
+- 13baa08 之前的 type=2 数量检查降级为警告（拦过一次，把正常提交也挡住了）
+
+### 文档
+
+- `docs/notes/REVERSE-BASELINE.md`：撤回三条旧结论、consts 出处更正、真机采样点距差 3 倍
+- `docs/notes/SERVER-JUDGEMENT.md`：服务端判定面全字段、reasonList 结构、状态枚举、违规冻结链
+
+### 已知问题
+
+- 15km 这类超长目标生成不到目标里程（围栏周长限制，实测目标 15km → 实际 10.5km）
+- 日上限 5000m 是按单校实测值写的，别校不同要改
 
 ## v0.1.10（未发布）
 
