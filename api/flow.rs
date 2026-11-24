@@ -1929,11 +1929,21 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             let seq: Vec<String> = sorted.iter().map(|x| format!("#{}@{}", x.0, x.1)).collect();
             log(&format!("[point-order] 顺序正确：{}", seq.join(" → ")));
         } else {
-            log(&format!(
-                "[point-order] 顺序错误，服务端会判「按顺序通过所有点位」失败：{}",
-                bad.join("；")
-            ));
-            log("[point-order] 重新规划或调整手绘轨迹，让轨迹只按点位次序穿过每个点");
+            // `isFixed` 全发 0 之后服务端认为「本场没有必经点」，也就不再
+            // 判「按顺序通过所有点位」——那时这条日志纯属吓人。只有真的带上
+            // 必经点（PACE_FORCE_NORMAL_POINT=0）才需要它。
+            if crate::api::submit::force_normal_point() {
+                log(&format!(
+                    "[point-order] 顺序乱了（{}），但点位全部按普通点发出，服务端不判顺序——可以提交",
+                    bad.join("；")
+                ));
+            } else {
+                log(&format!(
+                    "[point-order] 顺序错误，服务端会判「按顺序通过所有点位」失败：{}",
+                    bad.join("；")
+                ));
+                log("[point-order] 重新规划或调整手绘轨迹，让轨迹只按点位次序穿过每个点");
+            }
         }
     }
 
