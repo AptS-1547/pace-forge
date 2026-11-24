@@ -3736,8 +3736,10 @@ mod single_point_source_tests {
         let fb = five_point_items(&submission.save_record);
         assert_eq!(fa.len(), 5, "应有 5 个必到点");
         assert_points_identical(&fa, &fb, "必到点：自检 vs 提交");
+        // isFixed 默认全 0（见 submit::force_normal_point），但两个字段
+        // 都必须**存在**，缺字段等于告诉服务端「这个点没有标记信息」。
         assert!(
-            fa.iter().any(|p| p["isFixed"] == 1) && fa.iter().any(|p| p["isPass"] == true),
+            fa.iter().all(|p| p.get("isFixed").is_some()) && fa.iter().all(|p| p["isPass"] == true),
             "必到点必须带 isFixed/isPass 标记：{fa:?}"
         );
 

@@ -355,7 +355,15 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
             json!({
                 "lon": f.lon,
                 "lat": f.lat,
-                "isFixed": f.is_fixed,
+                // `isFixed` 决定 App 用「必经点」还是「普通点」那套图标
+                // （`Oooo000.setFivePoint` 里按 `(isFixed==1||isFixed==2)` 分支）。
+                // App 对必经点那套图标固定画橙（2026-11-25 实测），所以默认
+                // 全部发 0；要看真实值设 `PACE_FORCE_NORMAL_POINT=0`。
+                "isFixed": if crate::api::submit::force_normal_point() {
+                    0
+                } else {
+                    f.is_fixed
+                },
                 "pointName": f.point_name,
                 "glon": glon,
                 "glat": glat,
@@ -375,6 +383,26 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
             })
         })
         .collect()
+}
+
+/// 是否把全部点位伪装成「普通点」（对照实验用）。
+///
+/// App 的地图渲染按 `isFixed ∈ {1,2}` 分成「必经点」和「普通点」两套图标，
+/// 但两者共用同一个 `isPassed` 布尔。橙点只在必经点上出现的话，很可能是
+/// App 对必经点另有一套判定。设 `PACE_FORCE_NORMAL_POINT=1` 跑一条即可验证。
+pub fn force_normal_point() -> bool {
+    // **默认开**。实测结论（2026-11-25）：
+    // - isFixed=1 的那个点位，App 详情页固定画橙（用 img_point_must_normal），
+    //   即使报文里 isPass=true——OBS 里五个点全是 true 也照样橙。
+    // - 全部发 0 之后详情页 5 绿。
+    // - 代价只有 reasonList 里「经过必经点位」显示 ✗，但 complete=true、
+    //   validDis 全额、semesterValidDis 也全额（31201/31201 实测没扣）。
+    //
+    // 想发真实值做对照时设 PACE_FORCE_NORMAL_POINT=0。
+    !matches!(
+        std::env::var("PACE_FORCE_NORMAL_POINT").ok().as_deref(),
+        Some("0") | Some("false") | Some("no")
+    )
 }
 
 /// `fixed_point_json` envelope 里的 `runAreaId` 该发什么。
@@ -3472,11 +3500,22 @@ mod audit_tests {
         //    夹具里只有 P220 标了固定点，按途经顺序它排第 4（下标 3），
         //    所以正确结果是 [0,0,0,1,0]——如果谁又改回「首点为 1」，
         //    这条断言立刻翻红。
+        // 2026-11-25 起默认全部发 0（`force_normal_point()`）：
+        // App 对 isFixed=1 的点固定画橙（must 图标），即使报文 isPass=true、
+        // OBS 里五个点全 true 也一样。全 0 后详情页 5 绿，代价只是
+        // reasonList 里「经过必经点位」显示 ✗，成绩不受影响
+        // （实测 complete=true、semesterValidDis 全额）。
+        // 想验证「原样跟随服务端标记」时先设 PACE_FORCE_NORMAL_POINT=0。
+        let forced = crate::api::submit::force_normal_point();
         let fixed_flags: Vec<i64> = inner.iter().map(|f| f["isFixed"].as_i64().unwrap()).collect();
+        let expect: Vec<i64> = if forced {
+            vec![0, 0, 0, 0, 0]
+        } else {
+            vec![0, 0, 0, 1, 0]
+        };
         assert_eq!(
-            fixed_flags,
-            vec![0, 0, 0, 1, 0],
-            "isFixed 必须原样跟随服务端标记（P220 在 position 3）"
+            fixed_flags, expect,
+            "isFixed 跟随开关：默认全 0，PACE_FORCE_NORMAL_POINT=0 时原样（P220 在 position 3）"
         );
 
         // ④ id 从 1 起连续；flag 全场同值
