@@ -8,6 +8,13 @@
 //! 每一处改动都必须重新跑 `cargo test` 并用 `selftest` 对真实服务器确认。
 
 /// 请求签名盐。跨版本通用（7.3.11 → 7.4.01 未变）。
+///
+/// 出处可以再收一格：7.4.20 的 `NativeNetworkGatewaySign.salt()` 读的就是
+/// `SportJniUtils.getSecretKey(5)`，失败才回落到 `R.string.md5_sign_salt`；
+/// `SportJniUtils` 的 `<clinit>` 是 `System.loadLibrary("swsport")`，所以这个
+/// 盐是 **`libswsport.so` 里的常量**，既不在 dex 字符串表里（Inverx FridaDump
+/// 8 个 dex 全量 0 命中），也不在 `libnetseckit-4.2.4.so` 里。
+/// 见 `docs/notes/FRIDADUMP-7420-CHECK.md`。
 pub const SIGN_SALT: &str = "2slhe02lsfiwowlcixisla_sls-_slaor";
 
 /// 请求 RSA 公钥（PKCS#1，1024-bit DER，base64）。

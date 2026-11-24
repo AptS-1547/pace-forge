@@ -1883,7 +1883,15 @@ pub fn build_from_points(
         "selDistance": params.sel_distance_m,
         "selRunTime": params.sel_run_time_sec,
         "selectedUnid": params.unid,
-        // 真机是 true（脱壳确认，7.4.0/7.4.20 一致）。我们原来发 false。
+        // 两份脱壳证据冲突，**不要**按单份改：
+        // - JustLikeCheese fork 3616b217（7.4.20 真机 /proc/mem carve）：true
+        // - Inverx FridaDump（7.4.20，8 dex 明文主体，见
+        //   docs/notes/FRIDADUMP-7420-CHECK.md）：全量只有一个 setMore 调用点，
+        //   在 mvi/run/mode/RunHistoryDetailPImpl 的**补传**路径，取值来自
+        //   服务端 bean.isMore()；正常运行路径（CreditRunPIml/BaseRunPImpl 的
+        //   getUploadJson）里没有写入，字段保持 boolean 默认 false。
+        // 该包的盲区是 classes7 有 2,354 个 com/zjwh 方法被抽成 native
+        // （libnesec VM），写入点可能就在里面。先保持 true，等一次真机报文定案。
         "more": true,
         "originalSign": crate::crypto::sign::original_sign(&sign_fields),
         "signature": signature,

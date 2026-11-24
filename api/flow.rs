@@ -2162,10 +2162,22 @@ pub fn run_full(
                 p.distance_m
             ));
             if after > 5000.0 {
-                log(&format!(
-                    "! [quota] 超出常见日上限（5000m）{}m：超出部分可能不计入有效里程",
-                    (after - 5000.0).round()
-                ));
+                // 超日上限直接拦：超出部分不计入有效里程，等于白跑，而且
+                // 一条明显超量的记录更容易被风控盯上。要硬跑就显式开开关。
+                if std::env::var("PACE_IGNORE_DAILY_LIMIT").is_ok() {
+                    log(&format!(
+                        "! [quota] 超日上限 {}m，但已设 PACE_IGNORE_DAILY_LIMIT，继续提交",
+                        (after - 5000.0).round()
+                    ));
+                } else {
+                    return Err(format!(
+                        "今日已跑 {done:.0}m，再加 {:.0}m 合计 {after:.0}m，超过日上限 5000m。\n    \
+                         超出部分不计入有效里程。把距离降到 {:.0}m 以内，\n    \
+                         或者设 PACE_IGNORE_DAILY_LIMIT=1 硬跑。",
+                        p.distance_m,
+                        (5000.0 - done).max(0.0)
+                    ));
+                }
             }
         }
         Err(e) => log(&format!("[quota] 今日记录查询失败（不判断日上限）: {e}")),
