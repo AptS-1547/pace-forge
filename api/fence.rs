@@ -150,9 +150,12 @@ pub struct FencePick {
 
 /// 拉取围栏列表。
 ///
-/// 服务端返回了围栏但解析不出边界时，这里返回 `Err` 并在消息里带上
-/// 诊断——「没返回围栏」和「返回了但不成环」对用户是两种完全不同的
-/// 处境，而前者那句提示只会让人反复重试。
+/// 返回的每个 `Fence` 都已成环（ring >= 3 点）。服务端返回了围栏但解析不出
+/// 边界时，这里返回 `Err` 并在消息里带上诊断——「没返回围栏」和「返回了
+/// 但不成环」对用户是两种完全不同的处境，而前者那句提示只会让人反复重试。
+///
+/// **可能返回空数组**：`geoFences` 显式为 null（学校没配围栏）。调用方取
+/// 中心点走 [`center_from_fences`] / [`fetch_center`]，别直接索引 `[0]`。
 pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
     let raw = client.request(
         "POST",
@@ -176,6 +179,50 @@ pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
         return Err(format!("服务端下发的围栏不成边界（{}）", fence_diag(&v)));
     }
     Ok(fences)
+}
+
+/// 围栏质心。空列表返回可诊断的 `Err`，不再索引 `fs[0]`。
+///
+/// `fetch_fences` 在 `geoFences=null` 时返回空数组（issue #34），调用方
+/// 直接取 `[0]` 会 panic（issue #36）。
+pub fn center_from_fences(fences: &[Fence]) -> Result<(f64, f64), String> {
+    let ring = match fences.first() {
+        Some(f) if f.ring.len() >= 3 => &f.ring,
+        _ => {
+            return Err(
+                "服务端未配置围栏（geoFences=null）：请同时设置 PACE_CENTER_LAT 和 PACE_CENTER_LNG 指定校区锚点"
+                    .to_string(),
+            )
+        }
+    };
+    let n = ring.len() as f64;
+    let s = ring
+        .iter()
+        .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
+    Ok((s.0 / n, s.1 / n))
+}
+
+/// `PACE_CENTER_LAT` / `PACE_CENTER_LNG` 锚点，两个都合法才生效。
+pub fn env_anchor() -> Option<(f64, f64)> {
+    let a = std::env::var("PACE_CENTER_LAT").ok()?.parse().ok()?;
+    let b = std::env::var("PACE_CENTER_LNG").ok()?.parse().ok()?;
+    Some((a, b))
+}
+
+/// 锚点优先，否则取围栏质心。
+pub fn choose_center(anchor: Option<(f64, f64)>, fences: &[Fence]) -> Result<(f64, f64), String> {
+    match anchor {
+        Some(a) => Ok(a),
+        None => center_from_fences(fences),
+    }
+}
+
+/// CLI 的中心点来源：有锚点不发请求，否则拉围栏取质心。
+pub fn fetch_center(client: &Client) -> Result<(f64, f64), String> {
+    match env_anchor() {
+        Some(a) => Ok(a),
+        None => center_from_fences(&fetch_fences(client)?),
+    }
 }
 
 /// 响应里 `geoFences` 是否为**显式 null**（= 服务端没配置围栏）。
@@ -564,6 +611,49 @@ fn ring_min_distance(ring: &[(f64, f64)], p: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// issue #36：`geoFences=null` 的学校不能 panic，要给出可操作的错误。
+    #[test]
+    fn center_from_fences_rejects_unconfigured() {
+        let e = center_from_fences(&[]).expect_err("empty fences must be rejected");
+        assert!(e.contains("PACE_CENTER_LAT"), "{e}");
+    }
+
+    /// 成环的围栏照样报错，但一个不成环的围栏不能 panic。
+    #[test]
+    fn center_from_fences_rejects_ringless_fence() {
+        let fs = vec![Fence {
+            id: Some(1),
+            name: "f".into(),
+            ring: vec![],
+            pass_points: vec![],
+        }];
+        assert!(center_from_fences(&fs).is_err());
+    }
+
+    /// 真实 `geoFences: null` 响应 → 空数组 → 可诊断错误，整条链不 panic。
+    #[test]
+    fn unconfigured_response_yields_actionable_error() {
+        assert!(geo_fences_unconfigured(&json!({ "data": { "geoFences": null } })));
+        assert_eq!(choose_center(None, &[]).unwrap_err(), center_from_fences(&[]).unwrap_err());
+    }
+
+    #[test]
+    fn center_from_fences_returns_ring_centroid() {
+        let fs = vec![Fence {
+            id: Some(1),
+            name: "f".into(),
+            ring: vec![(40.0, 100.0), (40.0, 100.002), (40.002, 100.002)],
+            pass_points: vec![],
+        }];
+        assert_eq!(center_from_fences(&fs).unwrap(), ((120.002_f64) / 3.0, 300.004 / 3.0));
+    }
+
+    #[test]
+    fn choose_center_prefers_anchor_over_empty_fences() {
+        assert_eq!(choose_center(Some((1.0, 2.0)), &[]).unwrap(), (1.0, 2.0));
+        assert!(choose_center(None, &[]).is_err());
+    }
 
     fn square(lat0: f64, lon0: f64, d: f64) -> Vec<(f64, f64)> {
         vec![

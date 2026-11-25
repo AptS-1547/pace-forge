@@ -272,17 +272,10 @@ fn dry_run(dist_km: f64, dur_min: f64) {
     // CLI 原来走 RunParams::default()，center 是 (0.0, 0.0)——赤道的几内亚湾。
     // 围栏选择按「最近」兜底，会选中 2677 公里外的学校，再交给
     // route_through_in_order 就算出 7640 公里、152 万个点的鬼轨迹。
-    // fetch_fences 保证返回的每个围栏都已成环（点数 >= 3），
-    // 所以这里不需要再判断 ring 是否为空。
-    let (clat, clng) = match pace_forge::api::fence::fetch_fences(&client) {
-        Ok(fs) => {
-            let ring = &fs[0].ring;
-            let n = ring.len() as f64;
-            let s = ring
-                .iter()
-                .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
-            (s.0 / n, s.1 / n)
-        }
+    // 有 PACE_CENTER_LAT/LNG 锚点用锚点；学校没配围栏又没锚点时报可操作的错误，
+    // 不再对空数组取 [0]（issue #36）。
+    let (clat, clng) = match pace_forge::api::fence::fetch_center(&client) {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
             std::process::exit(1);
@@ -1149,32 +1142,17 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
 
     // 中心点同样必须从真实围栏反推，不能用默认的 (0,0)。
     // PACE_CENTER_LAT / PACE_CENTER_LNG 显式给了锚点就优先用（自由跑换城市跑、
-    // 或学校没配围栏时用）；否则拉围栏取中心。
-    let env_anchor = || -> Option<(f64, f64)> {
-        let a = std::env::var("PACE_CENTER_LAT").ok()?.parse().ok()?;
-        let b = std::env::var("PACE_CENTER_LNG").ok()?.parse().ok()?;
-        Some((a, b))
-    };
-    let (clat, clng) = match env_anchor() {
-        Some(v) => v,
-        None => match pace_forge::api::fence::fetch_fences(&client) {
-            Ok(fs) => {
-                let ring = &fs[0].ring;
-                let n = ring.len() as f64;
-                let t = ring
-                    .iter()
-                    .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
-                (t.0 / n, t.1 / n)
+    // 或学校没配围栏时用）；否则拉围栏取中心。空围栏无锚点不 panic（issue #36）。
+    let (clat, clng) = match pace_forge::api::fence::fetch_center(&client) {
+        Ok(c) => c,
+        Err(e) => {
+            if free_sport.is_some() {
+                eprintln!("自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点");
+            } else {
+                eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
             }
-            Err(e) => {
-                if free_sport.is_some() {
-                    eprintln!("自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点");
-                } else {
-                    eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
-                }
-                std::process::exit(1);
-            }
-        },
+            std::process::exit(1);
+        }
     };
 
     let p = flow::RunParams {
