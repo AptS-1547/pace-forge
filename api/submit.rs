@@ -1880,7 +1880,10 @@ pub fn build_from_points(
         "policy": params.policy,
         "recordUrl": "",
         "roomId": 0,
-        "runAreaId": params.run_area_id,
+        // 顶层**不发** `runAreaId`：7.4.21 的 `UploadFormatEntity` 47 个字段里
+        // 没有它，只有 `fivePointJson` envelope（`PointJsonEntity`）那一层有。
+        // 早先发真实 id 的依据是「伊木郎 11-11 那条 App 显示 5 个点」，但那条
+        // 没配截图做对照，不足以证明顶层需要它。
         // 真机 `CreditRunPIml.setSegmentJson` 算完反作弊（useMobilityTools/status）
         // 后把 segmentJson 清成空串，实际**上传空串**，不是空数组。
         // 依据：对 7.4.20 真 dex 的脱壳确认（JustLikeCheese fork 3616b217，
@@ -3574,10 +3577,11 @@ mod audit_tests {
             env_area, p.run_area_id,
             "envelope 的 runAreaId 默认必须发真实围栏 id（有截图的 11-11 记录就是 1668）"
         );
-        assert_eq!(
-            sub.save_record["runAreaId"],
-            json!(p.run_area_id),
-            "顶层 save_record 的 runAreaId 必须保持真实围栏 id"
+        // 2026-11-25：顶层不再发 `runAreaId`。7.4.21 的 `UploadFormatEntity`
+        // 47 字段里没有它，只有 `PointJsonEntity`（fivePointJson envelope）那层有。
+        assert!(
+            sub.save_record.get("runAreaId").is_none(),
+            "顶层不该有 runAreaId（只有 fivePointJson envelope 里有）"
         );
 
         // ⑧ 内部「打卡点落在第几个采样点」仍然算得对（type=2 标记靠它）
