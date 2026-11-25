@@ -806,15 +806,81 @@ fn do_export_records(rest: &[String]) {
     }
 
     let body = serde_json::json!({ "exportedAt": now_ms(), "records": out });
-    match std::fs::write(out_path, serde_json::to_string_pretty(&body).unwrap_or_default()) {
+    let result = serde_json::to_vec_pretty(&body)
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| write_record_export(std::path::Path::new(out_path), &bytes, force));
+    match result {
         Ok(()) => println!(
             "已导出 {} 条到 {out_path}（带轨迹 {with_track} 条）。\n下一步: pace-forge crosscheck {out_path}",
             out.len()
         ),
+        Err(e) if !force && e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!("{out_path} 已存在，加 --force 覆盖，或换一个文件名");
+            std::process::exit(2);
+        }
         Err(e) => {
             eprintln!("写 {out_path} 失败: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+fn write_record_export(path: &std::path::Path, bytes: &[u8], force: bool) -> std::io::Result<()> {
+    use std::io::Write;
+
+    if force {
+        return std::fs::write(path, bytes);
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    if let Err(error) = file.write_all(bytes) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod record_export_tests {
+    use super::write_record_export;
+    use std::{fs, io::ErrorKind, sync::Barrier, thread};
+
+    #[test]
+    fn concurrent_exports_keep_the_first_file_unless_forced() {
+        let directory = std::env::temp_dir().join(format!(
+            "pace-forge-export-{}-{:016x}",
+            std::process::id(),
+            rand::random::<u64>(),
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("records.json");
+        let start = Barrier::new(2);
+        let (left, right) = thread::scope(|scope| {
+            let other = scope.spawn(|| {
+                start.wait();
+                write_record_export(&path, b"left", false)
+            });
+            start.wait();
+            let result = write_record_export(&path, b"right", false);
+            (other.join().unwrap(), result)
+        });
+        let saved = fs::read(&path);
+        let forced = write_record_export(&path, b"replacement", true);
+        let replacement = fs::read(&path);
+        fs::remove_dir_all(directory).unwrap();
+
+        let (error, expected) = match (left, right) {
+            (Ok(()), Err(error)) => (error, b"left".as_slice()),
+            (Err(error), Ok(())) => (error, b"right".as_slice()),
+            _ => panic!("exactly one export should succeed"),
+        };
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(saved.unwrap(), expected);
+        forced.unwrap();
+        assert_eq!(replacement.unwrap(), b"replacement");
     }
 }
 
