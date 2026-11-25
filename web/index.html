@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>运动世界校园 · 记录看板</title>
+<script>
+(() => {
+  // 去掉旧书签里的口令参数，避免页面继续携带它。
+  const url = new URL(location.href);
+  if (url.searchParams.has('token')) {
+    url.searchParams.delete('token');
+    try { history.replaceState(null, '', url.href); }
+    catch (_) { location.replace(url.href); }
+  }
+})();
+</script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
@@ -59,7 +70,7 @@
   #login p.sub { color: var(--dim); font-size: var(--t-base); margin: 0 0 var(--s6); }
   /* 版本号挪到卡片底部：原来贴在标题下面且是 #30363d，对比度 1.6:1，等于不存在 */
   #login .mark { margin: 2px 0 0; font-size: var(--t-xs); color: var(--dim2); font-family: var(--font-mono); }
-  #btn { width: 100%; min-height: 44px; }
+  #btn, #consoleUnlockBtn { width: 100%; min-height: 44px; }
   .field { margin-bottom: var(--s4); }
   .field label { display: block; font-size: var(--t-sm); color: var(--dim); margin-bottom: 6px; letter-spacing: .02em; }
   input {
@@ -414,17 +425,27 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
 <!-- 登录 -->
 <div id="login">
   <h1>运动世界校园</h1>
-  <p class="sub">登录后查看跑步记录与轨迹</p>
-  <div class="field">
-    <label>手机号</label>
-    <input id="u" type="tel" autocomplete="username" placeholder="请输入手机号">
+  <form id="consoleUnlock" method="post" autocomplete="off" hidden>
+    <div class="field">
+      <label for="consoleToken">控制台口令</label>
+      <input id="consoleToken" type="password" required>
+    </div>
+    <button id="consoleUnlockBtn" type="submit">解锁控制台</button>
+    <div class="msg" id="consoleMsg" role="status"></div>
+  </form>
+  <div id="accountLogin">
+    <p class="sub">登录后查看跑步记录与轨迹</p>
+    <div class="field">
+      <label>手机号</label>
+      <input id="u" type="tel" autocomplete="username" placeholder="请输入手机号">
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input id="p" type="password" autocomplete="current-password" placeholder="请输入密码">
+    </div>
+    <button id="btn">登录并保存</button>
+    <div class="msg" id="msg"></div>
   </div>
-  <div class="field">
-    <label>密码</label>
-    <input id="p" type="password" autocomplete="current-password" placeholder="请输入密码">
-  </div>
-  <button id="btn">登录并保存</button>
-  <div class="msg" id="msg"></div>
   <p class="mark" id="loginTag">本地控制台</p>
 </div>
 
@@ -627,27 +648,21 @@ const $ = id => document.getElementById(id);
 /* 地图和 Canvas 上的颜色也要走令牌，但 Leaflet 是把 color 写进 SVG 的属性里，
    那里 var() 不生效，所以在运行期把令牌解析成真实色值再传进去。 */
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-/* 控制台口令：服务端设了 PACE_FORGE_TOKEN 时，所有 /api/* 都要带 X-Pace-Token。
-   用法是打开 `http://host:9999/?token=xxx`，记进 sessionStorage 后续每个请求都带上。
-   没有这一段的话，远程模式一开口令，页面上每个请求都是 401，控制台等于废的。 */
-const PF_TOKEN = (() => {
+/* 验证过的控制台口令保存在当前标签页，并通过 X-Pace-Token 请求头传递。 */
+const CONSOLE_TOKEN_KEY = 'pace_console_token';
+let consoleToken = '';
+try {
+  sessionStorage.removeItem('pf_token'); // 旧版曾直接保存网址中的口令
+  consoleToken = sessionStorage.getItem(CONSOLE_TOKEN_KEY) || '';
+} catch (_) {}
+function rememberConsoleToken(token) {
+  consoleToken = token;
   try {
-    const q = new URLSearchParams(location.search).get('token');
-    if (q) {
-      sessionStorage.setItem('pf_token', q);
-      // 存好就从地址栏抹掉：`?token=` 会进浏览器历史、Referer、以及用户
-      // 随手复制的链接里。已经进 sessionStorage 了，留着只有坏处。
-      try {
-        const u = new URL(location.href);
-        u.searchParams.delete('token');
-        history.replaceState(null, '', u.pathname + u.search + u.hash);
-      } catch (_) {}
-      return q;
-    }
-    return sessionStorage.getItem('pf_token') || '';
-  } catch (_) { return ''; }
-})();
-const authHeaders = () => (PF_TOKEN ? { 'X-Pace-Token': PF_TOKEN } : {});
+    if (token) sessionStorage.setItem(CONSOLE_TOKEN_KEY, token);
+    else sessionStorage.removeItem(CONSOLE_TOKEN_KEY);
+  } catch (_) {}
+}
+const authHeaders = () => (consoleToken ? { 'X-Pace-Token': consoleToken } : {});
 /* 单个请求的超时：上游挂起时 fetch 会一直挂着，按钮停在 busy 态无法恢复；
    到点主动 abort，抛出明确的超时文案，而不是无限等待。
    取值要盖住最慢的合法请求：批量跑/单场提交里包含路网与瓦片拉取，串行时
@@ -661,6 +676,7 @@ const api = async (url, opt) => {
   try {
     r = await fetch(url, {
       ...(opt || {}),
+      mode: 'same-origin',
       signal: ctrl.signal,
       headers: { ...authHeaders(), ...((opt && opt.headers) || {}) }
     });
@@ -675,9 +691,15 @@ const api = async (url, opt) => {
   // 把状态码和 content-type 带出来，至少能判断是「服务挂了」还是「路由错了」。
   const j = await r.json().catch(() => null);
   if (!j) {
-    throw new Error(`HTTP ${r.status}：响应不是 JSON（${r.headers.get('content-type') || '无 content-type'}）`);
+    const error = new Error(`HTTP ${r.status}：响应不是 JSON（${r.headers.get('content-type') || '无 content-type'}）`);
+    if (!r.ok) error.status = r.status;
+    throw error;
   }
-  if (!j.ok) throw new Error(j.error || '请求失败');
+  if (!r.ok || !j.ok) {
+    const error = new Error(j.error || '请求失败');
+    error.status = r.status;
+    throw error;
+  }
   return j.data;
 };
 /* 按钮进入/退出「进行中」态：禁用 + 转圈，避免连点重复提交 */
@@ -688,7 +710,7 @@ const busy = (btn, on) => { if (btn) { btn.classList.toggle('busy', on); btn.dis
    纯静态预览（没起服务）时请求会失败，保持「本地控制台」不变。 */
 (async () => {
   try {
-    const r = await fetch('/api/health', { cache: 'no-store', headers: authHeaders() });
+    const r = await fetch('/api/health', { cache: 'no-store' });
     const j = await r.json();
     const v = j && (j.version || (j.data && j.data.version));
     if (!v) return;
@@ -759,35 +781,25 @@ $('logout').onclick = async () => {
   btn.disabled = true;
   btn.textContent = '退出中…';
   try {
-    // 必须走 api() 那条链路：口令部署下裸 fetch 不带 X-Pace-Token，
-    // 请求在 check_auth 就被拒，服务端 token / 上游会话 / 当前账号一律
-    // 没清，页面却以为自己退出成功了。
-    const res = await fetch('/api/logout', {
+    const r = await api('/api/logout', {
       method: 'POST',
-      cache: 'no-store',
-      headers: authHeaders()
+      cache: 'no-store'
     });
     // 服务端可能没确认（网络/接口失败）。本地照清，但得让用户知道会话
     // 还活着——不说一声，半小时内重登就会撞 10121 锁一小时。
-    const r = await res.json().catch(() => ({ remoteLogout: false }));
     if (!r.remoteLogout) {
       alert('本地已退出，但服务端没有确认（网络或接口失败）。\n半小时内别重登，否则可能被锁一小时。');
     }
-  } catch (_) {}
+  } catch (e) {
+    alert('退出登录失败：' + e.message);
+    btn.disabled = false;
+    btn.textContent = '退出登录';
+    return;
+  }
   // 清掉本地残留，避免任何 form/地图状态带回来
   try { localStorage.clear(); sessionStorage.clear(); } catch (_) {}
-  // 清完还得把控制台自己的口令放回去：sessionStorage 刚被清空、地址栏的
-  // `?token=` 也不会跟着 reload 走，不补这一下，重载后所有 /api/* 全 401。
-  if (PF_TOKEN) {
-    try { sessionStorage.setItem('pf_token', PF_TOKEN); } catch (_) {}
-  }
-  // reload 可能命中缓存，用 replace 强制重新拉；口令随查询参数带回去
-  const stamp = Date.now();
-  location.replace(
-    PF_TOKEN
-      ? location.pathname + '?t=' + stamp + '&token=' + encodeURIComponent(PF_TOKEN)
-      : location.pathname + '?t=' + stamp
-  );
+  rememberConsoleToken(consoleToken);
+  location.replace(location.origin + location.pathname);
 };
 $('reload').onclick = loadRecords;
 
@@ -2833,24 +2845,76 @@ function pace(km, sec) {
 }
 
 /* ---------- 启动 ---------- */
-async function boot() {
+function showLogin() {
+  $('app').style.display = 'none';
+  $('picker').style.display = 'none';
+  $('login').style.display = '';
+}
+
+function showConsoleUnlock(rejected) {
+  showLogin();
+  $('consoleMsg').textContent = rejected ? '控制台口令不正确，请重试' : '';
+  rememberConsoleToken('');
+  $('accountLogin').hidden = true;
+  $('consoleUnlock').hidden = false;
+  $('consoleToken').focus();
+}
+
+async function boot(candidate) {
+  let me;
   try {
-    const me = await api('/api/me');
+    me = await api('/api/me', candidate ? { headers: { 'X-Pace-Token': candidate } } : undefined);
+  } catch (e) {
+    if (e.status === 401) {
+      showConsoleUnlock(candidate || consoleToken);
+      return;
+    }
+    if (e.status !== 200) {
+      if (candidate) {
+        $('consoleMsg').textContent = e.message;
+      } else {
+        showLogin();
+        setMsg(e.message, 'err');
+      }
+      return;
+    }
+  }
+  if (candidate) rememberConsoleToken(candidate);
+  $('consoleUnlock').hidden = true;
+  $('accountLogin').hidden = false;
+  if (me) {
+    $('picker').style.display = 'none';
     enter(me);
     await loadAccounts();
-  } catch (_) {
-    // 未登录：如果库里有存过密码的账号，直接给个选择界面
-    try {
-      const r = await api('/api/accounts');
-      const usable = (r.accounts || []).filter(a => a.hasPassword);
-      if (usable.length) {
-        showPicker(usable, r);
-        return;
-      }
-    } catch (_) {}
-    // 什么都没有，停在登录页
+    return;
+  }
+  // 未登录时优先显示已有账号的选择界面。
+  showLogin();
+  try {
+    const r = await api('/api/accounts');
+    const usable = (r.accounts || []).filter(a => a.hasPassword);
+    if (usable.length) showPicker(usable, r);
+  } catch (e) {
+    if (e.status === 401) showConsoleUnlock(consoleToken);
+    else setMsg(e.message, 'err');
   }
 }
+
+$('consoleUnlock').onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $('consoleToken');
+  const btn = $('consoleUnlockBtn');
+  if (!input.value || btn.disabled) return;
+  const candidate = input.value;
+  input.value = '';
+  $('consoleMsg').textContent = '';
+  btn.disabled = true;
+  try {
+    await boot(candidate);
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 function showPicker(list, r) {
   $('login').style.display = 'none';

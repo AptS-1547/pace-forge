@@ -297,8 +297,8 @@ fn device_scope(id_or_username: &str) -> String {
 }
 
 /// 启动 Web 控制台。
-/// 控制台口令。设置环境变量 `PACE_FORGE_TOKEN` 后，所有 `/api/*` 请求
-/// 必须带 `X-Pace-Token` 或 `?token=`，否则 401。
+/// 控制台口令。设置环境变量 `PACE_FORGE_TOKEN` 后，受保护的请求必须带
+/// `X-Pace-Token` 请求头。
 ///
 /// 不设置时只允许本机访问——绑 0.0.0.0 又没有口令，等于把「登录/提交/删账号」
 /// 暴露给同网段任意主机，密码还是明文 HTTP 传的。
@@ -341,33 +341,25 @@ fn ct_eq(got: &str, want: &str) -> bool {
     diff == 0
 }
 
-/// 鉴权通过返回 Ok，否则返回 Err(要回给客户端的话)。
-fn check_auth(request: &tiny_http::Request, path: &str, query: &str) -> Result<(), String> {
-    // 静态页不拦，否则连页面都打不开
-    if path == "/" || path == "/index.html" {
-        return Ok(());
-    }
+/// 鉴权通过返回 Ok，否则返回 HTTP 状态码和错误说明。
+fn check_auth(request: &tiny_http::Request, token: Option<&str>) -> Result<(), (u16, String)> {
+    let path = request.url().split('?').next().unwrap_or_default();
     // 版本探测不拦：它只吐一个版本号，页面靠它显示构建号，
     // 拦掉的话远程模式下页脚永远显示「本地控制台」。
     if path == "/api/health" {
         return Ok(());
     }
-    match auth_token() {
+    match token {
         Some(want) => {
-            let from_header = request
+            let got = request
                 .headers()
                 .iter()
                 .find(|h| h.field.equiv("X-Pace-Token"))
-                .map(|h| h.value.as_str().to_string());
-            let from_query = query
-                .split('&')
-                .find_map(|kv| kv.strip_prefix("token="))
-                .map(url_decode);
-            let got = from_header.or(from_query).unwrap_or_default();
-            if ct_eq(&got, &want) {
+                .map_or("", |h| h.value.as_str());
+            if ct_eq(got, want) {
                 Ok(())
             } else {
-                Err("缺少或错误的口令（X-Pace-Token）".into())
+                Err((401, "缺少或错误的口令（X-Pace-Token）".into()))
             }
         }
         None => {
@@ -375,9 +367,12 @@ fn check_auth(request: &tiny_http::Request, path: &str, query: &str) -> Result<(
             if is_loopback(&remote) {
                 Ok(())
             } else {
-                Err(format!(
-                    "拒绝来自 {remote} 的访问：控制台默认只允许本机，\
-                     远程使用请设置 PACE_FORGE_TOKEN 并在请求头带 X-Pace-Token"
+                Err((
+                    403,
+                    format!(
+                        "拒绝来自 {remote} 的访问：控制台默认只允许本机，\
+                         远程使用请设置 PACE_FORGE_TOKEN 并在请求头带 X-Pace-Token"
+                    ),
                 ))
             }
         }
@@ -510,13 +505,14 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
     let method = request.method().clone();
 
     if path.starts_with("/api/") {
-        if let Err(msg) = check_auth(&request, &path, &query) {
-            return json_err(request, &msg);
+        let token = auth_token();
+        if let Err((code, msg)) = check_auth(&request, token.as_deref()) {
+            return json_err_code(request, code, &msg);
         }
         // 没设口令时再挡一层跨站写：任何网页都能盲打 POST /api/run 或删账号，
         // 不需要读响应也能造成后果。读接口不拦，免得把正常浏览器访问误杀。
         let mutating = !matches!(method, Method::Get | Method::Head | Method::Options);
-        if mutating && auth_token().is_none() {
+        if mutating && token.is_none() {
             let origin = request
                 .headers()
                 .iter()
@@ -2705,6 +2701,7 @@ fn json_err_code(request: tiny_http::Request, code: u16, msg: &str) -> Result<()
 fn respond_html(request: tiny_http::Request, html: &str) -> Result<(), String> {
     let resp = Response::from_string(html)
         .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(header("Referrer-Policy", "no-referrer"))
         // 不设这个头，浏览器会一直用缓存的旧页面：改了按钮逻辑用户也看不到，
         // 点了还是旧行为（表现为「退出键没反应」）。
         .with_header(header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"))
@@ -3183,7 +3180,48 @@ mod loopback_tests {
 
 #[cfg(test)]
 mod token_tests {
-    use super::ct_eq;
+    use super::{check_auth, ct_eq};
+    use tiny_http::{Header, Request, TestRequest};
+
+    #[test]
+    fn authenticated_api_accepts_header_and_ignores_query() {
+        let token = "test-console-token";
+        let query_only: Request = TestRequest::new()
+            .with_path(&format!("/api/me?token={token}"))
+            .into();
+        assert_eq!(check_auth(&query_only, Some(token)).unwrap_err().0, 401);
+
+        let matching_header: Request = TestRequest::new()
+            .with_path("/api/me?token=ignored")
+            .with_header(Header::from_bytes("x-pace-token", token).unwrap())
+            .into();
+        assert!(check_auth(&matching_header, Some(token)).is_ok());
+
+        let wrong_header: Request = TestRequest::new()
+            .with_path(&format!("/api/me?token={token}"))
+            .with_header(Header::from_bytes("X-Pace-Token", "wrong-token").unwrap())
+            .into();
+        assert_eq!(check_auth(&wrong_header, Some(token)).unwrap_err().0, 401);
+    }
+
+    #[test]
+    fn health_is_public_and_unconfigured_api_remains_local() {
+        let remote = "192.0.2.10:80".parse().unwrap();
+        let health: Request = TestRequest::new()
+            .with_remote_addr(remote)
+            .with_path("/api/health?t=1")
+            .into();
+        assert!(check_auth(&health, Some("test-console-token")).is_ok());
+
+        let unconfigured_remote: Request = TestRequest::new()
+            .with_remote_addr(remote)
+            .with_path("/api/me")
+            .into();
+        assert_eq!(check_auth(&unconfigured_remote, None).unwrap_err().0, 403);
+
+        let unconfigured_local: Request = TestRequest::new().with_path("/api/me").into();
+        assert!(check_auth(&unconfigured_local, None).is_ok());
+    }
 
     /// 口令比较只认逐字节全等；前缀相同、长度不同的都不能过。
     #[test]
