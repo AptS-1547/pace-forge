@@ -1037,7 +1037,9 @@ $('runBtn').onclick = async () => {
       body: JSON.stringify({
         distance: dist, duration: dur,
         runMode: mode,
-        sportType: 1,
+        // 跑法选什么就发什么：1 记分跑 / 2 户外跑 / 3 室外锻炼。
+        // 早先这里写死 1，导致选「户外跑」提交上去还是计分跑（issue #35）。
+        sportType: (parseInt($('rRunMode').value, 10) || 1),
         mode: $('rMode').value,
         lane: parseInt($('rLane').value, 10) || 1,
         preferRoads: !$('rNoRoads').checked,
@@ -1530,7 +1532,9 @@ $('accBatch').onclick = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         distance: dist, duration: dur, runMode: mode,
-        sportType: 1, gapMs: 8000,
+        // 跑法选什么就发什么：1 记分跑 / 2 户外跑 / 3 室外锻炼。
+        // 早先这里写死 1，导致选「户外跑」提交上去还是计分跑（issue #35）。
+        sportType: (parseInt($('rRunMode').value, 10) || 1), gapMs: 8000,
         ...altBody(),
         startAtMs: (st ? st.startMs : undefined)
       })
