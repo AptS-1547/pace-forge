@@ -517,6 +517,7 @@ button.danger:hover:not(:disabled) { background: var(--danger-hi); border-color:
     <div class="runform">
       <label>跑法<select id="rRunMode">
         <option value="1">记分跑（校园跑）</option>
+        <option value="4">户外跑</option>
       </select></label>
       <label>路线<select id="rMode">
         <option value="free">自动规划（算法生成）</option>
@@ -912,7 +913,8 @@ $('planBtn').onclick = async () => {
         steps: (Number.isFinite(steps) && steps > 0) ? steps : 0,
         mode: $('rMode').value, lane: parseInt($('rLane').value, 10) || 1,
         preferRoads: !$('rNoRoads').checked,
-        runMode: parseInt($('rRunMode').value, 10) || 1,
+        sportType: parseInt($('rRunMode').value, 10) || 1,
+        runMode: (parseInt($('rRunMode').value, 10) || 1) === 1 ? 1 : 2,
         startAtMs: (st ? st.startMs : undefined),
         ...locBody(),
         ...endBody(),
@@ -1019,7 +1021,7 @@ $('runBtn').onclick = async () => {
   const dur = readDur(dist);
   if (!(dist > 0) || !(dur > 0)) return setOut('距离和时长要填正数', true);
   const mode = parseInt($('rRunMode').value, 10) || 1;
-  const modeName = {1: '记分跑', 2: '户外跑', 3: '室外锻炼'}[mode];
+  const modeName = {1: '记分跑', 4: '户外跑'}[mode] || '记分跑';
   let st = null;
   try { st = await resolveStartAt(); } catch (e) { if (e.message !== '已取消') setOut(e.message, true); return; }
   const when = st ? `${st.startText} ~ ${st.stopText}` : '现在开始';
@@ -1034,10 +1036,10 @@ $('runBtn').onclick = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         distance: dist, duration: dur,
-        runMode: mode,
-        // 跑法选什么就发什么：1 记分跑 / 2 户外跑 / 3 室外锻炼。
-        // 早先这里写死 1，导致选「户外跑」提交上去还是计分跑（issue #35）。
-        sportType: (parseInt($('rRunMode').value, 10) || 1),
+        // 户外跑（自由跑）走 runMode=2 策略（无时段限制）；记分跑 runMode=1。
+        runMode: mode === 1 ? 1 : 2,
+        // 跑法选什么就发什么：1 记分跑 / 4 户外跑（自由跑，实测同一类）。
+        sportType: mode,
         mode: $('rMode').value,
         lane: parseInt($('rLane').value, 10) || 1,
         preferRoads: !$('rNoRoads').checked,
@@ -1512,7 +1514,7 @@ $('accBatch').onclick = async () => {
   const dist = parseFloat($('rDist').value);
   const dur = readDur(dist);
   const mode = parseInt($('rRunMode').value, 10) || 1;
-  const modeName = {1: '记分跑', 2: '户外跑', 3: '室外锻炼'}[mode];
+  const modeName = {1: '记分跑', 4: '户外跑'}[mode] || '记分跑';
   if (!(dist > 0) || !(dur > 0)) { $('accMsg').textContent = '先在上面的表单填好距离和时长'; return; }
   let st = null;
   try { st = await resolveStartAt(); } catch (e) { if (e.message !== '已取消') return; }
@@ -1529,10 +1531,10 @@ $('accBatch').onclick = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        distance: dist, duration: dur, runMode: mode,
-        // 跑法选什么就发什么：1 记分跑 / 2 户外跑 / 3 室外锻炼。
-        // 早先这里写死 1，导致选「户外跑」提交上去还是计分跑（issue #35）。
-        sportType: (parseInt($('rRunMode').value, 10) || 1), gapMs: 8000,
+        distance: dist, duration: dur,
+        runMode: mode === 1 ? 1 : 2,
+        // 跑法选什么就发什么：1 记分跑 / 4 户外跑（自由跑，实测同一类）。
+        sportType: mode, gapMs: 8000,
         ...altBody(),
         startAtMs: (st ? st.startMs : undefined)
       })

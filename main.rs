@@ -114,14 +114,13 @@ fn main() {
             do_run(dist_km, dur_min, yes);
         }
         "run-free" => {
-            // run-free [km] [min] [-y] [--outdoor]
-            // 自由跑 sportType=4（不计学期成绩）；--outdoor 切户外跑 sportType=6。
+            // run-free [km] [min] [-y]
+            // 户外跑 = 自由跑（App 同一类），sportType=4，不计学期成绩。
             let dist_km = parse_num(&args, 1, 2.0, "距离(km)");
             let dur_min = parse_num(&args, 2, 12.0, "时长(min)");
             let (dist_km, dur_min) = checked_km_min(dist_km, dur_min);
             let yes = args.iter().any(|a| a == "-y" || a == "--yes");
-            let outdoor = args.iter().any(|a| a == "--outdoor");
-            run_with_start(dist_km, dur_min, None, yes, Some(if outdoor { 6 } else { 4 }));
+            run_with_start(dist_km, dur_min, None, yes, Some(4));
         }
         "ai-list" => do_ai_list(),
         "ai" => {
@@ -219,7 +218,7 @@ fn main() {
             println!("  pace-forge web [addr]          启动 Web 控制台（默认 127.0.0.1:9999）");
             println!("  pace-forge semester            查学期进度（记分跑）");
             println!("  pace-forge run [km] [min] [-y] 刷跑并提交（-y 跳过确认）");
-            println!("  pace-forge run-free [km] [min] [-y] [--outdoor]  自由跑（不计成绩）；--outdoor 户外跑");
+            println!("  pace-forge run-free [km] [min] [-y]  户外跑（=自由跑，不计成绩）");
             println!("  pace-forge ai-list             AI 运动项目列表");
             println!("  pace-forge ai <id> <成绩> [--minutes] [--days N] [-y]  AI 运动提交（--days 补签）");
             println!("  pace-forge ai-records <id> [N] AI 运动记录");
@@ -1061,7 +1060,7 @@ fn do_run(dist_km: f64, dur_min: f64, yes: bool) {
 /// 通用提交：`start_at` 为 `None` 表示补一条**刚跑完**的记录
 ///（结束时刻 = 服务器现在，起跑时刻倒推一整个时长）。
 ///
-/// `free_sport`：`Some(4)` 自由跑 / `Some(6)` 户外跑——不拉围栏/打卡点、
+/// `free_sport`：`Some(4)` 户外跑（= 自由跑，App 同一类）——不拉围栏/打卡点、
 /// 报文省略 fivePointJson（neko 实测映射）；`None` 保持原来的刷跑行为。
 fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, free_sport: Option<i32>) {
     use pace_forge::api::{flow, session};
@@ -1135,8 +1134,7 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
     };
 
     let mode_label = match free_sport {
-        Some(4) => "自由跑",
-        Some(6) => "户外跑",
+        Some(_) => "户外跑",
         _ => "刷跑",
     };
     println!("{mode_label}：{:.1} km / {:.0} 分钟\n", dist_km, dur_min);

@@ -12,7 +12,7 @@
 > 核心：按 7.4.20 真机（脱壳 + 真机报文）对齐提交体与设备头。**实测一条 2km/12min
 > 提交成功、App 详情页 5 个绿点、无 201。** 如果升级后提交异常，回滚 v0.1.10。
 
-- **[行为变化]** 新增自由跑 / 户外跑后端（仅 CLI，Web 界面不变）：`run-free [km] [min] [--outdoor]`。sportType=4 自由跑（不计学期成绩）/ 6 户外跑，策略走 runMode=2（无时段限制），不拉围栏/打卡点、轨迹绕锚点自由生成，提交报文省略 `fivePointJson`（OBS 明细仍发空数组 envelope）。映射依据 neko（NekoSportsWorldTool）实测：2/5 被拒「uid 不存在」、3 有特殊签名规则。**尚未真机验证**
+- **[行为变化]** 新增户外跑（= 自由跑，App 同一类）：Web 跑法下拉新增「户外跑」，CLI `run-free [km] [min]`。sportType=4（不计学期成绩），策略走 runMode=2（无时段限制），不拉围栏/打卡点、轨迹绕锚点自由生成，提交报文省略 `fivePointJson`（OBS 明细仍发空数组 envelope）。**已真机验证**：北京奥森 2km 提交 rrid=1375931242，服务端回 sportType=4、complete=true、validDis 全额、isCheat=0。映射依据 neko 实测：2/5 被拒「uid 不存在」、3 有特殊签名规则
 - **[行为变化]** 新增 AI 运动模块（仅 CLI）：`ai-list` / `ai <id> <成绩> [--minutes] [--days N]` / `ai-records <id> [N]`。计次/计时两类数值仿真人（±10% 抖动），`--days` 补签过去时刻，无需视频。**尚未真机验证**
 - **[行为变化]** 提交体四个字段对齐真机 7.4.20：`segmentJson` 空串（不是 `"[]"`）、`more=true`、`prizeName=null`、`appVersion` 默认 `7.4.20`（`PACE_APP_VERSION` 可覆盖）。依据：对 7.4.20 真 dex 的脱壳（JustLikeCheese fork `3616b217`/`06a06399`）
 - **[行为变化]** `CustomDeviceId` 纳入 `PACE_DEVICE_HW_HEADERS` 开关（默认仍发派生值）；五个硬件头一起清空，`DeviceId` 不受影响
