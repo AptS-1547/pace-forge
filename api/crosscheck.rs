@@ -26,10 +26,13 @@ pub fn tz_description() -> String {
     let abs = offset.abs();
     let label = format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60);
     match std::env::var("PACE_TZ_OFFSET_SEC") {
-        Ok(raw) if raw.parse::<i64>().is_ok() && raw != "28800" => {
-            format!("{label}（PACE_TZ_OFFSET_SEC={raw}）")
+        Ok(raw) if raw.parse::<i64>() != Ok(offset) => {
+            format!("{label}（PACE_TZ_OFFSET_SEC 无效，用默认）")
         }
-        Ok(raw) => format!("{label}（PACE_TZ_OFFSET_SEC={raw}，与默认一致）"),
+        Ok(raw) if offset == 8 * 3600 => {
+            format!("{label}（PACE_TZ_OFFSET_SEC={raw}，与默认一致）")
+        }
+        Ok(raw) => format!("{label}（PACE_TZ_OFFSET_SEC={raw}）"),
         Err(_) => format!("{label}（PACE_TZ_OFFSET_SEC 未设，用默认）"),
     }
 }
@@ -48,7 +51,7 @@ pub fn near_midnight_count(records: &[RunRecord], tz_offset_sec: i64) -> usize {
     records
         .iter()
         .filter(|r| {
-            let secs = (r.start_ms / 1000 + tz_offset_sec).rem_euclid(86_400);
+            let secs = (r.start_ms.div_euclid(1000) + tz_offset_sec).rem_euclid(86_400);
             !(3_600..=86_400 - 3_600).contains(&secs)
         })
         .count()
@@ -56,10 +59,15 @@ pub fn near_midnight_count(records: &[RunRecord], tz_offset_sec: i64) -> usize {
 
 /// 本地日期 `(年, 月, 日)`，给命令行打印用。
 pub fn local_date(start_ms: i64, tz_offset_sec: i64) -> (i64, u32, u32) {
-    let secs = start_ms / 1000 + tz_offset_sec;
-    let days = secs.div_euclid(86_400);
+    let secs = start_ms.div_euclid(1000) + tz_offset_sec;
+    let days = local_day(start_ms, tz_offset_sec);
     let (y, m, d, _) = crate::api::obs::civil_from_days(days, secs.rem_euclid(86_400) / 3600);
     (y, m, d)
+}
+
+/// 首尾记录覆盖的本地日历天数，包含起止两天。
+pub fn calendar_span(first_ms: i64, last_ms: i64, tz_offset_sec: i64) -> i64 {
+    local_day(last_ms, tz_offset_sec) - local_day(first_ms, tz_offset_sec) + 1
 }
 
 /// 一条记录的最小视图。
@@ -91,6 +99,15 @@ fn num(obj: &Value, keys: &[&str]) -> Option<f64> {
     None
 }
 
+fn track_point(v: &Value) -> Option<(f64, f64)> {
+    if let Some(pair) = v.as_array() {
+        return Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?));
+    }
+    let lat = num(v, &["lat", "gLat", "latitude"])?;
+    let lon = num(v, &["lon", "gLng", "lng", "longitude"])?;
+    Some((lat, lon))
+}
+
 fn parse_track(v: &Value) -> Vec<(f64, f64)> {
     let arr = match v {
         Value::Array(a) => a,
@@ -100,19 +117,7 @@ fn parse_track(v: &Value) -> Vec<(f64, f64)> {
         },
         _ => return Vec::new(),
     };
-    arr.iter()
-        .filter_map(|p| {
-            if let Some(a) = p.as_array() {
-                // [lat, lon]
-                let lat = a.first()?.as_f64()?;
-                let lon = a.get(1)?.as_f64()?;
-                return Some((lat, lon));
-            }
-            let lat = num(p, &["lat", "gLat", "latitude"])?;
-            let lon = num(p, &["lon", "gLng", "lng", "longitude"])?;
-            Some((lat, lon))
-        })
-        .collect()
+    arr.iter().filter_map(track_point).collect()
 }
 
 /// 从单条记录/详情里取轨迹：`allLocJson` 字符串、`points`、`track` 都认。
@@ -124,15 +129,17 @@ pub fn extract_track(v: &Value) -> Vec<(f64, f64)> {
         .unwrap_or_default()
 }
 
+fn record_rows(value: &Value) -> Option<&[Value]> {
+    value
+        .as_array()
+        .or_else(|| value.get("records").or_else(|| value.get("list"))?.as_array())
+        .map(Vec::as_slice)
+}
+
 /// 从一段 JSON 里读记录。字段别名按服务端/前端两套都收。
 pub fn parse_records(v: &Value) -> Vec<RunRecord> {
-    let arr = match v {
-        Value::Array(a) => a.clone(),
-        Value::Object(o) => match o.get("records").or_else(|| o.get("list")) {
-            Some(Value::Array(a)) => a.clone(),
-            _ => Vec::new(),
-        },
-        _ => Vec::new(),
+    let Some(arr) = record_rows(v) else {
+        return Vec::new();
     };
     arr.iter()
         .filter_map(|r| {
@@ -159,9 +166,96 @@ pub fn parse_records(v: &Value) -> Vec<RunRecord> {
         .collect()
 }
 
+/// 离线导入结果。行号对应原始文件中记录数组的位置。
+pub struct LocalRecordImport {
+    pub records: Vec<RunRecord>,
+    pub row_numbers: Vec<usize>,
+    pub issues: Vec<String>,
+}
+
+fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, String> {
+    let decoded;
+    let value = if let Some(raw) = value.as_str() {
+        decoded = serde_json::from_str::<Value>(raw)
+            .map_err(|_| "轨迹字符串不是合法 JSON")?;
+        &decoded
+    } else {
+        value
+    };
+    let points = value.as_array().ok_or("轨迹应为坐标数组")?;
+    points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| match track_point(point) {
+            Some((lat, lon))
+                if (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) =>
+            {
+                Ok((lat, lon))
+            }
+            _ => Err(format!("轨迹第 {} 点的经纬度无效", index + 1)),
+        })
+        .collect()
+}
+
+/// 检查导入的记录，记录无法参与统计的原始行号和原因。
+pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, &'static str> {
+    let rows = record_rows(value).ok_or("需要记录数组，或包含 records/list 数组的对象")?;
+    let mut result = LocalRecordImport {
+        records: Vec::with_capacity(rows.len()),
+        row_numbers: Vec::with_capacity(rows.len()),
+        issues: Vec::new(),
+    };
+    for (index, row) in rows.iter().enumerate() {
+        let row_number = index + 1;
+        let mut issue = |detail: &str| {
+            result.issues.push(format!("第 {row_number} 条：{detail}"));
+        };
+        let start_ms = num(row, &["startTime", "start_time", "startMs", "beginTime"])
+            .map(|start| if start < 1e11 { start * 1000.0 } else { start })
+            .filter(|start| (1.0..i64::MAX as f64).contains(start));
+        let Some(start_ms) = start_ms else {
+            issue("开始时间缺失或无效，跳过此条记录");
+            continue;
+        };
+        let distance_m = num(row, &["totalDis", "distance", "totalDistance", "dis"])
+            .filter(|distance| (0.0..i64::MAX as f64).contains(distance));
+        let Some(distance_m) = distance_m else {
+            issue("里程缺失或无效，跳过此条记录");
+            continue;
+        };
+        let duration_sec = match num(row, &["totalTime", "duration", "useTime"]) {
+            Some(duration) if (1.0..i64::MAX as f64).contains(&duration) => duration as i64,
+            _ => {
+                issue("用时缺失或无效，此条不参加配速统计");
+                0
+            }
+        };
+        let track = row
+            .get("points")
+            .or_else(|| row.get("allLocJson"))
+            .or_else(|| row.get("track"));
+        let track = match track.filter(|track| !track.is_null()).map(checked_local_track) {
+            Some(Ok(track)) => track,
+            Some(Err(detail)) => {
+                issue(&format!("{detail}，此条轨迹不参加统计"));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        result.records.push(RunRecord {
+            start_ms: start_ms as i64,
+            distance_m,
+            duration_sec,
+            track,
+        });
+        result.row_numbers.push(row_number);
+    }
+    Ok(result)
+}
+
 /// 本地时区下的「天序号」（自 1970-01-01 起）。
 fn local_day(start_ms: i64, tz_offset_sec: i64) -> i64 {
-    (start_ms / 1000 + tz_offset_sec).div_euclid(86_400)
+    (start_ms.div_euclid(1000) + tz_offset_sec).div_euclid(86_400)
 }
 
 /// 连续记录天数：`(最长一段, 截至最后一条的那一段)`
@@ -192,7 +286,9 @@ pub fn start_hour_concentration(records: &[RunRecord], tz_offset_sec: i64) -> (u
     }
     let mut bins = [0usize; 24];
     for r in records {
-        let hour = ((r.start_ms / 1000 + tz_offset_sec).div_euclid(3600) % 24) as usize;
+        let hour = (r.start_ms.div_euclid(1000) + tz_offset_sec)
+            .div_euclid(3600)
+            .rem_euclid(24) as usize;
         bins[hour] += 1;
     }
     let (idx, &max) = bins.iter().enumerate().max_by_key(|(_, &c)| c).unwrap_or((0, &0));
@@ -433,5 +529,57 @@ mod tests {
         assert_eq!(r[0].track.len(), 1);
         assert_eq!(r[1].start_ms, 1_790_913_882_000);
         assert!(r[1].track.is_empty());
+    }
+
+    #[test]
+    fn local_import_reports_original_row_numbers_and_invalid_coordinates() {
+        let input = serde_json::json!({
+            "records": [
+                {"startTime": 1_790_913_882, "distance": 2000, "duration": 700},
+                {"startTime": "NaN", "distance": 2000, "duration": 700},
+                {"startTime": 1_790_913_882_000_i64, "distance": -2, "duration": 700},
+                {
+                    "startTime": 1_790_913_882_000_i64,
+                    "distance": 2300,
+                    "duration": "inf",
+                    "points": [[31.2, 118.7], [91.0, 118.7]]
+                },
+                {"startTime": 1_790_913_882_000_i64, "distance": "inf", "duration": 700}
+            ]
+        });
+
+        let imported = parse_local_records(&input).unwrap();
+        assert_eq!(imported.row_numbers, [1, 4]);
+        assert_eq!(imported.records[0].start_ms, 1_790_913_882_000);
+        assert_eq!(imported.records[1].duration_sec, 0);
+        assert!(imported.records[1].track.is_empty());
+        assert_eq!(imported.issues.len(), 5);
+        assert!(imported.issues[0].starts_with("第 2 条"));
+        assert!(imported.issues[1].starts_with("第 3 条"));
+        assert!(imported.issues[2].contains("第 4 条：用时"));
+        assert!(imported.issues[3].contains("第 4 条：轨迹第 2 点"));
+        assert!(imported.issues[4].starts_with("第 5 条"));
+    }
+
+    #[test]
+    fn calendar_span_counts_local_midnight_instead_of_elapsed_days() {
+        let tz = 8 * 3_600;
+        let first = (16 * 3_600 - 60) * 1000;
+        let last = (16 * 3_600 + 60) * 1000;
+        assert_eq!(calendar_span(first, last, tz), 2);
+        assert_eq!(calendar_span(first, last, 0), 1);
+        assert_eq!(local_date(first, tz), (1970, 1, 1));
+        assert_eq!(local_date(last, tz), (1970, 1, 2));
+    }
+
+    #[test]
+    fn start_hour_buckets_include_times_before_the_local_unix_epoch() {
+        let record = RunRecord {
+            start_ms: 1,
+            distance_m: 2000.0,
+            duration_sec: 700,
+            track: Vec::new(),
+        };
+        assert_eq!(start_hour_concentration(&[record], -8 * 3_600), (16, 1.0));
     }
 }
