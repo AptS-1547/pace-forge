@@ -844,13 +844,10 @@ fn handle_plan(
                     "未登录时必须在表单里填写校区经纬度，否则不知道往哪儿规划",
                 );
             };
-            match crate::api::fence::fetch_fences(&client) {
-                Ok(fs) => {
-                    let ring = &fs[0].ring;
-                    let n = ring.len() as f64;
-                    let s = ring.iter().fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
-                    (s.0 / n, s.1 / n)
-                }
+            match crate::api::fence::fetch_fences(&client)
+                .and_then(|fs| crate::api::fence::center_from_fences(&fs))
+            {
+                Ok(c) => c,
                 Err(e) => return json_err(request, &format!("无法确定校区位置: {e}")),
             }
         }
@@ -2065,18 +2062,12 @@ fn handle_run(
             Ok(c) => c,
             Err(e) => return json_err(request, &e),
         },
-        _ => match crate::api::fence::fetch_fences(&client) {
-            // fetch_fences 只在解析出至少一个成环围栏时才返回 Ok，
-            // 每个 Fence 的 ring 都 >= 3 个点，所以直接取首个围栏的
-            // 环心即可，不需要再兜底到 passPoints。
-            Ok(fs) => {
-                let ring = &fs[0].ring;
-                let n = ring.len() as f64;
-                let s = ring
-                    .iter()
-                    .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
-                (s.0 / n, s.1 / n)
-            }
+        _ => match crate::api::fence::fetch_fences(&client)
+            .and_then(|fs| crate::api::fence::center_from_fences(&fs))
+        {
+            // 空围栏（geoFences=null）由 center_from_fences 报可诊断的错误，
+            // 不能对空数组取 [0]（issue #36）。
+            Ok(c) => c,
             // 错误信息自带诊断（geoFences 个数、各围栏点数、字段名），
             // 用户直接贴过来就能判断是「服务端没数据」还是「字段改名了」。
             Err(e) => {
