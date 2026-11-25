@@ -520,23 +520,28 @@ fn do_relogin() {
 /// 换台设备照样能用。这里真的打一次 logout 接口。
 fn do_logout() {
     let book = pace_forge::api::accounts::load();
-    let acc = match book.accounts.first() {
-        Some(a) => a.clone(),
+    // 账号簿没记录时退回无头登录存的 session（login 命令只写 session）。
+    let (uid, token, unid, username) = match book.accounts.first() {
+        Some(a) => (a.uid.clone(), a.token.clone(), a.unid.clone(), a.username.clone()),
         None => {
-            eprintln!("本地没有账号记录，无需注销");
-            return;
+            let s = pace_forge::api::session::load_session();
+            if !s.is_valid() {
+                eprintln!("本地没有登录态，无需注销");
+                return;
+            }
+            (s.uid.clone(), s.token.clone(), s.unid.clone(), s.username.clone())
         }
     };
     let mut client =
         pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
             .with_credentials(pace_forge::api::client::Credentials {
-                token: Some(acc.token.clone()),
-                uid: Some(acc.uid.clone()),
-                unid: Some(acc.unid.clone()),
+                token: Some(token),
+                uid: Some(uid),
+                unid: Some(unid),
             });
 
     match pace_forge::api::login::logout(&mut client) {
-        Ok(true) => println!("✅ 服务端已注销 {}", acc.username),
+        Ok(true) => println!("✅ 服务端已注销 {username}"),
         Ok(false) => println!("服务端没有返回明确的注销结果，可能是 token 已失效"),
         Err(e) => {
             eprintln!("注销请求失败: {e}");
@@ -550,6 +555,7 @@ fn do_logout() {
     } else {
         println!("本地 token 已清除");
     }
+    pace_forge::api::session::clear_session();
 }
 
 /// 违规名单自查。提交成功不代表没被标记——跑批判定是事后做的。
