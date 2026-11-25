@@ -103,6 +103,36 @@ fn main() {
             let yes = args.iter().any(|a| a == "-y" || a == "--yes");
             do_run(dist_km, dur_min, yes);
         }
+        "run-free" => {
+            // run-free [km] [min] [-y] [--outdoor]
+            // 自由跑 sportType=4（不计学期成绩）；--outdoor 切户外跑 sportType=6。
+            let dist_km = parse_num(&args, 1, 2.0, "距离(km)");
+            let dur_min = parse_num(&args, 2, 12.0, "时长(min)");
+            let (dist_km, dur_min) = checked_km_min(dist_km, dur_min);
+            let yes = args.iter().any(|a| a == "-y" || a == "--yes");
+            let outdoor = args.iter().any(|a| a == "--outdoor");
+            run_with_start(dist_km, dur_min, None, yes, Some(if outdoor { 6 } else { 4 }));
+        }
+        "ai-list" => do_ai_list(),
+        "ai" => {
+            // ai <项目id> <成绩> [--minutes] [--days N] [-y]
+            // 成绩默认按次数；--minutes 按时长（分钟）。--days N 补签 N 天前。
+            let sport = parse_int(&args, 1, 0, "项目id");
+            let score = parse_int(&args, 2, 0, "成绩(次数或分钟)");
+            let minutes = args.iter().any(|a| a == "--minutes");
+            let days = if args.iter().any(|a| a == "--days") {
+                Some(flag_int(&args, "--days", 0))
+            } else {
+                None
+            };
+            let yes = args.iter().any(|a| a == "-y" || a == "--yes");
+            do_ai(sport, score, minutes, days, yes);
+        }
+        "ai-records" => {
+            let sport = parse_int(&args, 1, 0, "项目id");
+            let n = parse_int(&args, 2, 20, "条数");
+            do_ai_records(sport, n);
+        }
         "dry" => {
             let dist_km = parse_num(&args, 1, 2.0, "距离(km)");
             let dur_min = parse_num(&args, 2, 12.0, "时长(min)");
@@ -163,6 +193,10 @@ fn main() {
             println!("  pace-forge web [addr]          启动 Web 控制台（默认 127.0.0.1:9999）");
             println!("  pace-forge semester            查学期进度（记分跑）");
             println!("  pace-forge run [km] [min] [-y] 刷跑并提交（-y 跳过确认）");
+            println!("  pace-forge run-free [km] [min] [-y] [--outdoor]  自由跑（不计成绩）；--outdoor 户外跑");
+            println!("  pace-forge ai-list             AI 运动项目列表");
+            println!("  pace-forge ai <id> <成绩> [--minutes] [--days N] [-y]  AI 运动提交（--days 补签）");
+            println!("  pace-forge ai-records <id> [N] AI 运动记录");
             println!("  pace-forge check [km] [min]    离线体检轨迹（不联网、不登录）");
             println!("  pace-forge dry [km] [min]      只预演，不提交（要登录）");
             println!("  pace-forge at <HH:MM> [km] [min] [--days N]  补跑：指定当天/往前的时刻");
@@ -955,12 +989,15 @@ fn show_semester() {
 }
 
 fn do_run(dist_km: f64, dur_min: f64, yes: bool) {
-    run_with_start(dist_km, dur_min, None, yes);
+    run_with_start(dist_km, dur_min, None, yes, None);
 }
 
 /// 通用提交：`start_at` 为 `None` 表示补一条**刚跑完**的记录
 ///（结束时刻 = 服务器现在，起跑时刻倒推一整个时长）。
-fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool) {
+///
+/// `free_sport`：`Some(4)` 自由跑 / `Some(6)` 户外跑——不拉围栏/打卡点、
+/// 报文省略 fivePointJson（neko 实测映射）；`None` 保持原来的刷跑行为。
+fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, free_sport: Option<i32>) {
     use pace_forge::api::{flow, session};
 
     let sess = session::load_session();
@@ -976,6 +1013,7 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool) 
         });
 
     // 中心点同样必须从真实围栏反推，不能用默认的 (0,0)。
+    // 自由跑不依赖围栏：拿不到时用 PACE_CENTER_LAT / PACE_CENTER_LNG 给锚点。
     let (clat, clng) = match pace_forge::api::fence::fetch_fences(&client) {
         Ok(fs) => {
             let ring = &fs[0].ring;
@@ -986,8 +1024,23 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool) 
             (t.0 / n, t.1 / n)
         }
         Err(e) => {
-            eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
-            std::process::exit(1);
+            let env_anchor = || -> Option<(f64, f64)> {
+                let a = std::env::var("PACE_CENTER_LAT").ok()?.parse().ok()?;
+                let b = std::env::var("PACE_CENTER_LNG").ok()?.parse().ok()?;
+                Some((a, b))
+            };
+            if free_sport.is_some() {
+                match env_anchor() {
+                    Some(v) => v,
+                    None => {
+                        eprintln!("自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
+                std::process::exit(1);
+            }
         }
     };
 
@@ -998,11 +1051,18 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool) 
         duration_sec: (dur_min * 60.0).round() as i64,
         start_at_ms: start_at,
         custom_path: None,
-        // 户外跑没有服务端时间窗口；记分跑(runMode=1)有，脚本跑容易被 11016 挡掉
-        run_mode: std::env::var("PACE_RUN_MODE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2),
+        sport_type: free_sport.unwrap_or(1),
+        free_run: free_sport.is_some(),
+        // 户外跑没有服务端时间窗口；记分跑(runMode=1)有，脚本跑容易被 11016 挡掉。
+        // 自由跑固定 runMode=2（neko 实测 0/2~6 服务端都当自由跑，无时段限制）。
+        run_mode: if free_sport.is_some() {
+            2
+        } else {
+            std::env::var("PACE_RUN_MODE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2)
+        },
         sample_step_m: std::env::var("PACE_STEP_M")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -1010,7 +1070,12 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool) 
         ..Default::default()
     };
 
-    println!("刷跑：{:.1} km / {:.0} 分钟\n", dist_km, dur_min);
+    let mode_label = match free_sport {
+        Some(4) => "自由跑",
+        Some(6) => "户外跑",
+        _ => "刷跑",
+    };
+    println!("{mode_label}：{:.1} km / {:.0} 分钟\n", dist_km, dur_min);
     let mut log = |s: &str| println!("{s}");
     let mut confirm = |o: &flow::RunOutcome| -> bool {
         println!();
@@ -1101,7 +1166,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         }
     };
     show_plan(st, dur_min);
-    run_with_start(dist_km, dur_min, Some(st.ms), yes);
+    run_with_start(dist_km, dur_min, Some(st.ms), yes, None);
 }
 
 fn do_ago(mins: i64, dist_km: f64, dur_min: f64, yes: bool) {
@@ -1116,7 +1181,7 @@ fn do_ago(mins: i64, dist_km: f64, dur_min: f64, yes: bool) {
         }
     };
     show_plan(st, dur_min);
-    run_with_start(dist_km, dur_min, Some(st.ms), yes);
+    run_with_start(dist_km, dur_min, Some(st.ms), yes, None);
 }
 
 fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
@@ -1133,7 +1198,141 @@ fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         }
     };
     show_plan(st, dur_min);
-    run_with_start(dist_km, dur_min, Some(st.ms), yes);
+    run_with_start(dist_km, dur_min, Some(st.ms), yes, None);
+}
+
+// ---------------------------------------------------------------------------
+// AI 运动
+// ---------------------------------------------------------------------------
+
+/// 建一个带已存会话的客户端；未登录直接退出。
+fn ai_client() -> pace_forge::api::client::Client {
+    let sess = pace_forge::api::session::load_session();
+    if !sess.is_valid() {
+        eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
+        std::process::exit(1);
+    }
+    pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
+        .with_credentials(pace_forge::api::client::Credentials {
+            uid: Some(sess.uid.to_string()),
+            token: Some(sess.token.clone()),
+            unid: Some(sess.unid.clone()),
+        })
+}
+
+fn do_ai_list() {
+    use pace_forge::api::ai;
+    let client = ai_client();
+    match ai::fetch_list(&client) {
+        Ok(list) => {
+            println!("AI 运动项目（{} 个）：", list.len());
+            for s in &list {
+                println!("  {:>3}  {}", s.id, s.name);
+            }
+        }
+        Err(e) => {
+            eprintln!("拉项目列表失败: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
+    use pace_forge::api::ai::{self, AiMode};
+    if sport <= 0 || score <= 0 {
+        eprintln!("用法: pace-forge ai <项目id> <成绩> [--minutes] [--days N] [-y]\n先用 ai-list 查项目 id");
+        std::process::exit(2);
+    }
+    let client = ai_client();
+    let mode = if minutes { AiMode::Minutes(score) } else { AiMode::Count(score) };
+    let info = ai::fetch_info(&client, sport);
+    let name = ai::fetch_list(&client)
+        .ok()
+        .and_then(|l| l.into_iter().find(|s| s.id == sport).map(|s| s.name))
+        .unwrap_or_else(|| format!("项目{sport}"));
+    let kind = if info.sport_type == 2 { "计时类" } else { "计次类" };
+    let score_txt = if minutes { format!("{score} 分钟") } else { format!("{score} 个") };
+
+    // 补签：N 天前 7-20 点随机时刻（与 rand 补跑同一套时间合同）。
+    let at = match days {
+        Some(d) => {
+            use pace_forge::api::start_time as st_mod;
+            use rand::Rng;
+            let now = pace_forge::crypto::envelope::now_ms() as i64;
+            let dur_s = if minutes { score * 60 } else { ((score as f64 / 90.0) * 60.0) as i64 }.max(30);
+            let r: f64 = rand::thread_rng().gen();
+            match st_mod::random_in_day(now, d, dur_s, r) {
+                Ok(st) => Some(st.ms),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => None,
+    };
+    let when = match at {
+        Some(ms) => pace_forge::api::start_time::format_ms(
+            ms, pace_forge::api::start_time::default_tz_offset_min()),
+        None => "现在（刚练完）".to_string(),
+    };
+    println!("AI 运动：{name}（{kind}）{score_txt}，时间 {when}");
+    if !yes {
+        print!("确认提交？[y/N] ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        if !matches!(line.trim(), "y" | "Y" | "yes") {
+            println!("已取消");
+            return;
+        }
+    }
+    match ai::upload(&client, sport, mode, at) {
+        Ok(v) => println!("✅ 提交成功：{}", v.get("data").unwrap_or(&v)),
+        Err(e) => {
+            eprintln!("提交失败: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn do_ai_records(sport: i64, n: i64) {
+    use pace_forge::api::ai;
+    if sport <= 0 {
+        eprintln!("用法: pace-forge ai-records <项目id> [条数]");
+        std::process::exit(2);
+    }
+    let client = ai_client();
+    match ai::fetch_records(&client, sport, n.max(1)) {
+        Ok(data) => {
+            let tz = pace_forge::api::start_time::default_tz_offset_min();
+            let fmt = |ms: i64| pace_forge::api::start_time::format_ms(ms, tz);
+            let groups = data.get("list").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+            if groups.is_empty() {
+                println!("该项目暂无记录");
+                return;
+            }
+            for g in &groups {
+                let day = g.get("scoreDate").and_then(|x| x.as_i64()).unwrap_or(0);
+                println!("{}（{} 次）", fmt(day), g.get("frequency").and_then(|x| x.as_i64()).unwrap_or(0));
+                for r in g.get("recordInfos").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
+                    println!(
+                        "  #{} {}  score={}  用时={}s  status={}",
+                        r.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
+                        r.get("name").and_then(|x| x.as_str()).unwrap_or(""),
+                        r.get("score").map(|x| x.to_string()).unwrap_or_default(),
+                        r.get("timeConsume").and_then(|x| x.as_i64()).unwrap_or(0) / 1000,
+                        r.get("status").and_then(|x| x.as_i64()).unwrap_or(0),
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("拉记录失败: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]

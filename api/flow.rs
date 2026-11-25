@@ -85,6 +85,14 @@ pub struct RunParams {
     pub prefer_stadium: bool,
     /// 海拔区间 `(最低, 最高)`，米。`None` 用默认 42±21m。
     pub alt_range: Option<(f64, f64)>,
+    /// 自由跑 / 户外跑：不拉围栏、不拉打卡点，轨迹绕锚点自由生成，
+    /// 提交报文**省略** `fivePointJson`（OBS 明细仍发空数组 envelope）。
+    ///
+    /// 依据 neko（NekoSportsWorldTool）实测：sportType=4 自由跑（不计学期
+    /// 成绩）、6 户外跑，策略走 runMode=2（无时段限制、geoFence=null）；
+    /// 2/5 服务端拒「uid 不存在」，3 有特殊 roomId 签名规则。
+    /// 记分跑保持 `false`，行为不变。
+    pub free_run: bool,
 }
 
 /// 记分跑 = 操场绕圈。
@@ -616,6 +624,7 @@ impl Default for RunParams {
             end: None,
             alt_range: None,
             prefer_stadium: true,
+            free_run: false,
         }
     }
 }
@@ -790,8 +799,16 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     stage_t = std::time::Instant::now();
 
     // ② fence
-    log("[fence] 拉取围栏…");
-    let pick = match fence::fetch_fences(client) {
+    // 自由跑 / 户外跑：runMode=2 服务端本来就不下发围栏（geoFence=null），
+    // 跳过拉取，直接走「无围栏」支路（轨迹绕锚点自由生成）。
+    let fences = if p.free_run {
+        log("[fence] 自由跑：跳过围栏拉取");
+        Ok(Vec::new())
+    } else {
+        log("[fence] 拉取围栏…");
+        fence::fetch_fences(client)
+    };
+    let pick = match fences {
         Ok(fs) if !fs.is_empty() => {
             match fence::select_by_anchor(&fs, (p.center_lat, p.center_lng), -1) {
                 Ok(pk) => {
@@ -839,16 +856,22 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     stage_t = std::time::Instant::now();
 
     // ③ points
-    log("[points] 拉取打卡点…");
-    // 目标距离要传给点位接口：有的学校只在带真实距离时才下发点位。
-    // 先按 distance/1 拉，空集才用目标距离重试（见 points::fetch_points_cached_at）。
-    let pt = match points::fetch_points_cached_at(
-        client,
-        p.center_lat,
-        p.center_lng,
-        pick.as_ref().map(|k| k.selected.run_area_id.to_string()).as_deref(),
-        Some(p.distance_m.round() as i64),
-    ) {
+    // 自由跑 / 户外跑：没有打卡点，跳过拉取（neko 的自由跑同样不拉点位）。
+    let pt = match if p.free_run {
+        log("[points] 自由跑：跳过打卡点拉取，轨迹将绕锚点自由生成");
+        Ok(PointsContext::default())
+    } else {
+        log("[points] 拉取打卡点…");
+        // 目标距离要传给点位接口：有的学校只在带真实距离时才下发点位。
+        // 先按 distance/1 拉，空集才用目标距离重试（见 points::fetch_points_cached_at）。
+        points::fetch_points_cached_at(
+            client,
+            p.center_lat,
+            p.center_lng,
+            pick.as_ref().map(|k| k.selected.run_area_id.to_string()).as_deref(),
+            Some(p.distance_m.round() as i64),
+        )
+    } {
         // 点位接口返回 200 但空数组：有的学校把必经点只放在围栏里，
         // 这时点位接口本来就是空的，不是「这个校区没有打卡点」。
         Ok(c) if c.points.is_empty() => {
@@ -2422,6 +2445,14 @@ pub fn run_full(
     if !dropped.is_empty() {
         log(&format!("[detect] 已剔除不该有的字段: {}", dropped.join(", ")));
     }
+    // 自由跑 / 户外跑：save/record 报文整个省略 fivePointJson。
+    // neko 实测 sportType=4 这样发服务端收下且 App 归到自由跑；发空串
+    // envelope 则归类不确定（issue #35 的本地补丁就是发空串，没敢合）。
+    // fivePointJson 不进签名（31 字段里没有它），移除不影响签名。
+    // OBS 明细的 fixed_point_json 仍发 envelope（内层空数组），与 neko 一致。
+    if omit_five_point_for_free_run(&mut body, p.free_run) {
+        log("[submit] 自由跑：报文省略 fivePointJson");
+    }
     // 派生字段互校：爬升 / 卡路里 / 功率 / 配速 / 圈数据必须与点位列自洽。
     // 这些都是「填错了也能提交成功」的字段，回退成常量只会让服务端把整条
     // 记录判成来源可疑，所以宁可在这里拦下。
@@ -2514,7 +2545,10 @@ pub fn run_full(
     // useZip、runAreaId、geoFencesJson、freedomShowFence），不是裸点位数组。
     // 实测真机报文就是这么发的；传裸数组时服务端解析不出点位，于是
     // 「按顺序通过所有点位」永远 false。
-    let five_pt = body
+    // 从 submission 取（不是 body）：自由跑的 body 已省略 fivePointJson，
+    // 但 OBS 明细仍要 envelope（内层空数组），submission 里始终保留。
+    let five_pt = submission
+        .save_record
         .get("fivePointJson")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
@@ -2666,6 +2700,19 @@ pub const SILENCE_SEC: i64 = 600;
 /// 判断距离上次提交是否已过静默窗口。
 pub fn silence_ok(last_submit_ms: i64, now_ms: i64) -> bool {
     now_ms - last_submit_ms >= SILENCE_SEC * 1000
+}
+
+/// 自由跑 / 户外跑的报文形状：整个省略 `fivePointJson`。
+///
+/// 该字段不进签名（见 submit 的 31 字段表），移除不影响签名；记分跑
+/// （`free_run=false`）原样保留。返回是否真的移除了字段。
+pub fn omit_five_point_for_free_run(body: &mut Value, free_run: bool) -> bool {
+    if !free_run {
+        return false;
+    }
+    body.as_object_mut()
+        .map(|o| o.remove("fivePointJson").is_some())
+        .unwrap_or(false)
 }
 
 /// 构造 OBS 明细载荷。
@@ -2982,6 +3029,25 @@ mod tests {
         assert!(should_try_stadium(1, true), "选了操场绕圈，试");
         assert!(!should_try_stadium(1, false), "选了自动规划，不试");
         assert!(!should_try_stadium(2, true), "户外跑没有操场可绕");
+    }
+
+    /// 自由跑报文省略 fivePointJson；记分跑原样保留。
+    #[test]
+    fn free_run_omits_five_point_json() {
+        let mut body = json!({ "sportType": 4, "fivePointJson": "{}", "uid": "1" });
+        assert!(omit_five_point_for_free_run(&mut body, true));
+        assert!(body.get("fivePointJson").is_none(), "自由跑不应带 fivePointJson");
+        assert_eq!(body["sportType"], json!(4), "其余字段不动");
+
+        let mut scored = json!({ "sportType": 1, "fivePointJson": "{}" });
+        assert!(!omit_five_point_for_free_run(&mut scored, false));
+        assert!(scored.get("fivePointJson").is_some(), "记分跑必须保留");
+    }
+
+    /// 自由跑默认关闭：Default 不得悄悄改变记分跑行为。
+    #[test]
+    fn free_run_defaults_off() {
+        assert!(!RunParams::default().free_run);
     }
 
     /// 回归：补跑时刻必须按校时偏移搬到服务器轴上。

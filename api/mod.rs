@@ -1,6 +1,7 @@
 //! 业务接口层。
 
 pub mod accounts;
+pub mod ai;
 pub mod audit;
 pub mod egress;
 pub mod start_time;
