@@ -160,11 +160,35 @@ pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
         Some(&json!({ "geoFenceUpdateTime": 0 })),
     )?;
     let v = expect_ok(&raw)?;
+    // `geoFences` 显式为 null：服务端**没有配置围栏**，不是解析失败。
+    //
+    // 这是一次真实的降级：service 端判定项里没有「围栏」这一条（reasonList
+    // 只有点位/距离/时长/配速/步频），所以没围栏的学校照样能提交计分跑。
+    // 早先把它和「解析不出边界」混成一类 Err，计分跑直接被拦在原地——
+    // issue #34（ChenYuXinALL，v0.1.11）就是撞的这个。
+    //
+    // 返回空数组让上游走「未配置围栏」分支（日志会写明），而不是报错。
+    if geo_fences_unconfigured(&v) {
+        return Ok(Vec::new());
+    }
     let fences = parse_fences(&v)?;
     if fences.is_empty() {
         return Err(format!("服务端下发的围栏不成边界（{}）", fence_diag(&v)));
     }
     Ok(fences)
+}
+
+/// 响应里 `geoFences` 是否为**显式 null**（= 服务端没配置围栏）。
+///
+/// 和「有内容但解析不出边界」要分开：前者是学校真没配，后者是形状不认识。
+/// 混成一类会让没配围栏的学校跑不了计分跑（issue #34）。
+pub fn geo_fences_unconfigured(v: &Value) -> bool {
+    matches!(
+        v.get("data")
+            .and_then(|d| d.get("geoFences"))
+            .or_else(|| v.get("geoFences")),
+        Some(Value::Null)
+    )
 }
 
 /// 从 `geoFences` 的取值里抠出围栏条目，解析不出的形状一律返回空，
@@ -738,6 +762,20 @@ mod tests {
         // 6. 空数组的老消息不能丢（和「形状没见过」是两种处境）
         let empty = json!({ "data": { "geoFences": [] } });
         assert!(fence_diag(&empty).contains("空数组"));
+    }
+
+    /// `geoFences: null` = 服务端没配围栏，不能被当成解析失败。
+    ///
+    /// issue #34（v0.1.11）：该校围栏下发 null，计分跑直接被「计分跑必须拿到
+    /// 官方围栏」拦住。但 service 端判定项里没有围栏这一条。
+    #[test]
+    fn geo_fences_null_is_unconfigured_not_error() {
+        assert!(geo_fences_unconfigured(&json!({"data": {"geoFences": null}})));
+        assert!(geo_fences_unconfigured(&json!({"geoFences": null})));
+        // 空数组是「有字段但没内容」，走另一条路，不算显式 null
+        assert!(!geo_fences_unconfigured(&json!({"data": {"geoFences": []}})));
+        assert!(!geo_fences_unconfigured(&json!({"data": {"geoFences": "[]"}})));
+        assert!(!geo_fences_unconfigured(&json!({"data": {}})));
     }
 
     #[test]
