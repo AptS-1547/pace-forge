@@ -201,6 +201,10 @@ fn main() {
         "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
         "audit" => do_audit(false, args.get(1).map(|s| s.as_str())),
         "suggest" => do_audit(true, args.get(1).map(|s| s.as_str())),
+        "review" => {
+            let n: u32 = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(10);
+            do_review(n);
+        }
         "tracks" => match pace_forge::api::audit::parse_tracks_args(&args[1..]) {
             Ok((file, top)) => do_tracks(file.as_deref(), top),
             Err(e) => {
@@ -234,6 +238,7 @@ fn main() {
             println!("  pace-forge export-records [N] [out.json]  导出最近 N 条记录（含轨迹）给 crosscheck");
             println!("  pace-forge audit <json>        账号体检：连续性/时段/离散/重合，命中只提示");
             println!("  pace-forge suggest <json>      同上，再加一段「下一条怎么跑」的动作建议");
+            println!("  pace-forge review [N]        逐条查审核状态（status/isCheat/appeal），默认 10 条");
             println!("  pace-forge tracks <json> [--top N]  两两重合矩阵，区分同向与反向；--top 只看前 N 对");
             println!("  pace-forge version             版本号");
             println!();
@@ -592,6 +597,71 @@ fn read_audit_records(
         std::process::exit(1);
     }
     records
+}
+
+/// 逐条查审核状态：列表接口不返回 `status`，只能一条条拉详情。
+///
+/// 起因很具体：一条记录提交后**第 3 天**才被驳回（`APP 参数数据异常 201`），
+/// 而列表接口里所有记录看起来都是「正常」。不逐条拉详情，根本不知道哪条被
+/// 标记、违规计数有没有涨。
+fn do_review(n: u32) {
+    use pace_forge::api::{client, records, session};
+
+    let sess = session::load_session();
+    if !sess.is_valid() {
+        eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
+        std::process::exit(1);
+    }
+    let c = client::Client::new(client::DeviceProfile::default()).with_credentials(
+        client::Credentials {
+            uid: Some(sess.uid.to_string()),
+            token: Some(sess.token.clone()),
+            unid: Some(sess.unid.clone()),
+        },
+    );
+    let list = match records::list_records(&c, 1, n, 0) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("拉取记录失败: {e}");
+            std::process::exit(1);
+        }
+    };
+    let rows = list
+        .get("records")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    println!("审核状态（最近 {} 条，只读）\n", rows.len());
+    println!("{:>14} {:>7} {:>8} {:>6}  备注", "rrid", "状态", "里程(m)", "申诉");
+    let mut flagged = 0;
+    for r in &rows {
+        let rrid = r.get("rrid").and_then(|v| v.as_i64()).unwrap_or(0);
+        let dis = r.get("totalDis").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let Ok(d) = records::get_record(&c, rrid) else { continue };
+        let status = d.get("status").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let cheat = d.get("isCheat").and_then(|v| v.as_i64()).unwrap_or(0);
+        let appeal = d.get("appealStatus").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let info: String = d
+            .get("statusInfo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(26)
+            .collect();
+        let flag = if status == 0 && cheat == 0 {
+            "正常"
+        } else {
+            flagged += 1;
+            "可疑"
+        };
+        println!("{rrid:>14} {flag:>7} {dis:>8.0} {appeal:>6}  {info}");
+    }
+    println!();
+    if flagged == 0 {
+        println!("没有发现被标记的记录。");
+    } else {
+        println!("⚠ {flagged} 条被标记：审核是跑批的，提交成功不等于安全，隔几天再看一次。");
+    }
 }
 
 /// `audit` / `suggest` 共用：前者只打发现，后者多打一段动作建议。
