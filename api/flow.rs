@@ -2150,7 +2150,7 @@ fn local_day_key() -> String {
 }
 
 /// 毫秒戳 → 东八区日期键 `YYYY-MM-DD`。
-fn day_key_of(ms: i64) -> String {
+pub(crate) fn day_key_of(ms: i64) -> String {
     let days = (ms / 1000 + 8 * 3600) / 86400;
     // 从 1970-01-01 起算的民用历
     let (mut y, mut d) = (1970i64, days);

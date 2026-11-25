@@ -209,6 +209,69 @@ pub fn parse_goal(v: &Value) -> SemesterGoal {
     }
 }
 
+/// 本地反算「有效次数」。服务端在 `goalMethod=2` 的学校把次数两项恒置 0，
+/// 但记录列表里每条都带 `validDis` / `sportType`，按学期起止筛一遍就能算出来。
+///
+/// 返回 (有效计分跑次数, 这些跑分布在多少个自然日)。次数按「服务端自己给的
+/// validDis > 0」计，不做任何日上限假设——日上限那套只影响里程，不影响次数。
+pub fn derived_count(client: &Client, begin_ms: i64, end_ms: i64) -> Result<(usize, usize), String> {
+    use std::collections::BTreeSet;
+    let mut days: BTreeSet<String> = BTreeSet::new();
+    let mut runs = 0usize;
+    // 一学期最多翻三页（150 条），够到学期起点就停
+    for page in 1..=3u32 {
+        let v = super::records::list_records(client, page, 50, 1)?;
+        // `list_records` 回 `{"records": [...]}`，也兼容直接给数组。
+        let arr = match v.as_array() {
+            Some(a) => a.clone(),
+            None => v
+                .get("records")
+                .and_then(|x| x.as_array())
+                .cloned()
+                .unwrap_or_default(),
+        };
+        if arr.is_empty() {
+            break;
+        }
+        for r in &arr {
+            let st = r
+                .get("startTime")
+                .and_then(|x| x.as_i64())
+                .or_else(|| {
+                    r.get("startTime")
+                        .and_then(|x| x.as_str())
+                        .and_then(|s| s.parse::<i64>().ok())
+                })
+                .unwrap_or(0);
+            let ms = if st > 0 && st < 100_000_000_000 {
+                st * 1000
+            } else {
+                st
+            };
+            if ms < begin_ms || ms > end_ms {
+                continue;
+            }
+            // 列表接口的字段名经过 `records::normalize_list`：有效里程叫
+            // `validDistance`（原始字段 `validDis`），`sportType` 可能没下发——
+            // 请求本身就是 type=1（计分跑），缺字段按计分跑算。
+            if r.get("sportType").and_then(|x| x.as_i64()).is_some_and(|s| s != 1) {
+                continue;
+            }
+            let valid = r
+                .get("validDistance")
+                .and_then(|x| x.as_f64())
+                .or_else(|| r.get("validDis").and_then(|x| x.as_f64()))
+                .unwrap_or(0.0);
+            if valid <= 0.0 {
+                continue;
+            }
+            runs += 1;
+            days.insert(super::flow::day_key_of(ms));
+        }
+    }
+    Ok((runs, days.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

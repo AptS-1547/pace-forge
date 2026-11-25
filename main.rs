@@ -1095,6 +1095,18 @@ fn show_semester() {
             let by_distance = goal.as_ref().map(|g| g.goal_method == 2).unwrap_or(false);
             if by_distance && sm.semester_count == 0 && sm.semester_valid_count == 0 {
                 println!("  · 本校按里程考核，服务端不统计次数（上面的 0 次不是查询失败）");
+                // 服务端不给，就按记录列表自己数：每条带 validDis/sportType，
+                // 按学期起止筛一遍即可（不做日上限假设，次数不受上限影响）。
+                if let Ok(g) = goal.as_ref() {
+                    if g.begin_ms > 0 {
+                        match semester::derived_count(&client, g.begin_ms, g.end_ms) {
+                            Ok((runs, days)) => println!(
+                                "  · 本地按记录反算：{runs} 次计分跑分布在 {days} 天（仅供参考）"
+                            ),
+                            Err(e) => println!("  · 本地反算失败：{e}"),
+                        }
+                    }
+                }
             }
         }
         Err(e) => eprintln!("查学期汇总失败: {e}"),
