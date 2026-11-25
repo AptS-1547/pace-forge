@@ -17,14 +17,26 @@ use crate::crypto::envelope::{seal, SessionKeys};
 use sha2::{Digest, Sha256};
 use crate::crypto::{decrypt, sign::token_sign, SignFields};
 
-/// 可选硬件标识头的开关：`PACE_DEVICE_HW_HEADERS=empty` 时发空串。
+/// 可选硬件标识头的开关。
 ///
-/// 只影响 androidId / blMac / wifiMac / IMEI 四个头；DeviceId 与
-/// CustomDeviceId 不在此列——前者是设备锁，后者本来就是客户端自造值。
+/// **默认发空串**——7.4.21 的 `HttpUtil.getHeaderMap` 里这五个是硬编码的：
+///
+/// ```java
+/// arrayMap2.put("IMEI", "");
+/// arrayMap2.put("androidId", "");
+/// arrayMap2.put("blMac", "");
+/// arrayMap2.put("wifiMac", "");
+/// arrayMap2.put("CustomDeviceId", "");
+/// ```
+///
+/// 注意 `CustomDeviceId` 也在内：方法前面虽然 `Utils.OoooOo0(context, ...)`
+/// 生成过一个值存进缓存，但最后 put 进头的仍是 `""`。
+///
+/// 要发派生假值做对照时设 `PACE_DEVICE_HW_HEADERS=derived`。
 fn hw_id(value: &str) -> String {
     match std::env::var("PACE_DEVICE_HW_HEADERS").ok().as_deref() {
-        Some("empty") => String::new(),
-        _ => value.to_string(),
+        Some("derived") | Some("1") | Some("true") => value.to_string(),
+        _ => String::new(),
     }
 }
 
@@ -604,15 +616,15 @@ mod tests {
     use super::*;
     use crate::test_support::{assert_isolated, TestDir};
 
-    /// 硬件头开关：默认派生、设 `empty` 清空，DeviceId 不受影响。
+    /// 硬件头开关：**默认空串**（7.4.21 硬编码 `""`），设 `derived` 才发假值。
     #[test]
-    fn hw_headers_switch_only_touches_optional_ids() {
-        // 环境变量是进程级的，测试里设置/清除都只在断言窗口内
-        assert_eq!(hw_id("abc"), "abc");
-        std::env::set_var("PACE_DEVICE_HW_HEADERS", "empty");
-        assert_eq!(hw_id("abc"), "");
+    fn hw_headers_default_empty_derived_on_demand() {
         std::env::remove_var("PACE_DEVICE_HW_HEADERS");
-        assert_eq!(hw_id("abc"), "abc");
+        assert_eq!(hw_id("abc"), "", "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）");
+        std::env::set_var("PACE_DEVICE_HW_HEADERS", "derived");
+        assert_eq!(hw_id("abc"), "abc", "derived 时应发派生假值");
+        std::env::remove_var("PACE_DEVICE_HW_HEADERS");
+        assert_eq!(hw_id("abc"), "");
     }
 
     /// 回归（issue #16）：IMEI 必须 15 位并通过 Luhn。

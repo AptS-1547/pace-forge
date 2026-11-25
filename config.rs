@@ -103,9 +103,9 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         name: "PACE_DEVICE_HW_HEADERS",
-        default: "derived（发派生值）",
-        effect: "empty = 五个可选硬件头（androidId/blMac/wifiMac/IMEI/CustomDeviceId）发空串，做对照实验用；DeviceId 不受影响",
-        default_value: Some("derived"),
+        default: "empty（发空串）",
+        effect: "derived = 五个硬件头（androidId/blMac/wifiMac/IMEI/CustomDeviceId）发派生假值；默认空串，与 7.4.21 硬编码一致。DeviceId 不受影响",
+        default_value: Some("empty"),
         kind: Kind::Enum(&["derived", "empty"]),
     },
     Entry {
