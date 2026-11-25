@@ -138,17 +138,17 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
     let (mut cps, kind) = resolve_checkpoints(req, rng);
 
     // 1. 串成闭环
-    let mut ring = loop_waypoints(
-        (req.center_lat, req.center_lng),
-        &cps.iter().map(|c| (c.lat, c.lng)).collect::<Vec<_>>(),
-    );
-    // loop_waypoints 返回的是首尾重复的闭合折线。转样条前必须去掉那个重复点：
-    // 否则环上会出现一段长度为零的边，方向算不出来，轨迹在闭合处原地掉头。
-    if ring.len() > 2 && ring[0] == ring[ring.len() - 1] {
-        ring.pop();
+    let start = (req.center_lat, req.center_lng);
+    let cp_xy: Vec<(f64, f64)> = cps.iter().map(|c| (c.lat, c.lng)).collect();
+    let in_order = kind == CheckpointKind::Official;
+    let slack = req.total_distance_m * 1.15;
+    let mut ring = closed_ring(start, &cp_xy, in_order)?;
+    if in_order && cps.len() > 2 && super::geo::path_length(&ring) > slack {
+        // 按数组次序绕不成目标里程（服务端给的次序本身不来回折返）时退回
+        // 最近邻环：跑得了但首过次序会乱，由 [point-order] 自检如实报出来。
+        // 不退回的话用户连跑都跑不了，比次序错更糟。
+        ring = closed_ring(start, &cp_xy, false)?;
     }
-    // 折线 → 样条，拐角摊成圆弧，且仍然精确穿过每个打卡点。
-    let ring = catmull_rom_closed(&ring, 16);
     let ring_len = super::geo::path_length(&ring);
     if ring_len <= 0.0 {
         return Err("闭环长度为 0，无法规划".into());
@@ -162,7 +162,6 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
     // 闭环比目标略长不算装不下：样条穿过控制点会让周长比折线长一点
     // （合成五边形 2000m → 2017m，+0.85%），这点差额交给后面的里程对齐
     // 缩放即可。只有明显超出（超过容差上限）才是真的装不下。
-    let slack = req.total_distance_m * 1.15;
     if ring_len > slack {
         return Err(format!(
             "目标里程 {:.0}m 装不下这 {n} 个打卡点（最短闭环 {ring_len:.0}m）",
@@ -375,11 +374,40 @@ fn resolve_checkpoints(req: &PlanRequest, rng: &mut impl Rng) -> (Vec<Checkpoint
     (cps, CheckpointKind::Synthetic)
 }
 
-/// 最近邻串成闭环：起点 → 各点 → 回起点。
-fn loop_waypoints(start: (f64, f64), cps: &[(f64, f64)]) -> Vec<(f64, f64)> {
+/// 串成闭环并转成样条（仍然精确穿过每个打卡点）。
+fn closed_ring(
+    start: (f64, f64),
+    cps: &[(f64, f64)],
+    in_order: bool,
+) -> Result<Vec<(f64, f64)>, String> {
+    let mut ring = loop_waypoints(start, cps, in_order);
+    // loop_waypoints 返回的是首尾重复的闭合折线。转样条前必须去掉那个重复点：
+    // 否则环上会出现一段长度为零的边，方向算不出来，轨迹在闭合处原地掉头。
+    if ring.len() > 2 && ring[0] == ring[ring.len() - 1] {
+        ring.pop();
+    }
+    Ok(catmull_rom_closed(&ring, 16))
+}
+
+/// 串成闭环：起点 → 各点 → 回起点。
+///
+/// `in_order` 为真时按 `cps` 的数组次序经过。服务端下发的是打卡点，它判
+/// 「按顺序通过所有点位」看的就是首次经过次序等于数组次序；最近邻串出来的
+/// 环次序由几何决定，和数组多半不同序（issue #37 的补充：无围栏学校关掉
+/// 操场后首过次序是 1→2→0→3→4）。合成点位没有这个约束，仍走最近邻。
+fn loop_waypoints(start: (f64, f64), cps: &[(f64, f64)], in_order: bool) -> Vec<(f64, f64)> {
     if cps.is_empty() {
         // 无点位：方形小环，边长按 120m 起步
         return square_ring(start.0, start.1, 120.0);
+    }
+    if in_order {
+        let mut route = Vec::with_capacity(cps.len() + 2);
+        route.push(start);
+        route.extend_from_slice(cps);
+        if distance(*route.last().unwrap(), start) > 1e-6 {
+            route.push(start);
+        }
+        return route;
     }
     let mut remaining: Vec<(f64, f64)> = cps.to_vec();
     let mut route = vec![start];
@@ -522,6 +550,63 @@ mod tests {
         let res = plan(&base_req(), &mut r).unwrap();
         for w in res.points.windows(2) {
             assert!(w[1].time_ms > w[0].time_ms, "时间必须严格递增");
+        }
+    }
+
+    /// 服务端打卡点必须按数组次序被首次经过（服务端判「按顺序通过所有点位」）。
+    /// 最近邻串环会按几何重排，这里锁死次序（issue #37 的无围栏场景）。
+    #[test]
+    fn official_checkpoints_passed_in_array_order() {
+        let (lat0, lng0) = (39.9042, 116.4074);
+        let klat = crate::track::geo::m_per_deg_lat(lat0);
+        let klng = crate::track::geo::m_per_deg_lng(lat0);
+        let mk = |i: usize, dy: f64, dx: f64| Checkpoint {
+            lat: lat0 + dy / klat,
+            lng: lng0 + dx / klng,
+            glat: lat0 + dy / klat,
+            glon: lng0 + dx / klng,
+            name: format!("P{}", i + 1),
+        };
+        // 约 123×86m 的外框，几种服务端可能给出的数组次序
+        let layouts: Vec<Vec<(f64, f64)>> = vec![
+            vec![(43.0, 61.5), (0.0, 0.0), (86.0, 0.0), (86.0, 123.0), (0.0, 123.0)],
+            vec![(0.0, 0.0), (0.0, 123.0), (86.0, 123.0), (86.0, 0.0), (43.0, 61.5)],
+            vec![(0.0, 0.0), (86.0, 30.0), (0.0, 61.0), (86.0, 92.0), (0.0, 123.0)],
+        ];
+        for (li, layout) in layouts.iter().enumerate() {
+            // 锚点落在靠后的点位上时，起点本身就先经过了那个点，这不是排序能解决的
+        // （别把锚点设在打卡点上），这组不测。
+        for anchor in [(43.0, 61.5), layout[0]] {
+            if layout.iter().skip(1).any(|&(dy, dx)| (dy - anchor.0).hypot(dx - anchor.1) < 15.0) {
+                continue;
+            }
+                for seed in [42u64, 2026] {
+                    let mut req = base_req();
+                    req.total_distance_m = 2000.0;
+                    req.center_lat = lat0 + anchor.0 / klat;
+                    req.center_lng = lng0 + anchor.1 / klng;
+                    req.checkpoints = layout
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &(dy, dx))| mk(i, dy, dx))
+                        .collect();
+                    let res = plan(&req, &mut rand::rngs::StdRng::seed_from_u64(seed)).unwrap();
+                    let pts: Vec<(f64, f64)> =
+                        res.points.iter().map(|p| (p.lat, p.lon)).collect();
+                    let mut last = -1i64;
+                    for (i, cp) in res.checkpoints.iter().enumerate() {
+                        let first = pts
+                            .iter()
+                            .position(|q| distance(*q, (cp.lat, cp.lng)) < 10.0)
+                            .unwrap_or_else(|| panic!("layout {li}: 点位 {} 没被经过", cp.name));
+                        assert!(
+                            (first as i64) > last,
+                            "layout {li} anchor {anchor:?} seed {seed}: #{i} 首过 idx {first}，不晚于前一个 {last}"
+                        );
+                        last = first as i64;
+                    }
+                }
+            }
         }
     }
 
