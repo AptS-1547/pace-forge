@@ -1780,6 +1780,8 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
                 "targetCount": g.target_count,
                 "daysLeft": g.days_left(now),
                 "inTerm": g.in_term(now),
+                // 2 = 按里程考核，次数两项服务端给 0；前端据此说明而不是显示成 0 次
+                "goalMethod": g.goal_method,
             }));
         }
         Err(e) => {

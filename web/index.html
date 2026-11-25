@@ -995,8 +995,10 @@ $('semBtn').onclick = async () => {
       <div class="kv"><span>学期</span><b>${esc(sm.sname || '—')}</b></div>
       <div class="kv"><span>有效里程</span><b>${(done/1000).toFixed(2)} km</b></div>
       <div class="kv"><span>累计里程</span><b>${((sm.semesterDis||0)/1000).toFixed(2)} km</b></div>
+      ${(g.goalMethod === 2 && !(sm.semesterCount || 0)) ? `
+      <div class="kv"><span>次数</span><b class="warn">本校按里程考核，服务端不统计次数</b></div>` : `
       <div class="kv"><span>有效次数</span><b>${sm.semesterValidCount || 0} 次</b></div>
-      <div class="kv"><span>累计次数</span><b>${sm.semesterCount || 0} 次</b></div>
+      <div class="kv"><span>累计次数</span><b>${sm.semesterCount || 0} 次</b></div>`}
       <div class="kv"><span>有效率</span><b class="${(sm.validRatio||0) < 0.9 ? 'warn' : 'ok'}">${((sm.validRatio||0)*100).toFixed(1)}%</b></div>
       ${target > 0 ? `
         <div class="kv"><span>目标</span><b>${(target/1000).toFixed(1)} km / ${g.targetCount || 0} 次</b></div>

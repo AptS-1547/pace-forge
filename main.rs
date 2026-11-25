@@ -1085,30 +1085,42 @@ fn show_semester() {
             unid: Some(sess.unid.clone()),
         });
 
+    let goal = semester::fetch_goal(&client, 1);
     match semester::fetch_summary(&client) {
         Ok(sm) => {
             println!("{}", sm.summary());
             println!("  有效比例 {:.1}%", sm.valid_ratio() * 100.0);
+            // 实测（goalMethod=2 的学校）：里程正常返回，次数两项服务端自己给 0——
+            // 它按里程考核，不统计次数。不说明的话看起来像没查到。
+            let by_distance = goal.as_ref().map(|g| g.goal_method == 2).unwrap_or(false);
+            if by_distance && sm.semester_count == 0 && sm.semester_valid_count == 0 {
+                println!("  · 本校按里程考核，服务端不统计次数（上面的 0 次不是查询失败）");
+            }
         }
         Err(e) => eprintln!("查学期汇总失败: {e}"),
     }
 
-    match semester::fetch_goal(&client, 1) {
+    match goal {
         Ok(g) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            if !g.in_term(now) {
+                println!("⚠ 当前不在学期内");
+            }
             if g.target_dis > 0.0 {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
                 println!(
                     "学期目标 {:.1}km / {} 次，还剩 {} 天",
                     g.target_dis / 1000.0,
                     g.target_count,
                     g.days_left(now)
                 );
-                if !g.in_term(now) {
-                    println!("⚠ 当前不在学期内");
-                }
+            } else if g.days_left(now) >= 0 {
+                println!(
+                    "· 服务端没有下发学期目标里程（semesterGoal=0），学期还剩 {} 天",
+                    g.days_left(now)
+                );
             } else {
                 println!("· 未取到学期目标");
             }
