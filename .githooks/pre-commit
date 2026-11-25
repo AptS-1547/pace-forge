@@ -1,6 +1,17 @@
 #!/bin/sh
 # 提交前扫一遍凭证与个人信息。CI 也有同一道，这里只是让人早一步知道。
-python3 tools/check_secrets.py || {
-  echo "提交被拦：先按上面的提示改掉，再 git add。"
-  exit 1
-}
+
+for launcher in python3 python py
+do
+  set -- "$launcher"
+  if [ "$launcher" = py ]; then
+    set -- "$@" -3
+  fi
+  if "$@" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+    PYTHONIOENCODING=utf-8 "$@" tools/check_secrets.py --staged
+    exit $?
+  fi
+done
+
+echo "提交前检查未运行：需要 Python 3.10 或以上版本。" >&2
+exit 1
