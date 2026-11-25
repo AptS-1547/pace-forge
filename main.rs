@@ -628,7 +628,7 @@ fn do_tracks(file: Option<&str>, top: Option<usize>) {
 fn do_crosscheck(file: Option<&str>) {
     use pace_forge::api::crosscheck as cc;
     let Some(path) = file else {
-        eprintln!("用法: pace-forge crosscheck <records.json>\n文件可以是 JSON 数组，也可以是 {{\"records\":[...]}}。");
+        eprintln!("用法: pace-forge crosscheck <records.json>\n文件可以是 JSON 数组，也可以是包含 records/list 数组的对象。");
         std::process::exit(2);
     };
     let text = match std::fs::read_to_string(path) {
@@ -645,9 +645,19 @@ fn do_crosscheck(file: Option<&str>) {
             std::process::exit(1);
         }
     };
-    let records = cc::parse_records(&v);
+    let imported = match cc::parse_local_records(&v) {
+        Ok(imported) => imported,
+        Err(error) => {
+            eprintln!("{path}：{error}");
+            std::process::exit(1);
+        }
+    };
+    for issue in &imported.issues {
+        eprintln!("{path}：{issue}");
+    }
+    let records = &imported.records;
     if records.is_empty() {
-        eprintln!("没读到记录：需要至少有 startTime（或 beginTime）和 totalDis（或 distance）。");
+        eprintln!("{path}：没有可统计的有效记录。");
         std::process::exit(1);
     }
     let tz = cc::tz_offset_sec();
@@ -656,13 +666,13 @@ fn do_crosscheck(file: Option<&str>) {
     let last = records.iter().map(|r| r.start_ms).max().unwrap_or(0);
     let (y1, m1, d1) = cc::local_date(first, tz);
     let (y2, m2, d2) = cc::local_date(last, tz);
-    let span = (last - first) / 86_400_000 + 1;
+    let span = cc::calendar_span(first, last, tz);
     println!("[记录] {} 条，{y1}-{m1:02}-{d1:02} ~ {y2}-{m2:02}-{d2:02}（跨 {span} 天）", records.len());
 
-    let (best, cur) = cc::streak_days(&records, tz);
+    let (best, cur) = cc::streak_days(records, tz);
     println!("[连续] 最长 {best} 天，当前一段 {cur} 天");
 
-    let (hour, share) = cc::start_hour_concentration(&records, tz);
+    let (hour, share) = cc::start_hour_concentration(records, tz);
     println!("[起跑时刻] 最集中 {hour:02}:00，占 {:.0}%", share * 100.0);
 
     let dists: Vec<f64> = records.iter().map(|r| r.distance_m).collect();
@@ -671,23 +681,29 @@ fn do_crosscheck(file: Option<&str>) {
 
     let paces: Vec<f64> = records
         .iter()
-        .filter(|r| r.distance_m > 0.0 && r.duration_sec > 0)
-        .map(|r| r.duration_sec as f64 / (r.distance_m / 1000.0))
+        .filter_map(|record| {
+            let pace = (record.duration_sec as f64 * 1000.0) / record.distance_m;
+            (pace > 0.0 && pace < i64::MAX as f64).then_some(pace)
+        })
         .collect();
-    let (pm, pcv) = cc::dispersion(&paces);
-    println!("[配速] 均值 {}/km，离散 {:.1}%", cc::format_pace(pm), pcv * 100.0);
+    if paces.is_empty() {
+        println!("[配速] 无可用记录");
+    } else {
+        let (pm, pcv) = cc::dispersion(&paces);
+        println!("[配速] 均值 {}/km，离散 {:.1}%", cc::format_pace(pm), pcv * 100.0);
+    }
 
-    match cc::max_pair_overlap(&records, cc::OVERLAP_RADIUS_M) {
+    match cc::max_pair_overlap(records, cc::OVERLAP_RADIUS_M) {
         Some((a, b, ov, pairs)) => println!(
             "[重合] 第 {} 条 vs 第 {} 条 最高 {:.0}%（{pairs} 对，{:.0}m 缓冲；仅空间形状，不含时间对齐）",
-            a + 1,
-            b + 1,
+            imported.row_numbers[a],
+            imported.row_numbers[b],
             ov * 100.0,
             cc::OVERLAP_RADIUS_M
         ),
         None => println!("[重合] 带轨迹的记录不足两条，算不了"),
     }
-    let near_midnight = cc::near_midnight_count(&records, tz);
+    let near_midnight = cc::near_midnight_count(records, tz);
     if near_midnight > 0 {
         println!("[提示] {near_midnight} 条记录起跑时刻距本地零点不足 1 小时，日期归属受时区影响");
     }
