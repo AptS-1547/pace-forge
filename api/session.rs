@@ -185,9 +185,18 @@ fn temp_sibling(path: &Path) -> std::path::PathBuf {
     p
 }
 
-fn read_json_below<T: serde::de::DeserializeOwned>(dir: &Path, name: &str) -> Option<T> {
-    let text = std::fs::read_to_string(dir.join(name)).ok()?;
-    serde_json::from_str(&text).ok()
+fn read_json_below<T: serde::de::DeserializeOwned>(
+    dir: &Path,
+    name: &str,
+) -> Result<Option<T>, String> {
+    let path = dir.join(name);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 {} 失败: {error}", path.display())),
+    };
+    // 损坏的会话无法恢复。保留原文件，不因此阻止退出账号。
+    Ok(serde_json::from_slice(&bytes).ok())
 }
 
 fn write_json_below<T: Serialize>(dir: &Path, name: &str, value: &T) -> Result<(), String> {
@@ -204,7 +213,10 @@ pub fn load_session() -> Session {
 
 /// 同上，但数据目录由调用方指定（测试注入隔离目录用）。
 pub(crate) fn load_session_below(dir: &Path) -> Session {
-    read_json_below(dir, "session.json").unwrap_or_default()
+    read_json_below(dir, "session.json")
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// 写入会话（登录成功后立即调用）。
@@ -227,7 +239,30 @@ pub fn clear_session() {
 /// **测试必须用这个而不是 `clear_session()`**：`clear_session()` 删的是真实
 /// `$HOME/.pace-forge/session.json`，测试里调用它等于把用户的登录态删掉。
 pub(crate) fn clear_session_below(dir: &Path) {
-    let _ = std::fs::remove_file(dir.join("session.json"));
+    let _ = remove_session_file(dir);
+}
+
+/// 清理符合条件的兼容会话，保留其他账号的会话。
+pub(crate) fn clear_session_if_below(
+    dir: &Path,
+    belongs_to_account: impl FnOnce(&Session) -> bool,
+) -> Result<(), String> {
+    if read_json_below::<Session>(dir, "session.json")?
+        .as_ref()
+        .is_some_and(belongs_to_account)
+    {
+        remove_session_file(dir)?;
+    }
+    Ok(())
+}
+
+fn remove_session_file(dir: &Path) -> Result<(), String> {
+    let path = dir.join("session.json");
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("删除会话文件 {} 失败: {error}", path.display())),
+    }
 }
 
 #[cfg(test)]
@@ -409,7 +444,9 @@ mod tests {
         let t = TestDir::new("json");
         let s = temp_session();
         write_json_below(&t.data(), "session_test.json", &s).unwrap();
-        let back: Session = read_json_below(&t.data(), "session_test.json").unwrap();
+        let back: Session = read_json_below(&t.data(), "session_test.json")
+            .unwrap()
+            .unwrap();
         assert_eq!(back.uid, "123");
         assert!(t.data().join("session_test.json").exists());
     }
