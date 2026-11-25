@@ -329,6 +329,9 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
         (None, None) => a.cmp(&b),
     });
 
+    // isFixed 下发列表（issue #37 三档开关 + auto 规则），与 fixed 同序。
+    let marks = fixed_marks(&fixed.iter().map(|f| f.is_fixed).collect::<Vec<i64>>());
+
     order
         .iter()
         .enumerate()
@@ -362,15 +365,10 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
             json!({
                 "lon": f.lon,
                 "lat": f.lat,
-                // `isFixed` 决定 App 用「必经点」还是「普通点」那套图标
-                // （`Oooo000.setFivePoint` 里按 `(isFixed==1||isFixed==2)` 分支）。
-                // App 对必经点那套图标固定画橙（2026-11-25 实测），所以默认
-                // 全部发 0；要看真实值设 `PACE_FORCE_NORMAL_POINT=0`。
-                "isFixed": if crate::api::submit::force_normal_point() {
-                    0
-                } else {
-                    f.is_fixed
-                },
+                // `isFixed` 决定 App 用「必经点」还是「普通点」那套图标。
+                // issue #37：默认 auto（保留 ≥1 必经点 + ≥2 普通点，次数才计），
+                // 对照实验用 PACE_FIXED_POINT=all0 / server 覆盖。
+                "isFixed": marks[i],
                 "pointName": f.point_name,
                 "glon": glon,
                 "glat": glat,
@@ -393,23 +391,71 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
 }
 
 /// 是否把全部点位伪装成「普通点」（对照实验用）。
+/// `isFixed` 下发策略（issue #37）。
 ///
-/// App 的地图渲染按 `isFixed ∈ {1,2}` 分成「必经点」和「普通点」两套图标，
-/// 但两者共用同一个 `isPassed` 布尔。橙点只在必经点上出现的话，很可能是
-/// App 对必经点另有一套判定。设 `PACE_FORCE_NORMAL_POINT=1` 跑一条即可验证。
+/// - `Auto`（默认）：服务端标了必经点就保留 ≥1 个 `isFixed=1`、同时保证 ≥2 个
+///   普通点，让「经过必经点位」和「按顺序」两条规则同时满足、有效次数才计；
+///   服务端没标必经点则全 0。
+/// - `AllNormal`：全 0（复现「详情页 5 绿但次数 0」的对照实验）。
+/// - `FollowServer`：原样跟随服务端标记。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FixedPointMode {
+    Auto,
+    AllNormal,
+    FollowServer,
+}
+
+/// 读 `PACE_FIXED_POINT=auto|all0|server`；未设时兼容旧变量
+/// `PACE_FORCE_NORMAL_POINT`（=0→server，=1→all0，未设→auto）。
+pub fn fixed_point_mode() -> FixedPointMode {
+    match std::env::var("PACE_FIXED_POINT").ok().as_deref() {
+        Some("all0") | Some("allnormal") => FixedPointMode::AllNormal,
+        Some("server") | Some("follow") => FixedPointMode::FollowServer,
+        Some("auto") => FixedPointMode::Auto,
+        _ => match std::env::var("PACE_FORCE_NORMAL_POINT").ok().as_deref() {
+            Some("0") | Some("false") | Some("no") => FixedPointMode::FollowServer,
+            Some("1") | Some("true") | Some("yes") => FixedPointMode::AllNormal,
+            _ => FixedPointMode::Auto,
+        },
+    }
+}
+
+/// 兼容旧调用：仅 `AllNormal` 时为 true（flow 的点位顺序日志用它判断服务端是否判顺序）。
 pub fn force_normal_point() -> bool {
-    // **默认开**。实测结论（2026-11-25）：
-    // - isFixed=1 的那个点位，App 详情页固定画橙（用 img_point_must_normal），
-    //   即使报文里 isPass=true——OBS 里五个点全是 true 也照样橙。
-    // - 全部发 0 之后详情页 5 绿。
-    // - 代价只有 reasonList 里「经过必经点位」显示 ✗，但 complete=true、
-    //   validDis 全额、semesterValidDis 也全额（31201/31201 实测没扣）。
-    //
-    // 想发真实值做对照时设 PACE_FORCE_NORMAL_POINT=0。
-    !matches!(
-        std::env::var("PACE_FORCE_NORMAL_POINT").ok().as_deref(),
-        Some("0") | Some("false") | Some("no")
-    )
+    fixed_point_mode() == FixedPointMode::AllNormal
+}
+
+/// 按模式把服务端 `is_fixed` 映射成下发的 `isFixed` 列表（与输入同序）。
+pub fn fixed_marks(server: &[i64]) -> Vec<i64> {
+    match fixed_point_mode() {
+        FixedPointMode::AllNormal => vec![0; server.len()],
+        FixedPointMode::FollowServer => server.to_vec(),
+        FixedPointMode::Auto => auto_fixed_marks(server),
+    }
+}
+
+/// Auto 规则：有必经点就保留 ≥1 个、并保证 ≥2 个普通点；点数不足 3 无法同时
+/// 满足两条约束时原样跟随。服务端没标必经点则全 0。
+fn auto_fixed_marks(server: &[i64]) -> Vec<i64> {
+    let is_fixed = |v: i64| v == 1 || v == 2;
+    if server.len() < 3 || !server.iter().any(|&v| is_fixed(v)) {
+        return vec![0; server.len()];
+    }
+    let mut out = server.to_vec();
+    // 普通点不足 2 个：从后往前把必经点降级成 0，但始终保留 ≥1 个必经点。
+    let mut normals = out.iter().filter(|&&v| !is_fixed(v)).count();
+    let mut fixed_left = out.iter().filter(|&&v| is_fixed(v)).count();
+    for v in out.iter_mut().rev() {
+        if normals >= 2 {
+            break;
+        }
+        if is_fixed(*v) && fixed_left > 1 {
+            *v = 0;
+            normals += 1;
+            fixed_left -= 1;
+        }
+    }
+    out
 }
 
 /// `fixed_point_json` envelope 里的 `runAreaId` 该发什么。
@@ -4480,5 +4526,40 @@ mod mark_match_tests {
         assert!(match_checkpoints(&track, &[], &HashSet::new(), false).is_empty());
         let m = match_checkpoints(&[], &[(0.0, 0.0)], &HashSet::new(), false);
         assert_eq!(m[0], MarkMatch::Missing(MissReason::EmptyTrack));
+    }
+}
+
+#[cfg(test)]
+mod issue37_tests {
+    use super::*;
+
+    /// auto：服务端标了必经点 → 保留 ≥1 个 1、≥2 个 0。
+    #[test]
+    fn auto_keeps_one_fixed_and_two_normal() {
+        let out = auto_fixed_marks(&[0, 0, 0, 1, 0]);
+        assert_eq!(out, vec![0, 0, 0, 1, 0]);
+        assert!(out.iter().filter(|&&v| v == 1).count() >= 1);
+        assert!(out.iter().filter(|&&v| v == 0).count() >= 2);
+    }
+
+    /// auto：服务端没标必经点 → 全 0。
+    #[test]
+    fn auto_all_normal_when_server_none_fixed() {
+        assert_eq!(auto_fixed_marks(&[0, 0, 0, 0, 0]), vec![0; 5]);
+    }
+
+    /// auto：服务端全标 1 → 降级出 ≥2 普通点但保留 ≥1 必经点。
+    #[test]
+    fn auto_demotes_when_all_fixed() {
+        let out = auto_fixed_marks(&[1, 1, 1, 1, 1]);
+        assert!(out.iter().filter(|&&v| v == 1).count() >= 1, "保留必经点");
+        assert!(out.iter().filter(|&&v| v == 0).count() >= 2, "保证普通点");
+    }
+
+    /// 默认模式为 auto（issue #37），不再默认全 0。
+    #[test]
+    fn default_mode_is_auto() {
+        assert_eq!(fixed_point_mode(), FixedPointMode::Auto);
+        assert!(!force_normal_point());
     }
 }

@@ -80,8 +80,8 @@ pub struct RunParams {
     /// 控制台有「自动规划 / 操场绕圈」两个选项，这里必须如实反映用户选的那个：
     /// 早先只判 `run_mode == 1`，于是选了「自动规划」也会被拿去试操场，打卡点
     /// 恰好围成长方形就被判成跑道，画出一条不在任何跑道上的椭圆——用户的
-    /// 选择被静默改写，界面还显示「操场绕圈」。CLI 没有这个选项，默认 `true`
-    /// 保持原来的自动尝试行为。
+    /// 选择被静默改写。issue #37 起默认 `false`（走路网/按序串点），操场是
+    /// 显式选项：CLI 用 `PACE_PREFER_STADIUM=1`、web 用 mode=stadium 打开。
     pub prefer_stadium: bool,
     /// 海拔区间 `(最低, 最高)`，米。`None` 用默认 42±21m。
     pub alt_range: Option<(f64, f64)>,
@@ -117,6 +117,15 @@ pub struct RunParams {
 /// 跑道，在不是操场的地方画椭圆（用户看到的「我选了自由路线，怎么绕操场」）。
 fn should_try_stadium(run_mode: i64, prefer_stadium: bool) -> bool {
     run_mode == 1 && prefer_stadium
+}
+
+/// CLI 的「是否操场」开关（issue #37）。默认 `0`（走路网/按序串点），
+/// 显式 `PACE_PREFER_STADIUM=1/true/yes` 才试操场。web 走 mode=stadium，不用它。
+pub fn prefer_stadium_env() -> bool {
+    matches!(
+        std::env::var("PACE_PREFER_STADIUM").ok().as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    )
 }
 
 fn try_stadium_track(
@@ -316,6 +325,40 @@ fn try_stadium_track(
         return None;
     }
     Some(pts)
+}
+
+/// 操场轨迹的「点位首次经过顺序」闸（issue #37，与长宽比闸并列，在 plan 层调用）。
+///
+/// 服务端「按顺序通过所有点位」是从轨迹里找每个点首次被经过的位置，再检查该
+/// 序列与点位数组同序。绕圈轨迹每圈重复经过全部点，若数组序与绕圈方向不一致
+/// （如 123×86 外框 5 点），首次经过序必然乱 → 回退按序串点。
+/// 半径取 20m：操场四角点天然贴在跑道外 ≤16m，10m 会误杀真操场。
+fn stadium_point_order_ok(pts: &[(f64, f64)], cps: &[Checkpoint], log: &mut Log) -> bool {
+    let mut seen: Vec<(usize, usize)> = Vec::new();
+    for (i, c) in cps.iter().enumerate() {
+        match pts
+            .iter()
+            .position(|q| crate::track::geo::distance(*q, (c.lat, c.lng)) < 20.0)
+        {
+            Some(idx) => seen.push((i, idx)),
+            None => {
+                log(&format!(
+                    "[track] 操场轨迹没有 20m 内经过打卡点 #{i}，改用路线规划"
+                ));
+                return false;
+            }
+        }
+    }
+    seen.sort_by_key(|x| x.1);
+    if seen.windows(2).all(|w| w[1].0 > w[0].0) {
+        return true;
+    }
+    let seq: Vec<String> = seen.iter().map(|x| format!("#{}", x.0)).collect();
+    log(&format!(
+        "[track] 操场绕圈首次经过顺序（{}）与点位数组不同序，改用路线规划",
+        seq.join("→")
+    ));
+    false
 }
 
 /// 吸附之后复核每个打卡点到轨迹的最终距离：
@@ -642,7 +685,7 @@ impl Default for RunParams {
             custom_path: None,
             end: None,
             alt_range: None,
-            prefer_stadium: true,
+            prefer_stadium: false,
             free_run: false,
         }
     }
@@ -1001,7 +1044,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         None
     } else if want_stadium {
         let seed0 = if p.seed != 0 { p.seed } else { start_ms as u64 };
-        let got = try_stadium_track(&cps, p.distance_m, p.sample_step_m, seed0, log);
+        // issue #37：长宽比闸放行后再过「首次经过顺序」闸，不同序回退路网。
+        let got = try_stadium_track(&cps, p.distance_m, p.sample_step_m, seed0, log)
+            .filter(|pts| stadium_point_order_ok(pts, &cps, log));
         stadium_fallback = got.is_none();
         got
     } else {
@@ -3925,5 +3970,65 @@ mod single_point_source_tests {
             );
         }
         assert_points_identical(&probe.points, &uploaded, "自检 vs OBS 上传");
+    }
+}
+
+#[cfg(test)]
+mod issue37_tests {
+    use super::*;
+
+    /// issue #37：操场默认关闭，走路网/按序串点；显式开关才试。
+    #[test]
+    fn stadium_default_off() {
+        assert!(!RunParams::default().prefer_stadium, "默认不试操场");
+        assert!(!should_try_stadium(1, RunParams::default().prefer_stadium));
+        assert!(should_try_stadium(1, true), "显式选操场才试");
+    }
+
+    fn circle_pts() -> Vec<(f64, f64)> {
+        let lat0 = 47.386;
+        let lng0 = 103.956;
+        let klat = crate::track::geo::m_per_deg_lat(lat0);
+        let klng = crate::track::geo::m_per_deg_lng(lat0);
+        (0..360)
+            .map(|d| {
+                let a = (d as f64).to_radians();
+                (lat0 + 40.0 * a.sin() / klat, lng0 + 40.0 * a.cos() / klng)
+            })
+            .collect()
+    }
+
+    fn cp_at(deg: f64) -> Checkpoint {
+        let lat0 = 47.386;
+        let lng0 = 103.956;
+        let klat = crate::track::geo::m_per_deg_lat(lat0);
+        let klng = crate::track::geo::m_per_deg_lng(lat0);
+        let a = deg.to_radians();
+        Checkpoint {
+            lat: lat0 + 40.0 * a.sin() / klat,
+            lng: lng0 + 40.0 * a.cos() / klng,
+            glat: lat0,
+            glon: lng0,
+            name: "P".into(),
+        }
+    }
+
+    /// issue #37：123×86 这类外框长宽比放行，但点位数组序与绕圈序不一致 → 闸拒。
+    #[test]
+    fn order_gate_rejects_out_of_order() {
+        let pts = circle_pts();
+        // 数组序 0,180,90,270 ≠ 绕圈首次经过序 0,90,180,270
+        let cps = vec![cp_at(0.0), cp_at(180.0), cp_at(90.0), cp_at(270.0)];
+        let mut log = |_s: &str| {};
+        assert!(!stadium_point_order_ok(&pts, &cps, &mut log), "不同序必须回退");
+    }
+
+    /// 数组序与绕圈序一致 → 放行（真操场不被误杀）。
+    #[test]
+    fn order_gate_accepts_in_order() {
+        let pts = circle_pts();
+        let cps = vec![cp_at(0.0), cp_at(90.0), cp_at(180.0), cp_at(270.0)];
+        let mut log = |_s: &str| {};
+        assert!(stadium_point_order_ok(&pts, &cps, &mut log), "同序应放行");
     }
 }

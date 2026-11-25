@@ -288,6 +288,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         center_lng: clng,
         distance_m: dist_km * 1000.0,
         duration_sec: (dur_min * 60.0).round() as i64,
+        prefer_stadium: flow::prefer_stadium_env(),
         ..Default::default()
     };
 
@@ -1178,6 +1179,7 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(5.0),
+        prefer_stadium: flow::prefer_stadium_env(),
         ..Default::default()
     };
 
