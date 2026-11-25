@@ -38,6 +38,8 @@ sha2 = "0.10"
 # 极验缺口识别（只编 PNG，避免拖入整套图片编解码）
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
+# PACE_EXTRA_CA 追加信任根时，仍要带上公共 CA 根（ureq 默认就是这套）
+webpki-roots = "0.26"
 # OBS 明细要 gzip+base64
 flate2 = "1"
 rand = "0.8"

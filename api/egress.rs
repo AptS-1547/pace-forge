@@ -115,12 +115,55 @@ pub fn parse_proxy(spec: &str) -> Result<String, String> {
     }
 }
 
+/// 给 agent 追加信任根：`PACE_EXTRA_CA` 指向一个 PEM 文件时，把里面的证书
+/// 加到公共 CA 根之上（沙箱/企业出口网关自签 CA 的场景）。没设这个变量时
+/// 与原来逐字节等价，不动 TLS。
+pub fn with_extra_ca(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
+    let Some(path) = std::env::var("PACE_EXTRA_CA").ok().filter(|s| !s.is_empty()) else {
+        return builder;
+    };
+    let pem = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            report_once(&format!("PACE_EXTRA_CA 读不到（{e}），本次按默认 CA 走"));
+            return builder;
+        }
+    };
+    // 手工拆 PEM：-----BEGIN/END CERTIFICATE----- 之间 base64 → DER
+    let text = String::from_utf8_lossy(&pem);
+    let mut ders: Vec<Vec<u8>> = Vec::new();
+    for chunk in text.split("-----BEGIN CERTIFICATE-----").skip(1) {
+        let Some(body) = chunk.split("-----END CERTIFICATE-----").next() else { continue };
+        let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        if let Ok(der) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64) {
+            ders.push(der);
+        }
+    }
+    if ders.is_empty() {
+        report_once("PACE_EXTRA_CA 里没有可解析的证书，本次按默认 CA 走");
+        return builder;
+    }
+    let mut roots = ureq::rustls::RootCertStore::empty();
+    let certs: Vec<ureq::rustls::pki_types::CertificateDer<'static>> =
+        ders.into_iter().map(ureq::rustls::pki_types::CertificateDer::from).collect();
+    roots.add_parsable_certificates(certs);
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let cfg = ureq::rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        ureq::rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("rustls 默认协议版本")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    builder.tls_config(std::sync::Arc::new(cfg))
+}
+
 /// 提交链路用的 agent。设了 `PACE_EGRESS_PROXY` 就走代理，否则等同直连。
 ///
 /// 非法值不静默回落：打一行错到 stderr 后按直连走——「以为走了代理其实直连」
 /// 比报错危险得多（这正是 #23 那类静默回落的问题）。
 pub fn agent(timeout: Duration) -> ureq::Agent {
-    let builder = ureq::AgentBuilder::new().timeout(timeout);
+    let builder = with_extra_ca(ureq::AgentBuilder::new().timeout(timeout));
     match current_proxy() {
         Some(raw) => match parse_proxy(&raw) {
             Ok(clean) => match ureq::Proxy::new(&clean) {
@@ -185,9 +228,7 @@ pub fn city_mismatch(egress_city: &str, campus_city: &str) -> bool {
 /// 页，别把它当 IP 显示出来。httpbin 的 `origin` 在有代理时会带逗号
 /// （`1.2.3.4, 10.0.0.1`），取第一段。
 fn fetch_json_ip(url: &str, field: &str) -> Option<String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(5))
-        .build();
+    let agent = with_extra_ca(ureq::AgentBuilder::new().timeout(Duration::from_secs(5))).build();
     let body: Value = agent.get(url).call().ok()?.into_json().ok()?;
     let raw = body.get(field)?.as_str()?;
     let ip = raw.split(',').next()?.trim();

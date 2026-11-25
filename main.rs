@@ -87,6 +87,16 @@ fn main() {
             }
         }
         "semester" => show_semester(),
+        "login" => {
+            // login <手机号> <密码>：无头登录（极验本地求解），会话落盘。
+            let user = args.get(1).cloned().unwrap_or_default();
+            let pass = args.get(2).cloned().unwrap_or_default();
+            if user.is_empty() || pass.is_empty() {
+                eprintln!("用法: pace-forge login <手机号> <密码>");
+                std::process::exit(2);
+            }
+            do_login(&user, &pass);
+        }
         "cheat" => do_cheat(),
         "logout" => do_logout(),
         "relogin" => do_relogin(),
@@ -132,6 +142,22 @@ fn main() {
             let sport = parse_int(&args, 1, 0, "项目id");
             let n = parse_int(&args, 2, 20, "条数");
             do_ai_records(sport, n);
+        }
+        "record" => {
+            // record <rrid>：回读单条记录详情（看 sportType / 服务端判定）。
+            let rrid = parse_int(&args, 1, 0, "记录id");
+            if rrid <= 0 {
+                eprintln!("用法: pace-forge record <rrid>");
+                std::process::exit(2);
+            }
+            let client = ai_client();
+            match pace_forge::api::records::get_record(&client, rrid) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
+                Err(e) => {
+                    eprintln!("回读失败: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
         "dry" => {
             let dist_km = parse_num(&args, 1, 2.0, "距离(km)");
@@ -394,6 +420,40 @@ fn local_check(dist_km: f64, dur_min: f64) {
 /// 用本地保存的密码重新登录，刷新 token。
 ///
 /// 密码在 accounts.json 里是加密存的，这里解出来直接用，不用重新输入。
+fn do_login(username: &str, password: &str) {
+    use pace_forge::api::{client, login as login_api, session};
+    let mut c = client::Client::new(client::DeviceProfile::default());
+    match login_api::login(&mut c, username, password) {
+        Ok(login_api::LoginOutcome::Ok(prof)) => {
+            let creds = &c.creds;
+            let sess = session::Session {
+                uid: creds.uid.clone().unwrap_or_default(),
+                token: creds.token.clone().unwrap_or_default(),
+                unid: creds.unid.clone().unwrap_or_default(),
+                username: username.to_string(),
+                name: prof.name.clone(),
+                campus_name: prof.campus_name.clone(),
+                depart: prof.depart.clone(),
+                grade_class: prof.grade_class.clone(),
+                device_id: String::new(),
+            };
+            if let Err(e) = session::save_session(&sess) {
+                eprintln!("session 写入失败: {e}");
+                std::process::exit(1);
+            }
+            println!("✅ 登录成功：{}（{} / {}）", sess.name, sess.campus_name, username);
+        }
+        Ok(login_api::LoginOutcome::NeedCaptcha { message, .. }) => {
+            eprintln!("需要过滑动验证码（{message}），请在网页里登录一次");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("登录失败: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn do_relogin() {
     use pace_forge::api::{accounts, client, login as login_api, session};
 
@@ -1013,35 +1073,33 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
         });
 
     // 中心点同样必须从真实围栏反推，不能用默认的 (0,0)。
-    // 自由跑不依赖围栏：拿不到时用 PACE_CENTER_LAT / PACE_CENTER_LNG 给锚点。
-    let (clat, clng) = match pace_forge::api::fence::fetch_fences(&client) {
-        Ok(fs) => {
-            let ring = &fs[0].ring;
-            let n = ring.len() as f64;
-            let t = ring
-                .iter()
-                .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
-            (t.0 / n, t.1 / n)
-        }
-        Err(e) => {
-            let env_anchor = || -> Option<(f64, f64)> {
-                let a = std::env::var("PACE_CENTER_LAT").ok()?.parse().ok()?;
-                let b = std::env::var("PACE_CENTER_LNG").ok()?.parse().ok()?;
-                Some((a, b))
-            };
-            if free_sport.is_some() {
-                match env_anchor() {
-                    Some(v) => v,
-                    None => {
-                        eprintln!("自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点");
-                        std::process::exit(1);
-                    }
+    // PACE_CENTER_LAT / PACE_CENTER_LNG 显式给了锚点就优先用（自由跑换城市跑、
+    // 或学校没配围栏时用）；否则拉围栏取中心。
+    let env_anchor = || -> Option<(f64, f64)> {
+        let a = std::env::var("PACE_CENTER_LAT").ok()?.parse().ok()?;
+        let b = std::env::var("PACE_CENTER_LNG").ok()?.parse().ok()?;
+        Some((a, b))
+    };
+    let (clat, clng) = match env_anchor() {
+        Some(v) => v,
+        None => match pace_forge::api::fence::fetch_fences(&client) {
+            Ok(fs) => {
+                let ring = &fs[0].ring;
+                let n = ring.len() as f64;
+                let t = ring
+                    .iter()
+                    .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
+                (t.0 / n, t.1 / n)
+            }
+            Err(e) => {
+                if free_sport.is_some() {
+                    eprintln!("自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点");
+                } else {
+                    eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
                 }
-            } else {
-                eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
                 std::process::exit(1);
             }
-        }
+        },
     };
 
     let p = flow::RunParams {

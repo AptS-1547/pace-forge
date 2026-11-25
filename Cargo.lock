@@ -2416,6 +2416,7 @@ dependencies = [
  "sha2",
  "tiny_http",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

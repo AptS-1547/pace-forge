@@ -25,9 +25,10 @@ const UA_WEB: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
                       (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 fn make_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
+    crate::api::egress::with_extra_ca(
+        ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(20)),
+    )
+    .build()
 }
 
 fn ureq_err(e: ureq::Error) -> String {

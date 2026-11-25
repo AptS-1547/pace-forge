@@ -63,9 +63,10 @@ pub fn put_object(signed_url: &str, payload: &[u8]) -> Result<(), String> {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(300 * attempt as u64));
         }
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(30))
-            .build();
+        let agent = crate::api::egress::with_extra_ca(
+            ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)),
+        )
+        .build();
         match agent
             .put(signed_url)
             .set("Content-Type", "application/json")
@@ -127,9 +128,10 @@ pub fn fetch_object(client: &Client, key: &str) -> Result<Value, String> {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(300 * attempt as u64));
         }
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(30))
-            .build();
+        let agent = crate::api::egress::with_extra_ca(
+            ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)),
+        )
+        .build();
         match agent.get(&signed).call() {
             Ok(resp) => {
                 let text = resp
