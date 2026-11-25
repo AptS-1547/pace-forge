@@ -859,46 +859,7 @@ fn write_record_export(path: &std::path::Path, bytes: &[u8], force: bool) -> std
     Ok(())
 }
 
-#[cfg(test)]
-mod record_export_tests {
-    use super::write_record_export;
-    use std::{fs, io::ErrorKind, sync::Barrier, thread};
 
-    #[test]
-    fn concurrent_exports_keep_the_first_file_unless_forced() {
-        let directory = std::env::temp_dir().join(format!(
-            "pace-forge-export-{}-{:016x}",
-            std::process::id(),
-            rand::random::<u64>(),
-        ));
-        fs::create_dir(&directory).unwrap();
-        let path = directory.join("records.json");
-        let start = Barrier::new(2);
-        let (left, right) = thread::scope(|scope| {
-            let other = scope.spawn(|| {
-                start.wait();
-                write_record_export(&path, b"left", false)
-            });
-            start.wait();
-            let result = write_record_export(&path, b"right", false);
-            (other.join().unwrap(), result)
-        });
-        let saved = fs::read(&path);
-        let forced = write_record_export(&path, b"replacement", true);
-        let replacement = fs::read(&path);
-        fs::remove_dir_all(directory).unwrap();
-
-        let (error, expected) = match (left, right) {
-            (Ok(()), Err(error)) => (error, b"left".as_slice()),
-            (Err(error), Ok(())) => (error, b"right".as_slice()),
-            _ => panic!("exactly one export should succeed"),
-        };
-        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
-        assert_eq!(saved.unwrap(), expected);
-        forced.unwrap();
-        assert_eq!(replacement.unwrap(), b"replacement");
-    }
-}
 
 fn log_export(i: usize, total: usize, rrid: Option<i64>, pts: usize) {
     println!("  [{i}/{total}] rrid={} 轨迹 {pts} 点", rrid.map(|r| r.to_string()).unwrap_or_else(|| "-".into()));
@@ -1173,4 +1134,45 @@ fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
     };
     show_plan(st, dur_min);
     run_with_start(dist_km, dur_min, Some(st.ms), yes);
+}
+
+#[cfg(test)]
+mod record_export_tests {
+    use super::write_record_export;
+    use std::{fs, io::ErrorKind, sync::Barrier, thread};
+
+    #[test]
+    fn concurrent_exports_keep_the_first_file_unless_forced() {
+        let directory = std::env::temp_dir().join(format!(
+            "pace-forge-export-{}-{:016x}",
+            std::process::id(),
+            rand::random::<u64>(),
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("records.json");
+        let start = Barrier::new(2);
+        let (left, right) = thread::scope(|scope| {
+            let other = scope.spawn(|| {
+                start.wait();
+                write_record_export(&path, b"left", false)
+            });
+            start.wait();
+            let result = write_record_export(&path, b"right", false);
+            (other.join().unwrap(), result)
+        });
+        let saved = fs::read(&path);
+        let forced = write_record_export(&path, b"replacement", true);
+        let replacement = fs::read(&path);
+        fs::remove_dir_all(directory).unwrap();
+
+        let (error, expected) = match (left, right) {
+            (Ok(()), Err(error)) => (error, b"left".as_slice()),
+            (Err(error), Ok(())) => (error, b"right".as_slice()),
+            _ => panic!("exactly one export should succeed"),
+        };
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(saved.unwrap(), expected);
+        forced.unwrap();
+        assert_eq!(replacement.unwrap(), b"replacement");
+    }
 }
