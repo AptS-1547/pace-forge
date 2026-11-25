@@ -9,6 +9,7 @@
 //! 所以后端不解析轨迹，原样返回 `raw`，由前端递归探测坐标数组。这样即使
 //! 服务端改字段名，地图仍然能画出来。
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -16,7 +17,7 @@ use tiny_http::{Header, Method, Response, Server};
 
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{login, LoginOutcome, UserProfile};
-use crate::api::records;
+use crate::api::{accounts, records, session};
 
 type Shared = Arc<Mutex<State>>;
 
@@ -27,6 +28,11 @@ struct State {
     clients: std::collections::HashMap<String, Client>,
     /// 当前选中的账号 id。
     current: Option<String>,
+}
+
+enum AccountSessionAction {
+    Logout,
+    Delete,
 }
 
 impl State {
@@ -45,36 +51,7 @@ impl State {
     /// 条不一定已经跟上（uid/token 为空）。只看 book 的话，重启一次就掉登录，
     /// 用户得重新过一次极验——而 session.json 里明明有完整 token。
     fn restore() -> Self {
-        let mut book = crate::api::accounts::load();
-        let sess = crate::api::session::load_session();
-        if !sess.uid.is_empty() && !sess.token.is_empty() {
-            let matched = book
-                .accounts
-                .iter_mut()
-                .find(|a| a.id == sess.uid || (!a.username.is_empty() && a.name == sess.name));
-            if let Some(a) = matched {
-                if !a.logged_in() {
-                    a.uid = sess.uid.clone();
-                    a.token = sess.token.clone();
-                    a.unid = sess.unid.clone();
-                }
-            } else {
-                // 账号库里没有对应条目（旧版本只存了 session），补一条，密码留空
-                book.accounts.push(crate::api::accounts::Account {
-                    id: sess.uid.clone(),
-                    username: sess.username.clone(),
-                    password_enc: String::new(),
-                    uid: sess.uid.clone(),
-                    token: sess.token.clone(),
-                    unid: sess.unid.clone(),
-                    name: sess.name.clone(),
-                    school: sess.campus_name.clone(),
-                    last_login_ms: 0,
-                    last_submit_ms: 0,
-                    enabled: true,
-                });
-            }
-        }
+        let book = restore_account_book(&session::data_dir());
         let mut clients = std::collections::HashMap::new();
         for a in &book.accounts {
             if a.logged_in() {
@@ -162,6 +139,11 @@ impl State {
         // 同步写一份 session.json，让 CLI 也能直接用（原来只有 Web 有登录态，
         // CLI 永远报「未登录」）。
         let sess = crate::api::session::Session {
+            username: self
+                .book
+                .get(id)
+                .map(|account| account.username.clone())
+                .unwrap_or_default(),
             uid: p.uid.clone(),
             token: p.token.clone(),
             unid: p.unid.clone(),
@@ -179,6 +161,88 @@ impl State {
             eprintln!("保存账号库失败: {e}");
         }
     }
+
+    fn end_account_session(
+        &mut self,
+        dir: &Path,
+        id: &str,
+        action: AccountSessionAction,
+    ) -> Result<bool, String> {
+        let mut book = self.book.clone();
+        match action {
+            AccountSessionAction::Logout => {
+                let account = book.get_mut(id).ok_or("账号不存在")?;
+                account.token.clear();
+                account.uid.clear();
+                account.unid.clear();
+            }
+            AccountSessionAction::Delete => {
+                if !book.remove(id) {
+                    return Err("账号不存在".into());
+                }
+            }
+        }
+        // 先清理会话，再保存账号库，避免 Web 重启时恢复已退出或删除的账号。
+        session::clear_session_if_below(dir, |cached| {
+            session_owner(&self.book, cached)
+                .is_some_and(|index| self.book.accounts[index].id == id)
+        })?;
+        accounts::save_in_dir(dir, &book)?;
+
+        self.book = book;
+        self.clients.remove(id);
+        let was_current = self.current.as_deref() == Some(id);
+        if was_current {
+            self.current = None;
+        }
+        Ok(was_current)
+    }
+}
+
+fn restore_account_book(dir: &Path) -> accounts::Book {
+    let mut book = accounts::load_in_dir(dir);
+    let cached = session::load_session_below(dir);
+    if !cached.is_valid() {
+        return book;
+    }
+    if let Some(index) = session_owner(&book, &cached) {
+        let account = &mut book.accounts[index];
+        if !account.logged_in() {
+            account.uid = cached.uid;
+            account.token = cached.token;
+            account.unid = cached.unid;
+        }
+    } else {
+        // 旧版本可能只存了 session.json，补回账号行，密码留空。
+        book.accounts.push(accounts::Account {
+            id: cached.uid.clone(),
+            username: cached.username,
+            uid: cached.uid,
+            token: cached.token,
+            unid: cached.unid,
+            name: cached.name,
+            school: cached.campus_name,
+            enabled: true,
+            ..Default::default()
+        });
+    }
+    book
+}
+
+fn session_owner(book: &accounts::Book, cached: &session::Session) -> Option<usize> {
+    if !cached.is_valid() {
+        return None;
+    }
+    book.accounts
+        .iter()
+        .position(|account| account.id == cached.uid || account.uid == cached.uid)
+        .or_else(|| {
+            book.accounts.iter().position(|account| {
+                account.uid.is_empty()
+                    && !cached.username.is_empty()
+                    && account.username == cached.username
+            })
+        })
 }
 
 /// 对某个账号发一次服务端退出，失败也返回 false 而不是报错。
@@ -189,23 +253,15 @@ impl State {
 /// 这一步不能省。重启后直接删账号时内存里没有 client，如果就此跳过，
 /// 服务端会话仍然活着，账号在服务端还是「已登录」——下次登录 10121 并
 /// 锁一小时。用户视角就是「我明明删了，怎么还锁我」。
-fn remote_logout(state: &Shared, id: &str) -> bool {
-    let mut tmp: Option<Client> = None;
-    {
-        let mut st = lock_state(state);
-        if let Some(c) = st.clients.get_mut(id) {
-            return crate::api::login::logout(c).unwrap_or(false);
-        }
-        if let Some(a) = st.book.get(id) {
-            if a.logged_in() {
-                tmp = Some(make_client(&a.uid, &a.token, &a.unid));
-            }
-        }
+fn remote_logout(state: &mut State, id: &str) -> bool {
+    if let Some(client) = state.clients.get_mut(id) {
+        return crate::api::login::logout(client).unwrap_or(false);
     }
-    match tmp.as_mut() {
-        Some(c) => crate::api::login::logout(c).unwrap_or(false),
-        None => false,
-    }
+    let Some(account) = state.book.get(id).filter(|account| account.logged_in()) else {
+        return false;
+    };
+    let mut client = make_client(&account.uid, &account.token, &account.unid);
+    crate::api::login::logout(&mut client).unwrap_or(false)
 }
 
 fn make_client(uid: &str, token: &str, unid: &str) -> Client {
@@ -505,27 +561,19 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             //
             // 顺序不能反：只清本地的话服务端会话还活着，账号被标记为已登录，
             // 再登录会拿到 10121（已在其他设备登录），而且锁一小时。
-            let remote = {
-                let mut st = lock_state(&state);
-                let id = st.current.clone();
-                match id.and_then(|i| st.clients.get_mut(&i)) {
-                    Some(c) => crate::api::login::logout(c).unwrap_or(false),
-                    None => false,
-                }
+            let mut st = lock_state(&state);
+            let Some(id) = st.current.clone() else {
+                return json_ok(request, json!({"ok": true, "remoteLogout": false}));
             };
+            let remote = st
+                .clients
+                .get_mut(&id)
+                .is_some_and(|client| crate::api::login::logout(client).unwrap_or(false));
+            if let Err(error) =
+                st.end_account_session(&session::data_dir(), &id, AccountSessionAction::Logout)
             {
-                let mut st = lock_state(&state);
-                if let Some(id) = st.current.clone() {
-                    if let Some(a) = st.book.get_mut(&id) {
-                        a.token.clear();
-                        a.uid.clear();
-                    }
-                    st.clients.remove(&id);
-                    st.current = None;
-                }
-                st.persist();
+                return json_err(request, &error);
             }
-            crate::api::session::clear_session();
             json_ok(request, json!({"ok": true, "remoteLogout": remote}))
         }
         (Method::Post, "/api/plan") => {
@@ -1277,15 +1325,15 @@ fn handle_del_account(
     // 本来就没有活会话」在返回码上分不开，一律照删的结果是把「确保不会锁」
     // 这件事交给了运气。现在有存盘 token 且退出没成功时**先不删**，把后果
     // 交给用户确认（`?force=1` 才跳过），这样「删完锁一小时」不会再意外发生。
-    let had_token = {
-        let st = lock_state(&state);
-        st.book
-            .get(id)
-            .map(|a| !a.token.is_empty())
-            .unwrap_or(false)
+    let mut st = lock_state(&state);
+    let Some(account) = st.book.get(id) else {
+        return json_ok(
+            request,
+            json!({"removed": false, "remoteLogout": false, "needConfirm": false}),
+        );
     };
-
-    let remote = remote_logout(&state, id);
+    let had_token = !account.token.is_empty();
+    let remote = remote_logout(&mut st, id);
 
     if had_token && !remote && !force {
         return json_ok(
@@ -1299,21 +1347,18 @@ fn handle_del_account(
         );
     }
 
-    let mut st = lock_state(&state);
-    let ok = st.book.remove(id);
-    st.clients.remove(id);
-    if st.current.as_deref() == Some(id) {
-        st.current = None;
+    if let Err(error) =
+        st.end_account_session(&session::data_dir(), id, AccountSessionAction::Delete)
+    {
+        return json_err(request, &error);
     }
-    st.persist();
-    json_ok(request, json!({"removed": ok, "remoteLogout": remote, "needConfirm": false}))
+    json_ok(request, json!({"removed": true, "remoteLogout": remote, "needConfirm": false}))
 }
 
 /// 按账号退出登录：只清登录态，保留手机号和存盘密码。
 ///
-/// 和顶部的「退出」（`/api/logout`）不是一回事：那个清的是**当前**账号，
-/// 而且连 web 会话一起清。这个是针对列表里某一行，退出后账号还在，
-/// 状态变成「待登录」，下次点「重登」就回来了——不用重新输密码。
+/// 顶部的「退出」选中的是当前账号，这里选中的是列表中的某一行。
+/// 两个入口都会清理该账号的兼容会话，保留账号与密码。
 ///
 /// 同样要先调服务端 `/api/v6/user/logout`。只清本地 token 的话服务端
 /// 会话还活着，账号被标记「已登录」，再登触发 10121 并锁一小时。
@@ -1322,24 +1367,16 @@ fn handle_logout_one(
     state: Shared,
     id: &str,
 ) -> Result<(), String> {
-    let remote = remote_logout(&state, id);
-
     let mut st = lock_state(&state);
-    if st.book.get(id).is_none() {
-        return json_err(request, "账号不存在");
-    }
-    // 只清登录态。password_enc 不动，所以退出后还能一键重登。
-    if let Some(a) = st.book.get_mut(id) {
-        a.token.clear();
-        a.uid.clear();
-        a.unid.clear();
-    }
-    st.clients.remove(id);
-    let was_current = st.current.as_deref() == Some(id);
-    if was_current {
-        st.current = None;
-    }
-    st.persist();
+    let remote = remote_logout(&mut st, id);
+    let was_current = match st.end_account_session(
+        &session::data_dir(),
+        id,
+        AccountSessionAction::Logout,
+    ) {
+        Ok(was_current) => was_current,
+        Err(error) => return json_err(request, &error),
+    };
     json_ok(request, json!({"ok": true, "remoteLogout": remote, "wasCurrent": was_current}))
 }
 
@@ -2677,6 +2714,142 @@ fn respond_html(request: tiny_http::Request, html: &str) -> Result<(), String> {
 }
 
 const INDEX_HTML: &str = include_str!("index.html");
+
+#[cfg(test)]
+mod account_session_tests {
+    use super::*;
+    use crate::test_support::{assert_isolated, TestDir};
+
+    fn saved_account(id: &str, uid: &str, username: &str) -> accounts::Account {
+        accounts::Account {
+            id: id.into(),
+            uid: uid.into(),
+            username: username.into(),
+            token: format!("test-key-{id}"),
+            unid: "test-unid".into(),
+            password_enc: "saved-password".into(),
+            name: "同名测试账号".into(),
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    fn fixture(name: &str) -> (TestDir, State) {
+        let temp = TestDir::new(name);
+        let dir = temp.data();
+        assert_isolated(&dir, "Web 账号会话");
+        let mut state = State::new();
+        state.book.upsert(saved_account("first", "uid-a", "user-a"));
+        state.book.upsert(saved_account("second", "uid-b", "user-b"));
+        state.current = Some("first".into());
+        accounts::save_in_dir(&dir, &state.book).unwrap();
+        (temp, state)
+    }
+
+    fn cache_session(dir: &Path, uid: &str, username: &str) {
+        let cached = session::Session {
+            uid: uid.into(),
+            username: username.into(),
+            token: "test-cached-key".into(),
+            unid: "test-cached-unid".into(),
+            name: "同名测试账号".into(),
+            ..Default::default()
+        };
+        session::save_session_below(dir, &cached).unwrap();
+    }
+
+    #[test]
+    fn reloading_after_logout_keeps_saved_account_without_login() {
+        let (temp, mut state) = fixture("web-logout-restart");
+        let dir = temp.data();
+        // 模拟旧版 Web 只在会话文件里保存了 UID 和令牌。
+        cache_session(&dir, "uid-a", "");
+
+        assert!(state
+            .end_account_session(&dir, "first", AccountSessionAction::Logout)
+            .unwrap());
+        assert!(state.current.is_none());
+        assert!(!dir.join("session.json").exists());
+
+        let restored = restore_account_book(&dir);
+        let first = restored.get("first").unwrap();
+        assert!(!first.logged_in());
+        assert!(first.unid.is_empty());
+        assert_eq!(first.password_enc, "saved-password");
+        assert!(restored.get("second").unwrap().logged_in());
+    }
+
+    #[test]
+    fn reloading_after_delete_does_not_resurrect_the_account() {
+        let (temp, mut state) = fixture("web-delete-restart");
+        let dir = temp.data();
+        cache_session(&dir, "uid-b", "user-b");
+
+        assert!(!state
+            .end_account_session(&dir, "second", AccountSessionAction::Delete)
+            .unwrap());
+        assert_eq!(state.current.as_deref(), Some("first"));
+        assert!(!dir.join("session.json").exists());
+
+        let restored = restore_account_book(&dir);
+        assert!(restored.get("first").unwrap().logged_in());
+        assert_eq!(restored.accounts.len(), 1);
+        assert!(restored.get("second").is_none());
+    }
+
+    #[test]
+    fn logout_preserves_a_legacy_session_until_its_owner_logs_out() {
+        let (temp, mut state) = fixture("web-logout-other-session");
+        let dir = temp.data();
+        let second = state.book.get_mut("second").unwrap();
+        second.uid.clear();
+        second.token.clear();
+        cache_session(&dir, "uid-b", "user-b");
+
+        state
+            .end_account_session(&dir, "first", AccountSessionAction::Logout)
+            .unwrap();
+
+        let restored = restore_account_book(&dir);
+        assert!(!restored.get("first").unwrap().logged_in());
+        assert!(restored.get("second").unwrap().logged_in());
+        assert_eq!(session::load_session_below(&dir).uid, "uid-b");
+
+        state
+            .end_account_session(&dir, "second", AccountSessionAction::Logout)
+            .unwrap();
+        assert!(!dir.join("session.json").exists());
+        assert!(!restore_account_book(&dir).get("second").unwrap().logged_in());
+    }
+
+    #[test]
+    fn malformed_session_is_preserved_and_does_not_prevent_logout() {
+        let (temp, mut state) = fixture("web-logout-corrupt-session");
+        let dir = temp.data();
+        let path = dir.join("session.json");
+        std::fs::write(&path, b"\xffmalformed").unwrap();
+
+        state
+            .end_account_session(&dir, "first", AccountSessionAction::Logout)
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), b"\xffmalformed");
+        assert!(!restore_account_book(&dir).get("first").unwrap().logged_in());
+    }
+
+    #[test]
+    fn session_io_error_leaves_account_state_unchanged() {
+        let (temp, mut state) = fixture("web-logout-session-error");
+        let dir = temp.data();
+        std::fs::create_dir(dir.join("session.json")).unwrap();
+
+        assert!(state
+            .end_account_session(&dir, "first", AccountSessionAction::Logout)
+            .is_err());
+        assert!(state.book.get("first").unwrap().logged_in());
+        assert!(accounts::load_in_dir(&dir).get("first").unwrap().logged_in());
+    }
+}
 
 #[cfg(test)]
 mod index_html_tests {
