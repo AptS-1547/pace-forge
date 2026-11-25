@@ -45,6 +45,8 @@ pub struct PolicyInfo {
     pub step_range: Option<(i64, i64)>,
     /// 最短有效时长（秒）。服务端 `minRunTime`。
     pub min_run_time: i64,
+    /// 每日有效里程上限（米）。服务端 `runRuleModel.dayGoal`；0 = 未下发。
+    pub daily_cap_m: i64,
     /// 跑步冻结截止时间（毫秒戳）。`0` = 未冻结。
     ///
     /// 服务端在 `runRuleModel.freezeRunTime` 里下发；> 当前时间说明账号处于
@@ -89,6 +91,7 @@ pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
         pace_range,
         step_range: parse_steo_range(&rule),
         min_run_time: rule.get("minRunTime").and_then(|t| t.as_i64()).unwrap_or(0),
+        daily_cap_m: parse_daily_cap(&rule),
         freeze_run_time: rule
             .get("freezeRunTime")
             .and_then(|t| t.as_i64())
@@ -101,6 +104,46 @@ pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
 /// 步频区间。
 ///
 /// 两个值都可能是整数或浮点，也见过倒序下发的，统一成 (小, 大)。
+/// 每日有效里程上限（米）。服务端 `runRuleModel.dayGoal`，读不到为 0。
+///
+/// 老代码在 flow 的配额检查里把 5000 写死，实测该校区 dayGoal=3000：
+/// 超过 3km 的部分服务端根本不计有效里程，程序却放行，白跑还以为在攒进度。
+fn parse_daily_cap(rule: &Value) -> i64 {
+    for key in ["dayGoal", "maleDayUpper", "femaleDayUpper"] {
+        if let Some(v) = rule.get(key).and_then(num_of) {
+            if v > 0.0 {
+                return v.round() as i64;
+            }
+        }
+    }
+    0
+}
+
+/// 每日上限默认值：服务端 `dayGoal` 取不到时退回改之前的旧常量。
+pub const DEFAULT_DAILY_CAP_M: i64 = 5000;
+
+/// 取每日上限（米），附带来源说明。
+///
+/// `runMode=1` 的 policy 在有效时段外会回 11016（实测凌晨就是），
+/// 但 `dayGoal` 各模式一致，所以主模式失败时用 `runMode=2` 兜一次。
+pub fn daily_cap_m(client: &Client, run_mode: i64) -> (i64, String) {
+    let mut modes = vec![run_mode];
+    if run_mode != 2 {
+        modes.push(2);
+    }
+    for mode in modes {
+        if let Ok(p) = fetch_policy_for(client, mode) {
+            if p.daily_cap_m > 0 {
+                return (p.daily_cap_m, format!("runMode={mode} dayGoal"));
+            }
+        }
+    }
+    (
+        DEFAULT_DAILY_CAP_M,
+        "服务端 dayGoal 未取到，退回默认".to_string(),
+    )
+}
+
 fn parse_steo_range(rule: &Value) -> Option<(i64, i64)> {
     let top = rule.get("stepTop").and_then(|v| v.as_f64())?;
     let bottom = rule.get("stepBottom").and_then(|v| v.as_f64())?;
@@ -289,6 +332,7 @@ pub fn fallback_policy() -> PolicyInfo {
         // 兜底按实测下发值：记分跑 stepTop=250 / stepBottom=60
         step_range: Some((60, 250)),
         min_run_time: 0,
+        daily_cap_m: 0,
         freeze_run_time: 0,
     }
 }
@@ -369,6 +413,34 @@ mod window_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_daily_cap_from_real_payload() {
+        // 实测某校 runMode=2 的真实下发（dayGoal 是每日上限，不是目标）。
+        let v = json!({
+            "data": {
+                "timestamp": 1_795_630_760_067i64,
+                "policy": 0,
+                "runRuleModel": {
+                    "dayGoal": 3000.0,
+                    "minDistance": 1500,
+                    "speedTop": 2.0,
+                    "speedBottom": 12.0,
+                    "stepTop": 300,
+                    "stepBottom": 40
+                }
+            }
+        });
+        let p = parse_policy_response(&v).unwrap();
+        assert_eq!(p.daily_cap_m, 3000, "dayGoal 就是每日有效里程上限");
+
+        // 没有 dayGoal 的老版本退回 male/female 的日上限
+        let old = json!({ "data": { "timestamp": 1, "runRuleModel": { "maleDayUpper": 5000.0 } } });
+        assert_eq!(parse_policy_response(&old).unwrap().daily_cap_m, 5000);
+        // 全缺 = 未知（0），由调用方决定默认
+        let none = json!({ "data": { "timestamp": 1, "runRuleModel": {} } });
+        assert_eq!(parse_policy_response(&none).unwrap().daily_cap_m, 0);
+    }
 
     #[test]
     fn parses_nested_and_flat_shapes() {

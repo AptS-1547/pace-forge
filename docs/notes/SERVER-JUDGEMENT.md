@@ -89,7 +89,8 @@ App 文案：「成绩已暂时保存至本地，请于3天内上传成绩」。
 ## 八、考勤政策（getHistoryConfig）
 
 ```
-mode=METER · maleDayUpper=5000 femaleDayUpper=5000（日上限）
+mode=METER · maleDayUpper=5000 femaleDayUpper=5000（这里写 5000，但实测结算是 3000，
+实际上限以 runModePolicy 的 runRuleModel.dayGoal 为准，实测 dayGoal=3000）
 maleMinSingleDis=1000 femaleMinSingleDis=1000（单次下限）
 randomValidTimes=[{startTime:"06:30:00", endTime:"22:00:59"}]  ← 字段名就叫 random
 ```

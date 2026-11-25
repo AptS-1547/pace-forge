@@ -1075,34 +1075,68 @@ pub fn pin_checkpoints(path: &[(f64, f64)], must: &[(f64, f64)]) -> Vec<(f64, f6
 
     for &m in must {
         // 找最近的线段
-        let mut best_i = 0usize;
-        let mut best_d = f64::MAX;
-        for i in 0..out.len() - 1 {
-            let (a, b) = (out[i], out[i + 1]);
-            // 点到线段的距离
-            let ay = (a.0 - m.0) * m_per_deg_lat(m.0);
-            let ax = (a.1 - m.1) * m_per_deg_lng(m.0);
-            let by = (b.0 - m.0) * m_per_deg_lat(m.0);
-            let bx = (b.1 - m.1) * m_per_deg_lng(m.0);
-            let (vy, vx) = (by - ay, bx - ax);
-            let len2 = vy * vy + vx * vx;
-            let t = if len2 < 1e-12 {
-                0.0
-            } else {
-                (-(ay * vy + ax * vx) / len2).clamp(0.0, 1.0)
-            };
-            let py = ay + vy * t;
-            let px = ax + vx * t;
-            let d = (py * py + px * px).sqrt();
-            if d < best_d {
-                best_d = d;
-                best_i = i;
-            }
-        }
+        let (best_i, _) = nearest_segment(&out, 0, m);
         // 插在最近的段中间
         out.insert(best_i + 1, m);
     }
     out
+}
+
+/// 有序回钉：按 `must` 的数组次序，依次只在上一个钉子的**之后**找最近段。
+///
+/// 无序遍历是所有点位各自找全程最近的那一段，于是「去 #2 的路上擦过 #4」
+/// 会被优先钉在擦过的地方，#4 的首过索引就跑到 #2 前面——服务端按数组
+/// 顺序判「按顺序通过所有点位」，直接失败（实测 5 个点位首过 1→4→3→2）。
+///
+/// 返回 (路径, 每个点位钉上去时距路径的距离)。距离过大说明这条路线在该
+/// 次序下压根走不到那个点，调用方应当报警，而不是偷偷拉一条长直线。
+pub fn pin_checkpoints_in_order(
+    path: &[(f64, f64)],
+    must: &[(f64, f64)],
+) -> (Vec<(f64, f64)>, Vec<f64>) {
+    if path.len() < 2 || must.is_empty() {
+        return (path.to_vec(), Vec::new());
+    }
+    let mut out = path.to_vec();
+    let mut from = 0usize;
+    let mut dists = Vec::with_capacity(must.len());
+    for &m in must {
+        let (best_i, best_d) = nearest_segment(&out, from.min(out.len().saturating_sub(2)), m);
+        out.insert(best_i + 1, m);
+        // 下一段从刚钉进去的点开始找：这样后面的点只可能钉得更晚
+        from = best_i + 1;
+        dists.push(best_d);
+    }
+    (out, dists)
+}
+
+/// `from` 之后（含）最近的线段的 (下标, 距离)。
+fn nearest_segment(path: &[(f64, f64)], from: usize, m: (f64, f64)) -> (usize, f64) {
+    let mut best_i = from;
+    let mut best_d = f64::MAX;
+    for i in from..path.len().saturating_sub(1) {
+        let (a, b) = (path[i], path[i + 1]);
+        // 点到线段的距离
+        let ay = (a.0 - m.0) * m_per_deg_lat(m.0);
+        let ax = (a.1 - m.1) * m_per_deg_lng(m.0);
+        let by = (b.0 - m.0) * m_per_deg_lat(m.0);
+        let bx = (b.1 - m.1) * m_per_deg_lng(m.0);
+        let (vy, vx) = (by - ay, bx - ax);
+        let len2 = vy * vy + vx * vx;
+        let t = if len2 < 1e-12 {
+            0.0
+        } else {
+            (-(ay * vy + ax * vx) / len2).clamp(0.0, 1.0)
+        };
+        let py = ay + vy * t;
+        let px = ax + vx * t;
+        let d = (py * py + px * px).sqrt();
+        if d < best_d {
+            best_d = d;
+            best_i = i;
+        }
+    }
+    (best_i, best_d)
 }
 
 /// 把路径重采样成等间距点，并把必经打卡点插进去。
@@ -1115,6 +1149,35 @@ pub fn resample_with_checkpoints(
     must: &[(f64, f64)],
     snap_m: f64,
 ) -> Vec<(f64, f64)> {
+    let mut out = resample_plain(path, step_m);
+    // 打卡点最后钉一次：前面的倒圆和摆动会把它们推走，
+    // 光靠 snap 只要超过 snap_m 就吸附不上。
+    if !must.is_empty() {
+        out = pin_checkpoints(&out, must);
+    }
+    let _ = snap_m;
+    out
+}
+
+/// 同 `resample_with_checkpoints`，但打卡点按数组次序回钉（服务端下发点位用这个）。
+///
+/// 返回 (重采样结果, 每个点位回钉时距路径的距离)。
+pub fn resample_with_checkpoints_in_order(
+    path: &[(f64, f64)],
+    step_m: f64,
+    must: &[(f64, f64)],
+    snap_m: f64,
+) -> (Vec<(f64, f64)>, Vec<f64>) {
+    let out = resample_plain(path, step_m);
+    let _ = snap_m;
+    if must.is_empty() {
+        return (out, Vec::new());
+    }
+    pin_checkpoints_in_order(&out, must)
+}
+
+/// 只做等距重采样，不钉打卡点。
+fn resample_plain(path: &[(f64, f64)], step_m: f64) -> Vec<(f64, f64)> {
     if path.len() < 2 || step_m <= 0.0 {
         return path.to_vec();
     }
@@ -1146,13 +1209,6 @@ pub fn resample_with_checkpoints(
         // 本段走完后离下一个采样点还差多少（落在 [0, step_m)）
         carry = d - (pos - step_m);
     }
-
-    // 打卡点最后钉一次：前面的倒圆和摆动会把它们推走，
-    // 光靠 snap 只要超过 snap_m 就吸附不上。
-    if !must.is_empty() {
-        out = pin_checkpoints(&out, must);
-    }
-    let _ = snap_m;
     out
 }
 
@@ -1236,6 +1292,54 @@ mod tests {
     /// 实测：`avoid_blockers` 之后 0 个点在楼里，`resample_with_checkpoints`
     /// 打完打卡点变回 6 个。`pin_checkpoints` 是无条件 `insert`，不看禁区。
     /// 所以 `flow` 那边在重采样前先把「禁区盖住打卡点」这件事喊出来。
+    #[test]
+    fn ordered_pin_keeps_array_order() {
+        // 一条正东向的直线路（0→400m）。数组次序是 #0 在 300m 处、#1 在
+        // 100m 处偏北 8m（路线只是「擦过」它，并没有真的经过）。服务端下发
+        // 的点位经常是这种锯齿序，实测 5 点就是 1→4→3→2。
+        let lat0 = 31.2300f64;
+        let lng0 = 101.4700f64;
+        let mlat = m_per_deg_lat(lat0);
+        let mlng = m_per_deg_lng(lat0);
+        let path: Vec<(f64, f64)> = (0..=80)
+            .map(|i| (lat0, lng0 + (i as f64 * 5.0) / mlng))
+            .collect();
+        let on_line = |east_m: f64| (lat0, lng0 + east_m / mlng);
+        let must = vec![on_line(300.0), (lat0 + 8.0 / mlat, lng0 + 100.0 / mlng)];
+
+        // 首过 = 路径点里第一次真正等于该点的下标（回钉插的是精确坐标）
+        let first_pass = |track: &[(f64, f64)], p: (f64, f64)| -> i64 {
+            track
+                .iter()
+                .position(|q| distance(*q, p) < 1e-9)
+                .map(|x| x as i64)
+                .unwrap_or(-1)
+        };
+
+        // 无序：各自找全程最近段，#1 被钉在 #0 前面
+        let naive = pin_checkpoints(&path, &must);
+        let unordered: Vec<i64> = must.iter().map(|p| first_pass(&naive, *p)).collect();
+        assert!(
+            unordered[1] < unordered[0],
+            "前提：无序回钉会把数组次序钉反，实测 {unordered:?}"
+        );
+
+        // 有序：后面的点只可能钉得更晚
+        let (ordered_path, dists) = pin_checkpoints_in_order(&path, &must);
+        let ordered: Vec<i64> = must.iter().map(|p| first_pass(&ordered_path, *p)).collect();
+        assert!(
+            ordered.windows(2).all(|w| w[0] < w[1]),
+            "有序回钉后首过次序必须等于数组次序，实测 {ordered:?}"
+        );
+        assert_eq!(dists.len(), 2);
+        assert!(dists[0] < 1.0, "#0 本来就在路上");
+        assert!(
+            dists[1] > 30.0,
+            "这条路线按数组次序走不到 #1，必须如实报距离（调用方据此报警），实测 {:.1}m",
+            dists[1]
+        );
+    }
+
     #[test]
     fn pin_checkpoints_overrides_blocker_avoidance() {
         let lat0 = 31.2300f64;

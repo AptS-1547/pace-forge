@@ -843,6 +843,9 @@ pub fn route_through(
 /// `fix_end = true` 时，里程不够也不再「原路往回走一段」——因为用户指定了
 /// 终点，那段折返会把末端带回几百米外，终点就白设了。代价是实际里程可能
 /// 短于目标（少掉折返那部分），由调用方决定接不接受。
+/// 未轮到的打卡点周围多少米算「不许擦过」。
+pub const ZONE_BAN_RADIUS_M: f64 = 12.0;
+
 pub fn route_through_ex(
     g: &RoadGraph,
     must: &[(f64, f64)],
@@ -859,13 +862,18 @@ pub fn route_through_ex(
     // 每个打卡点周围 25m 的节点。走到后面某一段时，这些点如果还没轮到，
     // 就不许从旁边擦过去——擦过去服务端就记成「提前经过」，按顺序判定
     // 直接失败（实测 #2 在 idx=89 被踩到、#1 还在 idx=148）。
+    //
+    // 半径从 25m 收到 `ZONE_BAN_RADIUS_M`（12m）：校园点位大多挂在同一条主路
+    // 上，25m 半径会把主路整段判成禁区，硬禁之后路网不连通，只能退回软罚，
+    // 于是照样擦过去（实测 5 个点位首过 0,2,3,4,1）。12m 刚好覆盖服务端认
+    // 「经过」的量级，又不会把路切断。
     let zones: Vec<HashSet<usize>> = must
         .iter()
         .map(|p| {
             g.nodes
                 .iter()
                 .enumerate()
-                .filter(|(_, n)| crate::track::geo::distance(**n, *p) < 25.0)
+                .filter(|(_, n)| crate::track::geo::distance(**n, *p) < ZONE_BAN_RADIUS_M)
                 .map(|(i, _)| i)
                 .collect()
         })
@@ -899,10 +907,13 @@ pub fn route_through_ex(
         banned.remove(&b);
 
         let plain = astar(g, a, b);
+        // 硬禁（跳过禁区节点）优先；走不通再软罚（×5），再不行才无约束。
+        // 硬禁走不通说明这一段只有一条穿过后面点位的路，交由下游 `[point-order]` 自检报出。
         let clean = if banned.is_empty() {
             None
         } else {
-            astar_penalized(g, a, b, &HashSet::new(), 1.0, &banned)
+            astar_penalized(g, a, b, &HashSet::new(), 1.0, &banned, true)
+                .or_else(|| astar_penalized(g, a, b, &HashSet::new(), 1.0, &banned, false))
         };
 
         let seg = clean.or(plain).ok_or_else(|| {
@@ -977,7 +988,7 @@ pub fn route_through_ex(
             }
         }
         let Some((_, m)) = pick else { break };
-        let Some(tail) = astar_penalized(g, last, m, &used, 25.0, &HashSet::new()) else {
+        let Some(tail) = astar_penalized(g, last, m, &used, 25.0, &HashSet::new(), false) else {
             break;
         };
         for w in tail.windows(2) {
@@ -1055,7 +1066,7 @@ fn path_len(g: &RoadGraph, p: &[usize]) -> f64 {
 
 /// 图上 A*。启发式用直线距离，权重是实际边长。
 fn astar(g: &RoadGraph, s: usize, t: usize) -> Option<Vec<usize>> {
-    astar_penalized(g, s, t, &HashSet::new(), 1.0, &HashSet::new())
+    astar_penalized(g, s, t, &HashSet::new(), 1.0, &HashSet::new(), false)
 }
 
 /// 带边惩罚的 A*。`penal` 里的边代价乘 `factor`。
@@ -1069,6 +1080,7 @@ fn astar_penalized(
     penal: &HashSet<(usize, usize)>,
     factor: f64,
     banned: &HashSet<usize>,
+    hard: bool,
 ) -> Option<Vec<usize>> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
@@ -1101,6 +1113,9 @@ fn astar_penalized(
             // 路网上无解（禁区把唯一通路切断了），退回无约束最短路之后
             // 照样从 #3 旁边擦过去，顺序判定还是错。
             if banned.contains(&v) && v != t {
+                if hard {
+                    continue;
+                }
                 w *= 5.0;
             }
             let ng = best[u] + w;

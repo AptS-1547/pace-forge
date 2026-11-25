@@ -321,10 +321,10 @@ Web 界面走 `GET /api/cheat`。四种状态分得很清楚：
 |---|---|---|
 | **违规名单** | `v78/cheat/cheatlist` 的 `self` | 已标记就停：继续提交只会往名单里再加一条 |
 | **跑步冻结** | `policy.freezeRunTime` | 冻结期拒绝，并报剩余秒数（App 里开始按钮是倒计时的） |
-| **日上限** | 今日累计 + 本次 > 5000m | 直接拦。`PACE_IGNORE_DAILY_LIMIT=1` 可硬跑 |
+| **日上限** | 今日累计 + 本次 > 服务端 `dayGoal`（实测某校 3000m） | 直接拦。`PACE_IGNORE_DAILY_LIMIT=1` 可硬跑 |
 | **有效时段** | `getHistoryConfig` 的 `randomValidTimes` | 窗口外拒绝（服务端会回 11016） |
 
-日上限 5000m 来自 `maleDayUpper`/`femaleDayUpper` 的实测值，个别学校不同要改。
+日上限从 `runRuleModel.dayGoal` 读（各模式一致，`runMode=1` 在有效时段内才给，所以读失败时用 `runMode=2` 兜一次），读不到才退回 5000。实测某校 `dayGoal=3000`，而 `getHistoryConfig` 的 `maleDayUpper` 还是 5000——以 `dayGoal` 为准，按记录逐日反算是 3000 封顶。
 时段字段名就叫 `randomValidTimes`（不是笔误），实测某校是 `06:30:00 – 22:00:59`。
 
 ## 提交后回读服务端判定
@@ -797,7 +797,7 @@ cargo test
   早先那张「`runMode=2/3` 就是自由跑」的表是错的，已按 neko 实测改成
   「`sportType` 决定跑法、`runMode` 只决定拉哪套策略」。
 - **超长目标**：15km 这类目标生成不到（围栏周长限制，实测目标 15km → 实际 10.5km）。
-- **日上限**：5000m 是单校实测值（`maleDayUpper`/`femaleDayUpper`），别校不同要改。
+- **日上限**：从 `runRuleModel.dayGoal` 自动读（实测某校 3000m），读不到退回 5000；`getHistoryConfig` 里的 `maleDayUpper=5000` 与实际结算不符，别信它。
 - **月度抽检**：`creditscore/v70390/popup` 命中时要真人做支付宝信用分核验，
   自动化替不了，只做提醒。
 

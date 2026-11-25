@@ -1389,12 +1389,29 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
                 }
             }
         }
-        let mut sampled = crate::track::fence_route::resample_with_checkpoints(
-            &wandered,
-            p.sample_step_m,
-            &must,
-            15.0,
-        );
+        // 服务端点位按数组次序回钉（`_in_order`）：
+        //
+        // 无序遍历是「每个点各自找全程最近的那一段」，于是去 #2 的路上擦过
+        // #4 时把 #4 钉在前面，首过次序变成 1→4→3→2，服务端「按顺序通过
+        // 所有点位」直接判失败（实测 5 个点位就是这样）。按序回钉保证后面
+        // 的点只可能钉在前一个点之后；钉不上的（距离过远）当场报出来。
+        let (mut sampled, pin_dists) =
+            crate::track::fence_route::resample_with_checkpoints_in_order(
+                &wandered,
+                p.sample_step_m,
+                &must,
+                15.0,
+            );
+        for (i, d) in pin_dists.iter().enumerate() {
+            if *d > 30.0 {
+                let name = cps.get(i).map(|c| c.name.as_str()).unwrap_or("");
+                log(&format!(
+                    "! [points] 点位 #{} {} 按次序钉不进路线，只能钉在 {d:.0}m 外（会拉一段直线）",
+                    i + 1,
+                    name
+                ));
+            }
+        }
         // 指定终点：把末点钉在终点上。
         //
         // 围栏路线是「沿边界/路网跑满里程」，末端自然落在路上，不一定是用户
@@ -2222,10 +2239,10 @@ pub fn run_full(
     //
     // 都只做「明确异常才拦」：查询失败按未知放行并打日志，不能因为一个
     // 只读接口挂了就让人跑不了步。
-    // 日上限：多数学校 5000m/天（`maleDayUpper`/`femaleDayUpper`）。超了
-    // 服务端不一定会拒，但那条记录的有效里程会被截——白跑一趟。
-    // 只提示不拦：上限因校而异，且「今天已经跑过多少」以服务端列表为准，
-    // 拿不到就不判断。
+    // 日上限现在从服务端 policy 的 `runRuleModel.dayGoal` 读（实测某校 3000m），
+    // 老代码写死 5000 导致 5000 以内的超量提交照样放行——超出的那部分服务端
+    // 直接不计有效里程，等于白跑。读不到才退回 DEFAULT_DAILY_CAP_M。
+    // 「今天已经跑过多少」仍以服务端记录列表为准，查不到就只打日志不判断。
     match super::records::list_records(client, 1, 30, 1) {
         Ok(v) => {
             let today = local_day_key();
@@ -2254,25 +2271,26 @@ pub fn run_full(
                 }
             }
             let after = done + p.distance_m;
+            let (cap, cap_src) = crate::api::policy::daily_cap_m(client, p.run_mode);
             log(&format!(
-                "[quota] 今日已跑 {done:.0}m，本次 {:.0}m，合计 {after:.0}m（常见日上限 5000m）",
+                "[quota] 今日已跑 {done:.0}m，本次 {:.0}m，合计 {after:.0}m（日上限 {cap}m，来自 {cap_src}）",
                 p.distance_m
             ));
-            if after > 5000.0 {
+            if after > cap as f64 {
                 // 超日上限直接拦：超出部分不计入有效里程，等于白跑，而且
                 // 一条明显超量的记录更容易被风控盯上。要硬跑就显式开开关。
                 if std::env::var("PACE_IGNORE_DAILY_LIMIT").is_ok() {
                     log(&format!(
                         "! [quota] 超日上限 {}m，但已设 PACE_IGNORE_DAILY_LIMIT，继续提交",
-                        (after - 5000.0).round()
+                        (after - cap as f64).round()
                     ));
                 } else {
                     return Err(format!(
-                        "今日已跑 {done:.0}m，再加 {:.0}m 合计 {after:.0}m，超过日上限 5000m。\n    \
+                        "今日已跑 {done:.0}m，再加 {:.0}m 合计 {after:.0}m，超过日上限 {cap}m。\n    \
                          超出部分不计入有效里程。把距离降到 {:.0}m 以内，\n    \
                          或者设 PACE_IGNORE_DAILY_LIMIT=1 硬跑。",
                         p.distance_m,
-                        (5000.0 - done).max(0.0)
+                        (cap as f64 - done).max(0.0)
                     ));
                 }
             }
