@@ -2,7 +2,8 @@
 
 **运动世界校园 非官方客户端** — 纯 Rust，一条命令完成登录、轨迹生成与提交。
 
-> 针对 **7.4.01** 实测。CLI + Web 双模式，不用装 App、不用模拟点击、不用真机跑。
+> 针对 **7.4.21** 实测（脱壳 dex 逐字段核对过，7.4.20 → 7.4.21 协议零变化）。
+> CLI + Web 双模式，不用装 App、不用模拟点击、不用真机跑。
 > 版本号是硬编码的，厂商换版本需要重新对齐（见「已知局限」）。
 
 > ⚠️ 本项目涉及第三方应用私有协议的逆向实现，运行结果会直接落到你的账号上。使用前请阅读[免责声明](#免责声明)与[使用者的义务](#使用者的义务)。
@@ -290,9 +291,57 @@ Web 界面走 `GET /api/cheat`。四种状态分得很清楚：
 
 第二条是这套逻辑的重点：`self` 字段整个缺失、`count` 是字符串、`self` 是非对象——这些都算「未知」。把未知报成清白比不报更糟，用户会以为查过了没问题。
 
+## 提交前四道闸门
+
+`run` 真正发请求之前会先过这四关，任何一关不过都直接返回错误（不消耗提交）：
+
+| 闸门 | 查什么 | 不通过时 |
+|---|---|---|
+| **违规名单** | `v78/cheat/cheatlist` 的 `self` | 已标记就停：继续提交只会往名单里再加一条 |
+| **跑步冻结** | `policy.freezeRunTime` | 冻结期拒绝，并报剩余秒数（App 里开始按钮是倒计时的） |
+| **日上限** | 今日累计 + 本次 > 5000m | 直接拦。`PACE_IGNORE_DAILY_LIMIT=1` 可硬跑 |
+| **有效时段** | `getHistoryConfig` 的 `randomValidTimes` | 窗口外拒绝（服务端会回 11016） |
+
+日上限 5000m 来自 `maleDayUpper`/`femaleDayUpper` 的实测值，个别学校不同要改。
+时段字段名就叫 `randomValidTimes`（不是笔误），实测某校是 `06:30:00 – 22:00:59`。
+
+## 提交后回读服务端判定
+
+提交成功只是「进账」，不代表「算成绩」。服务端把裁定结果写在记录详情里，
+`run` 会立刻回读并逐条打印：
+
+```
+√ [submit] 提交成功，记录 id=Some(1375850386)
+√ [obs] 3/3 个 key 上传成功
+√ [verify] 服务端判定：status=0(正常) isCheat=0 stepFreqStatus=0 validDis=1824m/1824m
+  · ✓ 经过必经点位
+  · ✓ 至少通过2个普通点位
+  · ✓ 最少要跑1.50公里
+  · ✓ 跑12分钟以上
+  · ✓ 步频控制在40步/分钟-300步/分钟之间
+  · ✓ 配速控制在2′00″-12′00″
+√ [verify] 这一条服务端认可：无作弊标记、无扣量、规则全达标
+```
+
+字段含义：
+
+| 字段 | 说明 |
+|---|---|
+| `isCheat` | 作弊标志，0 = 干净 |
+| `stepFreqStatus` | 步频判定，0 = 正常 |
+| `status` | 记录分类：0 正常 / 1 作弊 / 2 未打卡 / 3 未上传 / 4 配速过快 / 5 步频过慢 |
+| `validDis` / `validTime` | **服务端算的**有效距离/时间，和 `totalDis` 的差就是被扣掉的部分 |
+| `reasonList` | 逐条规则的裁定，`complete=false` 的那条就是没过的 |
+
+任一不正常会汇总成一条 `! [verify] 服务端有意见：…` 并给下一步动作。
+只读，回读失败不影响已提交的记录。
+
+**「经过必经点位」与「至少通过2个普通点位」是两条独立规则**：服务端把 `isFixed=1`
+的点当必经点，其余当普通点，普通点只要过 2 个就算过。
+
 ## 客户端本地校验对齐
 
-7.4.01 在客户端本地加了一层校验逻辑，本项目在提交前会用同一套规则先验证一遍，避免发出注定被拒的数据。
+7.4.21 在客户端本地加了一层校验逻辑，本项目在提交前会用同一套规则先验证一遍，避免发出注定被拒的数据。
 
 ### 点位打分
 
@@ -372,9 +421,20 @@ android.hardware.bluetooth             蓝牙
   OUI。借前缀只是更像的假，不是真的。
 - IMEI 15 位、TAC 以 `86` 开头、末位 Luhn 校验，由 `device_id` 确定性派生，
   同一账号每次一致。
-- `androidId`/`blMac`/`wifiMac`/`IMEI` 这几个头默认发派生值；官方客户端的会话里
-  也有五项全空的情况，要发空串做对照实验时设 `PACE_DEVICE_HW_HEADERS=empty`
-  （只清这四个头，`DeviceId` 不动）。填值只为贴近真机形态，不声称能绕过风控。
+- `androidId`/`blMac`/`wifiMac`/`IMEI`/`CustomDeviceId` 这五个头**默认发空串**。
+  依据是 7.4.21 的 `HttpUtil.getHeaderMap` 里它们本来就写死成 `""`：
+
+  ```java
+  arrayMap2.put("IMEI", "");
+  arrayMap2.put("androidId", "");
+  arrayMap2.put("blMac", "");
+  arrayMap2.put("wifiMac", "");
+  arrayMap2.put("CustomDeviceId", "");
+  ```
+
+  （`CustomDeviceId` 有个坑：方法前面 `Utils.OoooOo0(context, ...)` 确实生成过一个值
+  存进缓存，但最后 put 进头的仍是空串。）要发派生假值做对照实验时设
+  `PACE_DEVICE_HW_HEADERS=derived`。`DeviceId` 不受这个开关影响——它是设备锁。
 
 ## 下载与安装
 
@@ -595,6 +655,42 @@ if report.blocked() {
 
 **静默窗口**：提交后 600 秒内不能再发跑步请求，否则判异常。
 
+**提交体字段**（按 7.4.21 脱壳的 `UploadFormatEntity` 逐字段核过，47 个）：
+
+- `segmentJson` 客户端算完反作弊后**清成空串**再发（`setSegmentJson` 最后一行
+  `this.segmentJson = ""`），我们也发空串
+- `more` 默认 `true`；`prizeName` 走 Gson `serializeNulls`，有键无值
+- **顶层没有 `runAreaId`**，它只在 `fivePointJson` 那层 envelope
+  （`PointJsonEntity`）里
+- `useMobilityTools` 是客户端算出来的「是否用移动工具」标记，正常 0
+- `appVersion` 默认 `7.4.21`（`PACE_APP_VERSION` 可覆盖）
+
+**五点位 `isFixed` 默认全发 0**。7.4.21 的地图渲染按 `isFixed∈{1,2}` 分两套图标：
+
+```java
+// com.zjwh.map.gaode.Oooo000.setFivePoint
+if ((isFixed != 1) && (isFixed != 2))
+    icon = isPassed ? img_point_normal_pass : img_point_normal;
+else
+    icon = isPassed ? img_point_must_pass : img_point_must_normal;
+```
+
+实测：发真实的 `isFixed=1` 时，**即使 `isPass=true`**，App 详情页那个必经点也固定
+画橙色（OBS 里五个点全 true 也照样橙）。全发 0 之后详情页 5 绿。代价是
+`reasonList` 里「经过必经点位」显示 ✗，但 `complete=true`、`validDis` 全额、
+`semesterValidDis` 也全额（实测 31201/31201 没扣）。
+
+要发真实值做对照：`PACE_FORCE_NORMAL_POINT=0`。
+
+**`isPass` 恒发 true**：它是 `entity/database/FivePoint` 的本地 Room 字段，由 App
+在跑动中按 GPS 写库，服务端不认它（服务端自己从轨迹判「有没有经过」）。早先按
+严格 10m 命中发 false，会让详情页画橙。
+
+**点位判定阈值**：客户端用 **50 米**（`FivePointPlugin.OooOOOO` 里 `v2 <= 50.0`，
+另有 60 米那档做「正在接近」提示）。我们用 10 米是**故意保守**——`position` 发的
+是「首次经过的轨迹点下标」，而 planner 只在 15m 内吸附；按 50m 判命中会让 position
+指向几十米外的点，App 拿这个下标核对反而更容易判没经过。
+
 ## 测试
 
 ```bash
@@ -669,6 +765,17 @@ cargo test
 - **步态偏「小步高频」**：真机两条记录是 90~104 步/分 × 158~164cm，我们是
   157 步/分 × 110cm。乘积相同所以配速对得上，但真机那两个数其实是
   「距离 ÷ 步数 ÷ 时长」派生的（手机计步器少计），不是真实步态。
+
+另外几处**改完但没真机验证**的（等能正常登录时验）：
+
+- **跑法映射**：`sportType` 现在跟随网页跑法下拉框（1 记分 / 2 户外 / 3 室外锻炼），
+  之前是写死 1。户外跑/室外锻炼对应 2/3 是否被服务端认，还没实测。
+  7.4.21 的 `RunFreePImpl` 构造里自由跑写死 `sportType=4`（不是 6），这条只做了
+  本地测试，没接进流程。
+- **超长目标**：15km 这类目标生成不到（围栏周长限制，实测目标 15km → 实际 10.5km）。
+- **日上限**：5000m 是单校实测值（`maleDayUpper`/`femaleDayUpper`），别校不同要改。
+- **月度抽检**：`creditscore/v70390/popup` 命中时要真人做支付宝信用分核验，
+  自动化替不了，只做提醒。
 
 ## 许可
 
