@@ -6,11 +6,15 @@
 
 用法：
     python tools/check_secrets.py           # 扫 git 跟踪的文件
+    python tools/check_secrets.py --staged   # 扫即将写入提交的 Git 索引内容
     python tools/check_secrets.py --all      # 连未跟踪也扫（发布前用）
 
 命中返回 1，干净返回 0。
 """
 
+import argparse
+import codecs
+import os
 import re
 import subprocess
 import sys
@@ -24,10 +28,16 @@ SKIP_SUFFIX = {
 
 PATTERNS = [
     # GitHub 老式 PAT / 细粒度 token
-    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "GitHub token"),
+    (
+        re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"),
+        "GitHub token",
+    ),
     # 常见云厂商 key
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS access key"),
-    (re.compile(r"sk-[A-Za-z0-9]{20,}"), "OpenAI/DeepSeek 风格 key"),
+    (
+        re.compile(r"sk-(?:proj-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,})"),
+        "OpenAI/DeepSeek 风格 key",
+    ),
     (re.compile(r"glpat-[A-Za-z0-9_-]{20,}"), "GitLab token"),
     # 私钥块
     (re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"), "私钥"),
@@ -35,16 +45,8 @@ PATTERNS = [
     (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "手机号"),
 ]
 
-# 允许出现的地方：文档里讲「口令怎么设」的示例、测试里的假 token
-ALLOW_SUBSTR = (
-    "你的口令",
-    "PLACEHOLDER",
-    "0000000000",
-    # 测试里用的假号码，不是任何人的手机号
-    "13812348888",
-    "13800000000",
-    "13900000000",
-)
+# 只放行命中的示例号码。同一行出现示例值时，仍要检查其他命中项。
+EXAMPLE_PHONE_NUMBERS = {"13812348888", "13800000000", "13900000000"}
 
 # 校验和、内容哈希这类长十六进制串里会出现「像手机号」的子串，先跳过
 HEX_TOKEN = re.compile(r"[0-9a-f]{24,}")
@@ -65,12 +67,28 @@ def tracked_files() -> list[Path] | None:
     冒到顶，用户看到的是 Python 堆栈，而不是「换个目录跑」。
     """
     try:
-        out = subprocess.run(
-            ["git", "ls-files"], capture_output=True, text=True, check=True
-        ).stdout
+        out = git_output("ls-files", "-z")
     except (FileNotFoundError, subprocess.CalledProcessError, OSError):
         return None
-    return [Path(p) for p in out.splitlines() if p]
+    return [Path(os.fsdecode(p)) for p in out.split(b"\0") if p]
+
+
+def git_output(*args: str) -> bytes:
+    return subprocess.run(["git", *args], capture_output=True, check=True).stdout
+
+
+def staged_files() -> dict[Path, str]:
+    blobs = {}
+    for entry in git_output("ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        header, path = entry.split(b"\t", 1)
+        mode, oid, stage = header.split()
+        if stage != b"0":
+            raise ValueError("Git 索引含有尚未解决的冲突")
+        if mode != b"160000":  # 子模块在索引中引用提交，不是文件内容。
+            blobs[Path(os.fsdecode(path))] = oid.decode("ascii")
+    return blobs
 
 
 def walk_all() -> list[Path]:
@@ -81,23 +99,35 @@ def walk_all() -> list[Path]:
     ]
 
 
-def scan(paths: list[Path]) -> list[str]:
+def scan(paths: list[Path], staged: dict[Path, str] | None = None) -> list[str]:
     hits: list[str] = []
     for p in paths:
-        if p.suffix.lower() in SKIP_SUFFIX or not p.is_file():
+        if p.suffix.lower() in SKIP_SUFFIX:
             continue
         try:
-            text = p.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+            if staged is not None:
+                content = git_output("cat-file", "blob", staged[p])
+            elif p.is_file():
+                content = p.read_bytes()
+            else:
+                continue
+            is_utf16 = content.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE))
+            encoding = "utf-16" if is_utf16 else "utf-8"
+            text = content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        except OSError:
+            if staged is not None:
+                raise
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if any(a in line for a in ALLOW_SUBSTR):
-                continue
-            if HEX_TOKEN.search(line):
-                continue
             for pat, label in PATTERNS:
-                m = pat.search(line)
-                if m:
+                for m in pat.finditer(line):
+                    if label == "手机号" and (
+                        m.group(0) in EXAMPLE_PHONE_NUMBERS
+                        or any(h.start() <= m.start() and m.end() <= h.end() for h in HEX_TOKEN.finditer(line))
+                    ):
+                        continue
                     # 只报位置和类型，不把命中的原文打出来（日志本身也会被贴进 issue）
                     hits.append(f"{p}:{lineno}: {label}（{len(m.group(0))} 字符）")
                     break
@@ -105,8 +135,23 @@ def scan(paths: list[Path]) -> list[str]:
 
 
 def main() -> int:
-    if "--all" in sys.argv:
+    parser = argparse.ArgumentParser(description="检查文件中疑似凭证或个人信息。")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--staged", action="store_true", help="读取 Git 索引中的文件内容")
+    modes.add_argument("--all", action="store_true", help="扫描工作目录，包括未跟踪的文件")
+    args = parser.parse_args()
+
+    if args.staged:
+        try:
+            staged = staged_files()
+            paths = list(staged)
+            hits = scan(paths, staged)
+        except (OSError, subprocess.CalledProcessError, ValueError):
+            print("无法读取 Git 索引，提交前检查未完成。", file=sys.stderr)
+            return 1
+    elif args.all:
         paths = walk_all()
+        hits = scan(paths)
     else:
         got = tracked_files()
         if got is None:
@@ -114,7 +159,7 @@ def main() -> int:
             paths = walk_all()
         else:
             paths = got
-    hits = scan(paths)
+        hits = scan(paths)
     if hits:
         print("发现疑似凭证/个人信息，先处理再提交：\n")
         for h in hits:

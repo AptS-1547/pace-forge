@@ -38,12 +38,13 @@
 
 ## 提交前的本地检查
 
-```bash
-git config core.hooksPath .githooks   # 只需一次
-```
+Linux 和 macOS 在本仓库运行 `git config --local core.hooksPath .githooks`。
+Windows 确认 `python` 指向 Python 3.10 或以上版本，然后运行
+`git config --local core.hooksPath .githooks/windows`。
+如已配置其他钩子目录，请先保留其中的钩子。
 
-之后每次 `git commit` 会先跑 `tools/check_secrets.py`，扫到 GitHub token、云厂商 key、
+之后每次 `git commit` 会先跑 `tools/check_secrets.py --staged`，扫到 GitHub token、云厂商 key、
 私钥块、11 位手机号就拦下。CI 有同一道（`secrets` job），本地这层只是让人早一步知道。
 
 命中的原文不会打出来，只报文件名、行号和类型——日志本身经常被贴进 issue，
-把 key 打进日志等于换个地方泄露。测试用的假号码写进了 `ALLOW_SUBSTR`，新增假号码也加那里。
+把 key 打进日志等于换个地方泄露。测试用的假号码写在 `EXAMPLE_PHONE_NUMBERS`。
