@@ -15,7 +15,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
-  RUST_TOOLCHAIN: '1.100.0'
+  # 由下面「Read pinned toolchain」从 rust-toolchain.toml 读出，这里只是占位。
+  RUST_TOOLCHAIN: ''
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
 
@@ -68,6 +69,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      # 工具链版本只在 rust-toolchain.toml 里写一次：cargo 认这个文件，
+      # 给它装 target 也必须是同一个版本，否则报「can't find crate for core」。
+      - name: Read pinned toolchain
+        shell: bash
+        run: echo "RUST_TOOLCHAIN=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
