@@ -1,0 +1,37 @@
+# cargo-deny 配置（#38 / Nakf 建议）。重点是 RustSec 通告：漏洞和 yanked 直接红，
+# 其余只警告——报文逐字节敏感的项目，依赖升级必须人工过，不能让工具自动改 lock。
+# 升依赖的流程：dependabot 提 PR → CI 这里过 → 人工 `cargo test --locked` → 合。
+
+# 把可选 feature（GUI 的 eframe/egui）也算进依赖图，默认不编译也要巡检。
+[graph]
+all-features = false  # 只审发布实际编进去的东西：GUI 是 optional，release 不带 --features
+
+# cargo-deny 0.22 起通告默认全部报错（含 yanked）；要放行某条在这里列 ID。
+[advisories]
+# RUSTSEC-2023-0071 (rsa, Marvin Attack)：针对的是私钥运算的时序侧信道，官方至今无修复版。
+# 本项目只用 rsa 做公钥加密 + 公钥验签（crypto/envelope.rs、crypto/decrypt.rs），私钥在服务端，不受影响。
+ignore = ["RUSTSEC-2023-0071"]
+
+# 本仓库 MIT；只列常见的宽松许可。ring（rustls 依赖）的许可表达式带 OpenSSL，
+# cargo-deny 0.22 起许可策略只有 `allow` 一个口子：不在表里的就报错。
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",   # webpki-roots 根证书数据
+]
+
+# 同一 crate 多版本只警告：ureq/rustls 链上偶有分叉，不值得为此卡 CI。
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"

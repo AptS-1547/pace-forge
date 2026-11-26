@@ -45,3 +45,13 @@ jobs:
       # 输出有变，先在本地 cargo fmt 再推，不要回退成放行。
       - name: cargo fmt --check（硬门）
         run: cargo fmt --all -- --check
+
+  # 依赖巡检（#38）：RustSec 漏洞 / yanked 直接红，许可与多版本只警告。
+  # 配置见 deny.toml。dependabot 的 PR 必须过这一关再人工核。
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
