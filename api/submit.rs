@@ -143,6 +143,85 @@ pub const FIXED_POINT_ID_BASE: i64 = 1;
 /// 所以：10m 是**报文层**的保守值，不是对客户端阈值的误读。
 pub const FIXED_POINT_HIT_M: f64 = 10.0;
 
+// ── 速度单位 newtype（issue #38）─────────────────────────────────────────
+//
+// FIX-A2 记录的三次口径事故（`speed` 发成 v×3.6、`avgSpeed` 发成累计均值、
+// `bdS == speed/3.6` 把错口径写成定理）病根是同一个：m/s、min/km 在类型上
+// 分不开，只能靠注释声明。下面三个 newtype 让混用在编译期就写不出来：
+// `Pace::from_mps` / `MetersPerSec::pace` 是唯一的换算入口，字段名即口径。
+
+/// 米/秒（`avgSpeed`、`bdS` 的口径）。
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct MetersPerSec(pub f64);
+
+/// 分/公里（`speed` 的口径，**不是** km/h）。
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct PaceMinPerKm(pub f64);
+
+impl MetersPerSec {
+    /// 配速 min/km = 1000 / (60·v)。v=0 时真机写 0.0（不是 ∞）。
+    pub fn pace(self) -> PaceMinPerKm {
+        if self.0 > 0.0 {
+            PaceMinPerKm(1_000.0 / (60.0 * self.0))
+        } else {
+            PaceMinPerKm(0.0)
+        }
+    }
+}
+
+impl PaceMinPerKm {
+    /// 反算 m/s；pace=0 返回 0。
+    pub fn to_mps(self) -> MetersPerSec {
+        if self.0 > 0.0 {
+            MetersPerSec(1_000.0 / (60.0 * self.0))
+        } else {
+            MetersPerSec(0.0)
+        }
+    }
+}
+
+/// 一个采样点的三个速度字段（typed），由 [`SpeedFields::from_mps`] 统一派生，
+/// 再序列化成报文；两处发射点（`point_json_full` / `smooth_point_speed`）
+/// 共用它，杜绝一处改了另一处漏。
+#[derive(Debug, Clone, Copy)]
+pub struct SpeedFields {
+    /// 配速 min/km，真机口径 1000/(60·v)，4 位小数。
+    pub speed: PaceMinPerKm,
+    /// 点间速度 m/s（本点到上一点），4 位小数。
+    pub avg_speed: MetersPerSec,
+    /// 低通后的点间速度 m/s（两拍均值，比 avgSpeed 慢一拍），2 位小数。
+    pub bd_s: MetersPerSec,
+}
+
+impl SpeedFields {
+    /// `prev_v` 是上一个采样点的点间速度（起步窗口里为 0）。
+    pub fn from_mps(v: MetersPerSec, prev_v: MetersPerSec) -> Self {
+        let bd_s = if v.0 <= 0.0 {
+            0.0
+        } else if prev_v.0 <= 0.0 {
+            v.0
+        } else {
+            (v.0 + prev_v.0) / 2.0
+        };
+        SpeedFields {
+            speed: v.pace(),
+            avg_speed: v,
+            bd_s: MetersPerSec(bd_s),
+        }
+    }
+
+    /// 报文口径的序列化值：`speed`/`avgSpeed` 4 位小数、`bdS` 2 位。
+    pub fn speed_json(&self) -> f64 {
+        (self.speed.0 * 10_000.0).round() / 10_000.0
+    }
+    pub fn avg_speed_json(&self) -> f64 {
+        (self.avg_speed.0 * 10_000.0).round() / 10_000.0
+    }
+    pub fn bd_s_json(&self) -> f64 {
+        (self.bd_s.0 * 100.0).round() / 100.0
+    }
+}
+
 /// 每个必到点在轨迹点数组里**首次**被经过的下标（没经过的不出现在结果里）。
 ///
 /// 这是纯内部量：`allLocJson` 的 `type` 字段要在经过打卡点的采样点附近标 2
@@ -692,25 +771,9 @@ pub fn point_json_full(
         // 1.9 m/s 的下限会把配速压死在 8.77 以内，慢速点全部被抬快。
         (step_m / gap_sec).clamp(0.0, MAX_POINT_SPEED_MPS)
     };
-    // 配速（min/km）。v=0 时真机写 0.0（不是 ∞、也不是被截断的大数）：
-    // idx113 是唯一一个 v=0 却非 0 的点，那是设备端滤波残差（0.06 m/s），
-    // 我们不模拟滤波器残差。
-    let pace = if v_mps > 0.0 {
-        1_000.0 / (60.0 * v_mps)
-    } else {
-        0.0
-    };
-    // `bdS`：两拍低通（本拍与上一拍点间速度的均值）。真机这个量是设备端
-    // 滤波输出：加速段 bdS < v、减速段 bdS > v，单点最大残差 2.0 m/s；
-    // 换成两拍均值后中位残差 0.19 m/s、p95 0.53 m/s（见报告残差表）。
-    // 窗口后的第一点没有上一拍（`prev_v` 还是窗口里的 0），直接取本拍。
-    let bd_s = if v_mps <= 0.0 {
-        0.0
-    } else if *prev_v <= 0.0 {
-        v_mps
-    } else {
-        (v_mps + *prev_v) / 2.0
-    };
+    // 三个速度字段统一走 typed 的 `SpeedFields`（配速 = 1000/(60·v)、
+    // bdS = 两拍低通），两处发射点共享同一套换算，口径不会再分叉（#38）。
+    let sp = SpeedFields::from_mps(MetersPerSec(v_mps), MetersPerSec(*prev_v));
     *prev_v = v_mps;
 
     // 点位类型是有语义的，不是装饰。
@@ -866,14 +929,14 @@ pub fn point_json_full(
     json!({
         // 点间速度（m/s）：本点到上一点的位移 / 采样间隔。真机就是这么算的
         // （触类：idx42 真机 0.38 = 1.884m/5s），不是累计均值。
-        "avgSpeed": (v_mps * 10000.0).round() / 10000.0,
+        "avgSpeed": sp.avg_speed_json(),
         // 海拔三兄弟不能是 0：服务端按它们算累计爬升，全 0 等于「在海底跑」
         "bdA": (altitude * 10.0).round() / 10.0,
         "bdD": (bearing * 10.0).round() / 10.0,
         "bdG": 1,
         // 低通后的点间速度（m/s），两拍均值。真机 2 位小数，且**恒不等于**
         // `speed/3.6`（那是把配速当 km/h 的错口径）。
-        "bdS": (bd_s * 100.0).round() / 100.0,
+        "bdS": sp.bd_s_json(),
         "coorType": "gcj02",
         "count": count,
         "dtr": 0.0,
@@ -911,7 +974,7 @@ pub fn point_json_full(
         // **配速 min/km**，不是 km/h。真机 114/114 点满足
         // `speed × avgSpeed = 1000/60 = 16.6667`（idx60: 5.08 × 3.28），
         // 这是判「单位有没有认反」唯一可靠的等式。
-        "speed": (pace * 10000.0).round() / 10000.0,
+        "speed": sp.speed_json(),
         // state 是「运动 / 暂停 / 收尾」三态：1 运动中、2 自动暂停、3 收尾。
         //
         // 真机实测 {1: 78, 2: 5, 3: 31}：31 个 3 从第 83 个点一直覆盖到最后
@@ -1242,18 +1305,12 @@ pub fn smooth_point_speed(items: &mut [Value]) {
                 0.0
             }
         };
-        let pace = if v > 0.0 { 1_000.0 / (60.0 * v) } else { 0.0 };
-        let bd_s = if v <= 0.0 {
-            0.0
-        } else if prev_v <= 0.0 {
-            v
-        } else {
-            (v + prev_v) / 2.0
-        };
+        // 与 `point_json_full` 共用 typed 的 `SpeedFields`，两处口径不会分叉（#38）。
+        let sp = SpeedFields::from_mps(MetersPerSec(v), MetersPerSec(prev_v));
         prev_v = v;
-        item["speed"] = json!((pace * 10000.0).round() / 10000.0);
-        item["avgSpeed"] = json!((v * 10000.0).round() / 10000.0);
-        item["bdS"] = json!((bd_s * 100.0).round() / 100.0);
+        item["speed"] = json!(sp.speed_json());
+        item["avgSpeed"] = json!(sp.avg_speed_json());
+        item["bdS"] = json!(sp.bd_s_json());
     }
 }
 
@@ -4940,5 +4997,40 @@ mod issue37_tests {
     fn default_mode_is_auto() {
         assert_eq!(fixed_point_mode(), FixedPointMode::Auto);
         assert!(!force_normal_point());
+    }
+}
+
+#[cfg(test)]
+mod speed_units_tests {
+    use super::*;
+
+    /// #38：配速与 m/s 互为反算，v=0 时两边都是 0（真机口径，不是 ∞）。
+    #[test]
+    fn pace_and_mps_round_trip() {
+        let v = MetersPerSec(3.28);
+        let p = v.pace();
+        assert!((p.0 - 5.0813).abs() < 1e-3, "pace={}", p.0);
+        assert!((p.to_mps().0 - 3.28).abs() < 1e-9);
+        assert_eq!(MetersPerSec(0.0).pace().0, 0.0);
+        assert_eq!(PaceMinPerKm(0.0).to_mps().0, 0.0);
+    }
+
+    /// #38：bdS 是两拍低通，比 avgSpeed 慢一拍；首拍没有上一拍直接取本拍。
+    #[test]
+    fn bd_s_is_two_tap_low_pass() {
+        let a = SpeedFields::from_mps(MetersPerSec(2.0), MetersPerSec(0.0));
+        assert_eq!(a.bd_s, MetersPerSec(2.0), "首拍无上一拍，取本拍");
+        let b = SpeedFields::from_mps(MetersPerSec(4.0), MetersPerSec(2.0));
+        assert_eq!(b.bd_s, MetersPerSec(3.0), "两拍均值");
+        assert_eq!(b.avg_speed, MetersPerSec(4.0));
+    }
+
+    /// #38：序列化位数与真机一致（speed/avgSpeed 4 位、bdS 2 位）。
+    #[test]
+    fn json_rounding_matches_device() {
+        let sp = SpeedFields::from_mps(MetersPerSec(3.33333), MetersPerSec(3.0));
+        assert_eq!(sp.avg_speed_json(), 3.3333);
+        assert_eq!(sp.bd_s_json(), 3.17);
+        assert_eq!(sp.speed_json(), 5.0);
     }
 }
