@@ -1,3 +1,11 @@
+[workspace]
+members = ["crates/pace-forge-config"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "1.1.4"
+
 [package]
 name = "pace-forge"
 version = "0.1.11"
@@ -21,9 +29,11 @@ gui = ["dep:eframe", "dep:egui"]
 name = "pace-forge"
 
 [dependencies]
+# --- 配置层 ---
+pace-forge-config = { path = "crates/pace-forge-config" }
 # --- 协议层 ---
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde.workspace = true
+serde_json.workspace = true
 tiny_http = "0.12"
 ureq = { version = "2", default-features = false, features = ["json", "tls", "gzip", "native-certs"] }
 # 加密

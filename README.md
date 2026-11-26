@@ -278,6 +278,24 @@ pace-forge dry 2 12      # 只走自检，不发任何写请求
 
 「明确驳回」才释放时间段：有业务错误码、能确定没入账的（`11016` 不在时段、`10003` 签名错误、`10603` 被限流等）。网络错误、HTTP 异常、响应看不懂一律**保留 pending**。
 
+## 配置文件与环境变量
+
+所有开关的优先级：**环境变量 `PACE_*` > `config.toml` > 内置默认值**。
+
+```bash
+pace-forge web --config /etc/pace-forge/config.toml   # 显式指定
+# 不指定时依次找 ./config.toml 和 ~/.pace-forge/config.toml，都没有就全默认
+```
+
+- 全部键见仓库根的 `config.example.toml`（带注释）；当前哪些开关非默认、
+  来自哪一层（env / config.toml），Web 启动日志会打一行「非默认开关」；
+- 配置文件里的**未知键、非法值、缺一半的锚点**（`center_lat`/`center_lng`
+  只写一个）都在启动时报错退出——不再静默回落默认值；
+- 环境变量仍然全量支持（老用法不变），非法值同样启动报错；
+- Web 启动时打一行「非默认开关」，谁改了什么一眼可见；
+- 拆分实现在独立 crate `crates/pace-forge-config`：注册表一张表同时服务
+  TOML 解析、env 解析、`config` 打表，不存在「文档表」和实际读取两套东西。
+
 ## 出口代理
 
 人在外地、但有一条能回到学校同城的线路时，可以把提交链路走那条线路：
@@ -287,6 +305,9 @@ export PACE_EGRESS_PROXY=http://10.0.0.2:7890     # 只支持 http:// 的 CONNEC
 export PACE_FORGE_TOKEN=...
 pace-forge web 0.0.0.0:9999
 ```
+
+也可以写进 `config.toml`（`network.egress_proxy` / `server.token`），见上一节；
+网页里保存的设置仍然优先于这两种来源。
 
 - 只有**提交链路**走这个出口，探测归属地仍直连，所以顶栏那行显示的是「代理的出口」；
 - 出口可以是本机直连、HTTP 代理，或自己搭的隧道；程序只负责把流量送过去；

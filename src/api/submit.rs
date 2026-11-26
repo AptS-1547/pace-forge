@@ -356,11 +356,10 @@ pub fn checkpoint_track_indexes_reserved(
         .collect()
 }
 
-/// 严格半径开关：`PACE_FIXED_STRICT=1` 时只认 10 米内、不放开半径。
+/// 严格半径开关：配置 `run.fixed_strict`（`PACE_FIXED_STRICT=1`）时只认
+/// 10 米内、不放开半径。
 fn fixed_strict() -> bool {
-    std::env::var("PACE_FIXED_STRICT")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    crate::config::global().run.fixed_strict
 }
 
 /// 必到点 → `fivePointJson` 的内层点位数组（真机形状）。
@@ -506,18 +505,13 @@ pub enum FixedPointMode {
     FollowServer,
 }
 
-/// 读 `PACE_FIXED_POINT=auto|all0|server`；未设时兼容旧变量
-/// `PACE_FORCE_NORMAL_POINT`（=0→server，=1→all0，未设→auto）。
+/// 固定点口径：配置 `run.fixed_point`（env `PACE_FIXED_POINT=auto|all0|server`；
+/// 旧变量 `PACE_FORCE_NORMAL_POINT` 0→server / 1→all0 的兼容在配置层完成）。
 pub fn fixed_point_mode() -> FixedPointMode {
-    match std::env::var("PACE_FIXED_POINT").ok().as_deref() {
-        Some("all0") | Some("allnormal") => FixedPointMode::AllNormal,
-        Some("server") | Some("follow") => FixedPointMode::FollowServer,
-        Some("auto") => FixedPointMode::Auto,
-        _ => match std::env::var("PACE_FORCE_NORMAL_POINT").ok().as_deref() {
-            Some("0") | Some("false") | Some("no") => FixedPointMode::FollowServer,
-            Some("1") | Some("true") | Some("yes") => FixedPointMode::AllNormal,
-            _ => FixedPointMode::Auto,
-        },
+    match crate::config::global().run.fixed_point {
+        crate::config::FixedPoint::AllNormal => FixedPointMode::AllNormal,
+        crate::config::FixedPoint::FollowServer => FixedPointMode::FollowServer,
+        crate::config::FixedPoint::Auto => FixedPointMode::Auto,
     }
 }
 
@@ -582,9 +576,9 @@ pub fn payload_run_area_id(real: i64) -> i64 {
     // 1668。两处一起退回那个形态：`runAreaId` 发真实 id，`geoFencesJson`
     // 只发 `points`（见 `fence::geo_fence_json`）。
     //
-    // `PACE_RUN_AREA_ID=-1` 能切回旧行为，方便对比。
-    match std::env::var("PACE_RUN_AREA_ID").ok().as_deref() {
-        Some("-1") | Some("minus1") => -1,
+    // `PACE_RUN_AREA_ID=-1`（配置 run.run_area_id）能切回旧行为，方便对比。
+    match crate::config::global().run.run_area_id {
+        Some(-1) => -1,
         _ => real,
     }
 }
@@ -686,11 +680,11 @@ pub enum PointTypeScheme {
 }
 
 fn point_type_scheme(has_fixed: bool) -> PointTypeScheme {
-    match std::env::var("PACE_PT_SCHEME").ok().as_deref() {
-        Some("old") | Some("marks") => PointTypeScheme::WithCheckpointMarks,
-        Some("new") => PointTypeScheme::NewDeviceShape,
-        _ if has_fixed => PointTypeScheme::WithCheckpointMarks,
-        _ => PointTypeScheme::NewDeviceShape,
+    match crate::config::global().run.pt_scheme {
+        crate::config::PtScheme::Old => PointTypeScheme::WithCheckpointMarks,
+        crate::config::PtScheme::New => PointTypeScheme::NewDeviceShape,
+        crate::config::PtScheme::Auto if has_fixed => PointTypeScheme::WithCheckpointMarks,
+        crate::config::PtScheme::Auto => PointTypeScheme::NewDeviceShape,
     }
 }
 
@@ -5057,6 +5051,99 @@ mod issue37_tests {
     fn default_mode_is_auto() {
         assert_eq!(fixed_point_mode(), FixedPointMode::Auto);
         assert!(!force_normal_point());
+    }
+
+    /// 配置映射等价性：run.fixed_point 三态 → FixedPointMode / force_normal_point，
+    /// 旧 env 解析词汇的映射语义逐一对齐（词汇表本身在 pace-forge-config 测）。
+    #[test]
+    fn fixed_point_maps_from_config() {
+        let set = |fp: crate::config::FixedPoint| {
+            crate::config::Guard::replace(crate::config::Config {
+                run: crate::config::Run {
+                    fixed_point: fp,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        };
+        let g = set(crate::config::FixedPoint::AllNormal);
+        assert_eq!(fixed_point_mode(), FixedPointMode::AllNormal);
+        assert!(force_normal_point(), "all0 等价于旧 FORCE_NORMAL_POINT=1");
+        drop(g);
+
+        let g = set(crate::config::FixedPoint::FollowServer);
+        assert_eq!(fixed_point_mode(), FixedPointMode::FollowServer);
+        assert!(
+            !force_normal_point(),
+            "server 等价于旧 FORCE_NORMAL_POINT=0"
+        );
+        drop(g);
+
+        assert_eq!(
+            fixed_point_mode(),
+            FixedPointMode::Auto,
+            "Guard 撤销后回落默认"
+        );
+    }
+
+    /// 配置映射等价性：run.pt_scheme 显式 old/new 覆盖 auto 的分流。
+    #[test]
+    fn point_type_scheme_maps_from_config() {
+        let set = |ps: crate::config::PtScheme| {
+            crate::config::Guard::replace(crate::config::Config {
+                run: crate::config::Run {
+                    pt_scheme: ps,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        };
+        let g = set(crate::config::PtScheme::Old);
+        assert_eq!(
+            point_type_scheme(false),
+            PointTypeScheme::WithCheckpointMarks
+        );
+        drop(g);
+
+        let g = set(crate::config::PtScheme::New);
+        assert_eq!(point_type_scheme(true), PointTypeScheme::NewDeviceShape);
+        drop(g);
+
+        // auto：按有无必到点分流（与旧 env 未设行为一致）
+        assert_eq!(
+            point_type_scheme(true),
+            PointTypeScheme::WithCheckpointMarks
+        );
+        assert_eq!(point_type_scheme(false), PointTypeScheme::NewDeviceShape);
+    }
+
+    /// 配置映射等价性：run.run_area_id=Some(-1) → 报文发 -1（旧行为对照），
+    /// 默认发真实围栏 id。
+    #[test]
+    fn payload_run_area_id_maps_from_config() {
+        assert_eq!(payload_run_area_id(1668), 1668, "默认发真实围栏 id");
+        let _g = crate::config::Guard::replace(crate::config::Config {
+            run: crate::config::Run {
+                run_area_id: Some(-1),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(payload_run_area_id(1668), -1);
+    }
+
+    /// 配置映射等价性：run.fixed_strict 严格半径开关。
+    #[test]
+    fn fixed_strict_maps_from_config() {
+        assert!(!fixed_strict(), "默认不严格");
+        let _g = crate::config::Guard::replace(crate::config::Config {
+            run: crate::config::Run {
+                fixed_strict: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(fixed_strict());
     }
 }
 

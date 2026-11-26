@@ -70,8 +70,35 @@ fn checked_km_min(dist_km: f64, dur_min: f64) -> (f64, f64) {
     (dist_km, dur_min)
 }
 
+/// 从参数里摘出 `--config <路径>`（找到就从 args 里移除，避免落进子命令的
+/// 位置参数）。写了 `--config` 没跟路径直接报错。
+fn take_config_path(args: &mut Vec<String>) -> Option<String> {
+    let i = args.iter().position(|a| a == "--config")?;
+    let p = match args.get(i + 1) {
+        Some(p) if !p.starts_with("--") => p.clone(),
+        _ => {
+            eprintln!("参数错误：--config 后面要跟一个配置文件路径");
+            std::process::exit(2);
+        }
+    };
+    args.drain(i..=i + 1);
+    Some(p)
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let config_path = take_config_path(&mut args);
+    // 配置只在这一处加载：TOML（--config / PACE_CONFIG / ./config.toml /
+    // ~/.pace-forge/config.toml）+ PACE_* 环境变量覆盖，非法值在这里直接
+    // 报错退出，不再静默回落。
+    let cfg = match pace_forge::config::load(config_path.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("配置加载失败：\n  - {e}");
+            std::process::exit(2);
+        }
+    };
+    pace_forge::config::store(cfg);
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("web");
 
     match cmd {
@@ -198,7 +225,6 @@ fn main() {
             let lane = parse_int(&args, 2, 1, "道次") as u8;
             stadium_probe(laps, lane);
         }
-        "config" => pace_forge::config::print_table(),
         "devices" => print!("{}", pace_forge::api::device_table::report()),
         "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
         "audit" => do_audit(false, args.get(1).map(|s| s.as_str())),
@@ -239,7 +265,6 @@ fn main() {
             println!("  pace-forge ago <分钟> [km] [min]            补跑：N 分钟前");
             println!("  pace-forge rand [km] [min] [--days N]       补跑：当天 7-20 点随机时刻");
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
-            println!("  pace-forge config              列出全部 PACE_* 开关与当前取值");
             println!("  pace-forge devices             机型/SoC 表：内容、当前 cpuModel、怎么补表");
             println!(
                 "  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合"
@@ -260,6 +285,9 @@ fn main() {
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
+            println!(
+                "配置：--config <路径> 指定配置文件，默认搜索 ./config.toml 和 ~/.pace-forge/config.toml；\n环境变量 PACE_* 覆盖配置文件，全部键见 config.example.toml。"
+            );
             println!(
                 "run/dry/at/ago/rand 需要已保存的登录会话（$HOME/.pace-forge/session.json）。"
             );
@@ -308,7 +336,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         center_lng: clng,
         distance_m: dist_km * 1000.0,
         duration_sec: (dur_min * 60.0).round() as i64,
-        prefer_stadium: flow::prefer_stadium_env(),
+        prefer_stadium: pace_forge::config::global().run.prefer_stadium,
         ..Default::default()
     };
 
@@ -1297,6 +1325,7 @@ fn run_with_start(
         }
     };
 
+    let cfg = pace_forge::config::global();
     let p = flow::RunParams {
         center_lat: clat,
         center_lng: clng,
@@ -1311,16 +1340,10 @@ fn run_with_start(
         run_mode: if free_sport.is_some() {
             2
         } else {
-            std::env::var("PACE_RUN_MODE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2)
+            cfg.run.run_mode
         },
-        sample_step_m: std::env::var("PACE_STEP_M")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(5.0),
-        prefer_stadium: flow::prefer_stadium_env(),
+        sample_step_m: cfg.run.step_m,
+        prefer_stadium: cfg.run.prefer_stadium,
         ..Default::default()
     };
 

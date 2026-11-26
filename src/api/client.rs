@@ -32,11 +32,12 @@ use sha2::{Digest, Sha256};
 /// 注意 `CustomDeviceId` 也在内：方法前面虽然 `Utils.OoooOo0(context, ...)`
 /// 生成过一个值存进缓存，但最后 put 进头的仍是 `""`。
 ///
-/// 要发派生假值做对照时设 `PACE_DEVICE_HW_HEADERS=derived`。
+/// 要发派生假值做对照时设 `device.hw_headers = "derived"`（env
+/// `PACE_DEVICE_HW_HEADERS=derived`）。
 fn hw_id(value: &str) -> String {
-    match std::env::var("PACE_DEVICE_HW_HEADERS").ok().as_deref() {
-        Some("derived") | Some("1") | Some("true") => value.to_string(),
-        _ => String::new(),
+    match crate::config::global().device.hw_headers {
+        crate::config::HwHeaders::Derived => value.to_string(),
+        crate::config::HwHeaders::Empty => String::new(),
     }
 }
 
@@ -194,17 +195,13 @@ impl DeviceProfile {
             device_id: String::new(),
             // 真机装的就是这个版本（7.4.20 / code 411，2026-11 从设备上取）。
             // 发旧版本号等于自报「用老客户端」，服务端的版本校验会直接看出来。
-            // 需要对照实验时用 PACE_APP_VERSION 覆盖。
-            app_version: std::env::var("PACE_APP_VERSION")
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| "7.4.20".into()),
+            // 需要对照实验时用配置 device.app_version（env PACE_APP_VERSION）覆盖。
+            app_version: crate::config::global().device.app_version.clone(),
             physic_pixel: "1080x2400".into(),
             logic_pixel: "393x873".into(),
             is_root: "0".into(),
             os_type: "0".into(),
-            cpu_model: crate::api::device_table::cpu_model_from_env(),
+            cpu_model: crate::api::device_table::cpu_model(),
             device_name: "Android Device".into(),
             os_version: "13".into(),
             user_agent: "okhttp/4.12.0".into(),
@@ -657,19 +654,20 @@ mod tests {
     /// 硬件头开关：**默认空串**（7.4.21 硬编码 `""`），设 `derived` 才发假值。
     #[test]
     fn hw_headers_default_empty_derived_on_demand() {
-        // edition 2024 要求 env 写操作显式 unsafe（多线程下改 env 不安全）；本测试只在这一个用例里读写这个变量。
-        unsafe {
-            std::env::remove_var("PACE_DEVICE_HW_HEADERS");
-            assert_eq!(
-                hw_id("abc"),
-                "",
-                "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）"
-            );
-            std::env::set_var("PACE_DEVICE_HW_HEADERS", "derived");
-            assert_eq!(hw_id("abc"), "abc", "derived 时应发派生假值");
-            std::env::remove_var("PACE_DEVICE_HW_HEADERS");
-        }
-        assert_eq!(hw_id("abc"), "");
+        assert_eq!(
+            hw_id("abc"),
+            "",
+            "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）"
+        );
+        // 配置注入（Guard 互斥，多个用 Guard 的测试不会互相覆盖）
+        let _g = crate::config::Guard::replace(crate::config::Config {
+            device: crate::config::Device {
+                hw_headers: crate::config::HwHeaders::Derived,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(hw_id("abc"), "abc", "derived 时应发派生假值");
     }
 
     /// 回归（issue #16）：IMEI 必须 15 位并通过 Luhn。

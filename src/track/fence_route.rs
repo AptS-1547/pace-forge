@@ -945,12 +945,8 @@ pub fn route_through_in_order(
         //
         // 压到段长的 18%、上限 60m：弧只做轻微避让，主体贴近两点连线，
         // 看起来像绕开一个花坛而不是从教学楼中间穿过去。
-        // 想更直就设 PACE_BULGE_MAX=0。
-        let bulge_max = std::env::var("PACE_BULGE_MAX")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| (0.0..=300.0).contains(v))
-            .unwrap_or(60.0);
+        // 想更直就设 PACE_BULGE_MAX=0（配置 run.bulge_max）；范围在加载时校验。
+        let bulge_max = crate::config::global().run.bulge_max;
         let bulge = (d * 0.18).clamp(8.0, bulge_max.max(8.0));
         // 鼓向：朝围栏中心那一侧，别跑到围栏外面
         let cx = fence.iter().map(|p| p.0).sum::<f64>() / fence.len() as f64;

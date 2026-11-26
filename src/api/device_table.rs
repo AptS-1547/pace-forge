@@ -389,18 +389,16 @@ pub fn soc_for_platform(platform: &str) -> Option<&'static str> {
 
 /// 实际发出去的 `cpuModel`：
 ///
-/// 1. `PACE_DEVICE_MODEL` 有值且能查到 → SoC 型号；
+/// 1. 配置 `device.model`（env `PACE_DEVICE_MODEL`）有值且能查到 → SoC 型号；
 /// 2. 查不到 → `arm64-v8a`，并在 stderr 说一句「未收录」（同一个值只报一次，
 ///    批量提交时不刷屏）。
-pub fn cpu_model_from_env() -> String {
-    let Ok(model) = std::env::var("PACE_DEVICE_MODEL") else {
-        return ABI_FALLBACK.to_string();
-    };
-    let model = model.trim();
+pub fn cpu_model() -> String {
+    let cfg = crate::config::global();
+    let model = cfg.device.model.trim();
     if model.is_empty() {
         return ABI_FALLBACK.to_string();
     }
-    // 先按机型 code 查 models，查不到再按平台代号直接查——`PACE_DEVICE_MODEL=kalama`
+    // 先按机型 code 查 models，查不到再按平台代号直接查——`device.model = "kalama"`
     // 这种「我只知道芯片」的用法也要能用，否则表里那层平台数据白摆着。
     match soc_for_model(model).or_else(|| soc_for_platform(model).map(str::to_string)) {
         Some(soc) => soc,
@@ -461,31 +459,26 @@ pub fn report() -> String {
         "\n目录：官方 model code {} 条（Google Play 设备目录，中国品牌子集）\n",
         catalog().len()
     ));
-    let cur = cpu_model_from_env();
+    let cur = cpu_model();
+    let model = crate::config::global().device.model.clone();
+    let model = model.trim();
     // 已经按平台代号命中 SoC 时不必再说「目录未命中」——平台代号本来就不在
     // 官方 model code 目录里，那句话只会变成噪音。
-    if cur == ABI_FALLBACK
-        && let Ok(model) = std::env::var("PACE_DEVICE_MODEL")
-    {
-        let model = model.trim();
-        if model.is_empty() {
-            // 没设，不必提示
-        } else {
-            match catalog_lookup(model) {
-                Some(e) => out.push_str(&format!(
-                    "  目录命中：{model} → {} {}（codename {}）\n",
-                    e.brand, e.name, e.codename
-                )),
-                None => out.push_str(&format!(
-                    "  目录未命中：{model}（不是已知官方 model code，可能是笔误或平台代号）\n"
-                )),
-            }
+    if cur == ABI_FALLBACK && !model.is_empty() {
+        match catalog_lookup(model) {
+            Some(e) => out.push_str(&format!(
+                "  目录命中：{model} → {} {}（codename {}）\n",
+                e.brand, e.name, e.codename
+            )),
+            None => out.push_str(&format!(
+                "  目录未命中：{model}（不是已知官方 model code，可能是笔误或平台代号）\n"
+            )),
         }
     }
     out.push_str(&format!("\n[当前] cpuModel 实际发：{cur}\n"));
     if cur == ABI_FALLBACK {
         out.push_str(
-            "        （ABI 兜底。设 PACE_DEVICE_MODEL=<机型或平台代号> 才会发 SoC 型号）\n",
+            "        （ABI 兜底。设 device.model = <机型或平台代号>（env PACE_DEVICE_MODEL）才会发 SoC 型号）\n",
         );
     }
     out
@@ -524,14 +517,9 @@ mod tests {
     }
 
     #[test]
-    fn env_defaults_to_abi_when_unset() {
-        // 不设 env 时行为与历史一致
-        assert_eq!(
-            std::env::var("PACE_DEVICE_MODEL")
-                .is_err()
-                .then_some(ABI_FALLBACK),
-            Some(ABI_FALLBACK)
-        );
+    fn default_model_falls_back_to_abi() {
+        // 无配置来源时行为与历史一致
+        assert_eq!(cpu_model(), ABI_FALLBACK);
         assert_eq!(ABI_FALLBACK, "arm64-v8a");
     }
 

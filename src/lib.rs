@@ -11,10 +11,14 @@
 //! - `cli`       命令行入口（`pace-forge help`，见 `main.rs`）
 
 pub mod api;
-pub mod config;
 pub mod crypto;
 pub mod track;
 pub mod web;
+
+/// 配置层（`crates/pace-forge-config`）：`config.toml` + `PACE_*` 环境变量
+/// 覆盖，启动时一次性加载校验。入口点（`main`）负责 `config::load` +
+/// `config::store`，其余代码只读 [`config::global`]。
+pub use pace_forge_config as config;
 
 /// 测试专用的一次性隔离目录（只在 `cargo test` 下编译）。
 ///

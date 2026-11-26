@@ -119,15 +119,6 @@ fn should_try_stadium(run_mode: i64, prefer_stadium: bool) -> bool {
     run_mode == 1 && prefer_stadium
 }
 
-/// CLI 的「是否操场」开关（issue #37）。默认 `0`（走路网/按序串点），
-/// 显式 `PACE_PREFER_STADIUM=1/true/yes` 才试操场。web 走 mode=stadium，不用它。
-pub fn prefer_stadium_env() -> bool {
-    matches!(
-        std::env::var("PACE_PREFER_STADIUM").ok().as_deref(),
-        Some("1") | Some("true") | Some("yes")
-    )
-}
-
 fn try_stadium_track(
     cps: &[Checkpoint],
     distance_m: f64,
@@ -842,8 +833,8 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 记分跑在时段外会直接 11016，连策略串都拿不到。但提交报文只要
     // policy 这个字符串（实测恒为 "0"），timestamp 不进签名，点位又走
     // 独立的 /api/points，所以拿不到策略不等于不能提交。
-    // PACE_STRICT_POLICY=1 可以关掉兜底，保留原来的硬失败行为。
-    let strict = std::env::var("PACE_STRICT_POLICY").ok().as_deref() == Some("1");
+    // 配置 run.strict_policy（PACE_STRICT_POLICY=1）可以关掉兜底，保留原来的硬失败行为。
+    let strict = crate::config::global().run.strict_policy;
     let pol = match policy::fetch_policy_for(client, p.run_mode) {
         Ok(v) => {
             log(&format!(
@@ -2364,9 +2355,9 @@ pub fn run_full(
             if after > cap as f64 {
                 // 超日上限直接拦：超出部分不计入有效里程，等于白跑，而且
                 // 一条明显超量的记录更容易被风控盯上。要硬跑就显式开开关。
-                if std::env::var("PACE_IGNORE_DAILY_LIMIT").is_ok() {
+                if crate::config::global().run.ignore_daily_limit {
                     log(&format!(
-                        "! [quota] 超日上限 {}m，但已设 PACE_IGNORE_DAILY_LIMIT，继续提交",
+                        "! [quota] 超日上限 {}m，但已设 run.ignore_daily_limit，继续提交",
                         (after - cap as f64).round()
                     ));
                 } else {
