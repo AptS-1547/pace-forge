@@ -1,6 +1,24 @@
 [workspace]
 members = ["crates/pace-forge-config"]
 
+# Lint baseline for the whole workspace (#58). Anything not listed here keeps
+# the default setting; `missing_docs` and the pedantic set are deliberately not
+# enabled yet, because CI runs clippy with `-D warnings` and enabling them
+# means cleaning up ~2400 findings in the same change.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "deny"
+
+# Suppressions must stay observable: `expect` complains once its reason goes stale.
+[workspace.lints.clippy]
+allow_attributes = "deny"
+multiple_unsafe_ops_per_block = "deny"
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "deny"
+
+[lints]
+workspace = true
+
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

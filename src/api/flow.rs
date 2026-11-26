@@ -2967,7 +2967,6 @@ pub fn detail_payload(
 // OBS 明细要 10 个字段，每个都来自不同的数据源（模拟结果、账号标识、时间
 // 窗口、uuid、点位数组），拆结构体只会把这些东西再包一层而不会减少耦合，
 // 所以这里保持平铺。
-#[allow(clippy::too_many_arguments)]
 pub fn detail_payload_rrid(
     sim: &crate::track::SimResult,
     uid: &str,

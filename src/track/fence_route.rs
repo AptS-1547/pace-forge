@@ -420,7 +420,8 @@ pub fn nudge_outside(
 /// 蛇形扫描填充多边形，返回折线点。
 ///
 /// `spacing_m` 是相邻扫描线的间距（米）。越小线越密、总长越长。
-#[allow(dead_code)] // route_along_fence 已接管，保留作算法参考
+// route_along_fence 已接管，保留作算法参考；现在只有测试在用。
+#[cfg(test)]
 fn boustrophedon(poly: &[(f64, f64)], spacing_m: f64) -> (Vec<(f64, f64)>, usize) {
     boustrophedon_avoiding(poly, spacing_m, &[])
 }

@@ -23,7 +23,8 @@ pub(super) enum AccountSessionAction {
 }
 
 impl State {
-    #[allow(dead_code)]
+    /// 只有测试在用：真实启动走 `restore`。
+    #[cfg(test)]
     pub(super) fn new() -> Self {
         Self {
             book: crate::api::accounts::Book::default(),

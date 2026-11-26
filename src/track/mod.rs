@@ -723,7 +723,11 @@ fn chord_hits_blocker(a: (f64, f64), b: (f64, f64), blockers: &[Vec<(f64, f64)>]
 // 8 个参数看着多，但每一项都是独立的物理/轨控输入（几何、时间轴、噪声种子、
 // 速度剖面、上下限、障碍、打卡点）。打包成结构体只会把这些直白的调用点
 // 变成一行字面量，读起来更绕。
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the parameters mirror the fields of the sampled track; see
+    `sample_by_time` for what each one controls"
+)]
 pub fn sample_by_time(
     path: &[(f64, f64)],
     times_ms: &[i64],
