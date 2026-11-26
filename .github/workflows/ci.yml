@@ -38,5 +38,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo clippy（零警告，-D warnings）
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: cargo fmt --check
-        run: cargo fmt --check || echo "格式未统一（不阻断）"
+      # 格式是硬门（#38）：报文逐字节敏感的项目，代码格式统一是最便宜的门。
+      # 依赖 dtolnay/rust-toolchain@stable，与 release 同步；若 stable 的 rustfmt
+      # 输出有变，先在本地 cargo fmt 再推，不要回退成放行。
+      - name: cargo fmt --check（硬门）
+        run: cargo fmt --all -- --check
