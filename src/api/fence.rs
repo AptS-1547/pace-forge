@@ -200,11 +200,12 @@ pub fn center_from_fences(fences: &[Fence]) -> Result<(f64, f64), String> {
     Ok((s.0 / n, s.1 / n))
 }
 
-/// `PACE_CENTER_LAT` / `PACE_CENTER_LNG` 锚点，两个都合法才生效。
+/// 围栏锚点：配置 `run.center_lat` / `run.center_lng`（env
+/// `PACE_CENTER_LAT` / `PACE_CENTER_LNG`）。成对校验在配置加载时完成，
+/// 这里只负责照搬。
 pub fn env_anchor() -> Option<(f64, f64)> {
-    let a = std::env::var("PACE_CENTER_LAT").ok()?.parse().ok()?;
-    let b = std::env::var("PACE_CENTER_LNG").ok()?.parse().ok()?;
-    Some((a, b))
+    let cfg = crate::config::global();
+    Some((cfg.run.center_lat?, cfg.run.center_lng?))
 }
 
 /// 锚点优先，否则取围栏质心。
@@ -549,10 +550,9 @@ pub fn geo_fence_json(
     // 改完整结构之后（11-16 起）App 只剩 4 个点。以有截图的那条为准。
     //
     // `run_area_id` / `fence_id` / `name` 三个参数留着不动签名，将来要回到
-    // 完整结构时，把下面这行换回注释里那版即可（`PACE_FENCE_FULL=1` 也能切）。
-    let full = std::env::var("PACE_FENCE_FULL")
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    // 完整结构时，把下面这行换回注释里那版即可（配置 run.fence_full /
+    // `PACE_FENCE_FULL=1` 也能切）。
+    let full = crate::config::global().run.fence_full;
     if full {
         return json!([{
             "distance": 0.0,
@@ -610,6 +610,22 @@ fn ring_min_distance(ring: &[(f64, f64)], p: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 配置映射等价性：锚点成对注入 → env_anchor 返回 Some；
+    /// 撤销后回落 None（走围栏质心）。成对校验本身在 pace-forge-config 测。
+    #[test]
+    fn anchor_pair_comes_from_config() {
+        assert_eq!(env_anchor(), None, "默认无锚点");
+        let _g = crate::config::Guard::replace(crate::config::Config {
+            run: crate::config::Run {
+                center_lat: Some(30.5),
+                center_lng: Some(104.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(env_anchor(), Some((30.5, 104.0)));
+    }
 
     /// issue #36：`geoFences=null` 的学校不能 panic，要给出可操作的错误。
     #[test]
@@ -928,8 +944,14 @@ mod tests {
             .map(|f| f.len())
             .unwrap_or(0);
         assert!(frac <= 6, "围栏坐标应保留 6 位小数，实际 {glat}");
-        // 完整结构：PACE_FENCE_FULL=1 时补上 distance / id / name
-        unsafe { std::env::set_var("PACE_FENCE_FULL", "1") };
+        // 完整结构：run.fence_full=1 时补上 distance / id / name
+        let _g = crate::config::Guard::replace(crate::config::Config {
+            run: crate::config::Run {
+                fence_full: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
         let full = geo_fence_json(1668, Some(1668), "学校", &ring);
         let vf: Value = serde_json::from_str(&full).unwrap();
         assert_eq!(
@@ -943,7 +965,6 @@ mod tests {
         let s2 = geo_fence_json(1775, None, "", &ring);
         let v2: Value = serde_json::from_str(&s2).unwrap();
         assert_eq!(v2[0]["id"], json!(1775));
-        unsafe { std::env::remove_var("PACE_FENCE_FULL") };
     }
 
     #[test]

@@ -71,15 +71,17 @@ pub fn save_proxy(spec: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// 当前生效的出口：网页保存的优先，其次环境变量。
+/// 当前生效的出口：网页保存的优先，其次配置层（env > config.toml）。
 pub fn current_proxy() -> Option<String> {
     if let Some(p) = load_config_once() {
         return Some(p);
     }
-    std::env::var("PACE_EGRESS_PROXY")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let p = crate::config::global()
+        .network
+        .egress_proxy
+        .trim()
+        .to_string();
+    (!p.is_empty()).then_some(p)
 }
 
 struct Probe {
@@ -113,17 +115,16 @@ pub fn parse_proxy(spec: &str) -> Result<String, String> {
     }
 }
 
-/// 给 agent 追加信任根：`PACE_EXTRA_CA` 指向一个 PEM 文件时，把里面的证书
-/// 加到公共 CA 根之上（沙箱/企业出口网关自签 CA 的场景）。没设这个变量时
-/// 与原来逐字节等价，不动 TLS。
+/// 给 agent 追加信任根：配置 `network.extra_ca`（env `PACE_EXTRA_CA`）指向
+/// 一个 PEM 文件时，把里面的证书加到公共 CA 根之上（沙箱/企业出口网关自签
+/// CA 的场景）。没设时与原来逐字节等价，不动 TLS。
 pub fn with_extra_ca(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
-    let Some(path) = std::env::var("PACE_EXTRA_CA")
-        .ok()
-        .filter(|s| !s.is_empty())
-    else {
+    let cfg = crate::config::global();
+    let path = cfg.network.extra_ca.trim();
+    if path.is_empty() {
         return builder;
-    };
-    let pem = match std::fs::read(&path) {
+    }
+    let pem = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => {
             report_once(&format!("PACE_EXTRA_CA 读不到（{e}），本次按默认 CA 走"));

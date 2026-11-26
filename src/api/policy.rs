@@ -288,11 +288,15 @@ pub fn fetch_policy_for(client: &Client, run_mode: i64) -> Result<PolicyInfo, St
 
 /// 策略调试转储目录。
 ///
-/// **默认不落盘**（返回 `None`）：只有显式设置 `PACE_DUMP_POLICY=<目录>`
-/// 才写。策略响应里有考生身份相关字段，不该无声无息地堆进 `$HOME`；也正因为
-/// 默认关闭，跑测试不可能往真实 `$HOME` 里多写一个文件。
+/// **默认不落盘**（返回 `None`）：只有显式配置 `run.dump_policy`
+/// （env `PACE_DUMP_POLICY`）=<目录> 才写。策略响应里有考生身份相关字段，
+/// 不该无声无息地堆进 `$HOME`；也正因为默认关闭，跑测试不可能往真实
+/// `$HOME` 里多写一个文件。
 pub fn dump_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("PACE_DUMP_POLICY").map(std::path::PathBuf::from)
+    // 原文直用（不 trim）：与旧 `var_os` 语义一致
+    let cfg = crate::config::global();
+    let dir = &cfg.run.dump_policy;
+    (!dir.is_empty()).then(|| std::path::PathBuf::from(dir))
 }
 
 /// 策略转储文件路径：`<dir>/policy-runmode<runMode>.json`。
@@ -526,14 +530,12 @@ mod tests {
             "policy-runmode1.json"
         );
 
-        // 没有显式设置环境变量时，默认**不落盘**
-        if std::env::var_os("PACE_DUMP_POLICY").is_none() {
-            assert_eq!(
-                dump_dir(),
-                None,
-                "默认不该有转储目录，否则测试会写真实 HOME"
-            );
-        }
+        // 默认（没有任何配置来源）**不落盘**；并行的 Guard 测试只动别的键
+        assert_eq!(
+            dump_dir(),
+            None,
+            "默认不该有转储目录，否则测试会写真实 HOME"
+        );
     }
 
     /// 转储只在显式给定目录时写，且目录不存在时自己建、权限 600。

@@ -303,15 +303,16 @@ fn device_scope(id_or_username: &str) -> String {
 }
 
 /// 启动 Web 控制台。
-/// 控制台口令。设置环境变量 `PACE_FORGE_TOKEN` 后，受保护的请求必须带
-/// `X-Pace-Token` 请求头。
+/// 控制台口令。配置 `server.token`（env `PACE_FORGE_TOKEN`）后，受保护的
+/// 请求必须带 `X-Pace-Token` 请求头。
 ///
 /// 不设置时只允许本机访问——绑 0.0.0.0 又没有口令，等于把「登录/提交/删账号」
 /// 暴露给同网段任意主机，密码还是明文 HTTP 传的。
 fn auth_token() -> Option<String> {
-    std::env::var("PACE_FORGE_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
+    // 原文直用（不 trim）：带空格的口令也是合法口令，与旧实现逐字节一致
+    let cfg = crate::config::global();
+    let t = &cfg.server.token;
+    (!t.is_empty()).then(|| t.clone())
 }
 
 /// 请求来源是否本机。

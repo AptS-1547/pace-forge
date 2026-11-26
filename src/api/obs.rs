@@ -152,13 +152,10 @@ pub fn fetch_object(client: &Client, key: &str) -> Result<Value, String> {
 /// （比如按顺序通过点位）自然全假，而提交本身返回成功、里程时长步频
 /// 配速四项全过，很容易把排查带到别处。
 ///
-/// 跨时区部署时用 `PACE_TZ_OFFSET_SEC` 覆盖，别硬编码。
+/// 跨时区部署时用配置 `network.tz_offset_sec`（env `PACE_TZ_OFFSET_SEC`）
+/// 覆盖，别硬编码；±20 小时范围在配置加载时校验。
 pub(crate) fn tz_offset_sec() -> i64 {
-    std::env::var("PACE_TZ_OFFSET_SEC")
-        .ok()
-        .and_then(|v| v.parse::<i64>().ok())
-        .filter(|v| (-72_000..=72_000).contains(v))
-        .unwrap_or(8 * 3600)
+    crate::config::global().network.tz_offset_sec
 }
 
 /// 生成 objectKey（详情页格式，本地时区）。

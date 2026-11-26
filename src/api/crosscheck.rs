@@ -21,19 +21,18 @@ pub fn tz_offset_sec() -> i64 {
 /// 日期和「起跑时刻」的小时都由这个偏移推出来，输出不带来源的话，换个时区
 /// 跑同一个文件会得到另一个「事实」，而人看不出是环境变了。
 pub fn tz_description() -> String {
-    let offset = tz_offset_sec();
+    let cfg = crate::config::global();
+    let offset = cfg.network.tz_offset_sec;
     let sign = if offset >= 0 { '+' } else { '-' };
     let abs = offset.abs();
     let label = format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60);
-    match std::env::var("PACE_TZ_OFFSET_SEC") {
-        Ok(raw) if raw.parse::<i64>() != Ok(offset) => {
-            format!("{label}（PACE_TZ_OFFSET_SEC 无效，用默认）")
+    // 非法值在配置加载时就报错了，这里只剩「来自哪一层」要交代
+    match cfg.sources.get("network.tz_offset_sec") {
+        Some(crate::config::Source::Env) => format!("{label}（PACE_TZ_OFFSET_SEC={offset}）"),
+        Some(crate::config::Source::Toml) => {
+            format!("{label}（config.toml network.tz_offset_sec={offset}）")
         }
-        Ok(raw) if offset == 8 * 3600 => {
-            format!("{label}（PACE_TZ_OFFSET_SEC={raw}，与默认一致）")
-        }
-        Ok(raw) => format!("{label}（PACE_TZ_OFFSET_SEC={raw}）"),
-        Err(_) => format!("{label}（PACE_TZ_OFFSET_SEC 未设，用默认）"),
+        _ => format!("{label}（默认）"),
     }
 }
 
@@ -424,6 +423,25 @@ mod pace_fmt_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 配置映射等价性：tz_offset 从配置层来，描述行带来源标注。
+    /// Guard 手工构造的 Config 不带来源 → 显示「默认」；注入来源分支在
+    /// pace-forge-config 的加载测试里覆盖。
+    #[test]
+    fn tz_offset_comes_from_config() {
+        assert_eq!(tz_offset_sec(), 8 * 3600, "默认东八区");
+        assert!(tz_description().contains("默认"), "{}", tz_description());
+        let _g = crate::config::Guard::replace(crate::config::Config {
+            network: crate::config::Network {
+                tz_offset_sec: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(tz_offset_sec(), 0);
+        let d = tz_description();
+        assert!(d.starts_with("UTC+00:00"), "{d}");
+    }
 
     fn rec(day: i64, hour: i64, dist: f64, dur: i64) -> RunRecord {
         RunRecord {
