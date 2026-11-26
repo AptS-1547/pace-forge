@@ -485,7 +485,10 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
                 is_pass: true,
                 state: 0,
             };
-            serde_json::to_value(&item).expect("FixedPointItem serializes infallibly")
+            // The struct holds only numbers, bools and strings, so serialization cannot fail.
+            #[expect(clippy::expect_used, reason = "struct of plain scalar fields")]
+            let v = serde_json::to_value(&item).expect("FixedPointItem serializes infallibly");
+            v
         })
         .collect()
 }
@@ -1154,6 +1157,10 @@ pub fn verify_view(body: &Value, pts: &[Value]) -> Result<VerifyView, String> {
         });
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "non-empty is guaranteed by the guard above"
+    )]
     let last = arr.last().unwrap();
     let total_distance_m = last
         .get("totalDis")

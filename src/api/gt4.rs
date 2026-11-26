@@ -58,7 +58,8 @@ fn gee_rsa_public_key() -> rsa::RsaPublicKey {
     for limb in LIMBS.iter().rev() {
         n = n * &dv + rsa::BigUint::from(*limb);
     }
-    rsa::RsaPublicKey::new(n, rsa::BigUint::from(65537u32)).expect("GT4 RSA 公钥构造失败")
+    // The limbs above are the vendor's published modulus, so validation is skipped on purpose.
+    rsa::RsaPublicKey::new_unchecked(n, rsa::BigUint::from(65537u32))
 }
 
 /// 4 个随机 hex 字符。
@@ -142,14 +143,14 @@ fn get_pow_sign(pow_msg: &str) -> String {
 }
 
 /// AES-128-CBC(key=str16, IV 为 ASCII "0"x16, PKCS7) → hex。
-fn aes_o(plaintext: &str, str_16: &str) -> String {
+fn aes_o(plaintext: &str, str_16: &str) -> Result<String, String> {
     let ct = crate::crypto::envelope::aes128_cbc_encrypt_iv(
         str_16.as_bytes(),
         b"0000000000000000",
         plaintext.as_bytes(),
     )
-    .expect("GT4 AES 加密失败");
-    bytes_to_hex(&ct)
+    .map_err(|e| format!("GT4 AES 加密失败：{e}"))?;
+    Ok(bytes_to_hex(&ct))
 }
 
 fn bytes_to_hex(data: &[u8]) -> String {
@@ -157,7 +158,7 @@ fn bytes_to_hex(data: &[u8]) -> String {
 }
 
 /// RSA PKCS1v15 加密 → hex。
-fn encrypt_data(pub_key: &rsa::RsaPublicKey, plaintext: &str) -> String {
+fn encrypt_data(pub_key: &rsa::RsaPublicKey, plaintext: &str) -> Result<String, String> {
     // rsa 0.9 still consumes rand_core 0.6, which is a different type from rand 0.9's
     // ThreadRng; Pkcs1v15 encryption is deterministic anyway, so hand it rsa's OsRng.
     let ct = pub_key
@@ -166,8 +167,8 @@ fn encrypt_data(pub_key: &rsa::RsaPublicKey, plaintext: &str) -> String {
             rsa::Pkcs1v15Encrypt,
             plaintext.as_bytes(),
         )
-        .expect("GT4 RSA 加密失败");
-    bytes_to_hex(&ct)
+        .map_err(|e| format!("GT4 RSA 加密失败：{e}"))?;
+    Ok(bytes_to_hex(&ct))
 }
 
 /// w = hex(AES(plaintext)) + hex(RSA(str16))。
@@ -199,8 +200,8 @@ fn get_w(
         lf(26, 30) + &lf(7, 11),
         lf(6, 14),
     );
-    let r = encrypt_data(&pk, str16);
-    let i = aes_o(&plaintext, str16);
+    let r = encrypt_data(&pk, str16)?;
+    let i = aes_o(&plaintext, str16)?;
     Ok(i + &r)
 }
 

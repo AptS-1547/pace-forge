@@ -1,3 +1,13 @@
+// Tests panic on purpose; the workspace lints deny that only in production code.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "assertions in tests"
+    )
+)]
 // 提交报文有 45 个字段，json! 宏默认递归上限不够
 #![recursion_limit = "512"]
 

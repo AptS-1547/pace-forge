@@ -1665,6 +1665,11 @@ fn do_ai_records(sport: i64, n: i64) {
 }
 
 #[cfg(test)]
+// Tests panic on purpose; the workspace lints deny that only in production code.
+#[cfg_attr(
+    test,
+    expect(clippy::unwrap_used, clippy::panic, reason = "assertions in tests")
+)]
 mod record_export_tests {
     use super::write_record_export;
     use std::{fs, io::ErrorKind, sync::Barrier, thread};

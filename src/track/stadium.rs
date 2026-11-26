@@ -281,6 +281,10 @@ pub fn stadium_track(spec_in: &StadiumSpec, laps: f64, sample_step_m: f64) -> Ve
 ///
 /// 判据：起终点几乎重合（差 <20m）且总长是圈长整数倍附近，
 /// 同时轨迹的曲率分布有明显「直道 0 / 弯道高」的二态特征。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the guard above"
+)]
 pub fn looks_like_stadium(points: &[(f64, f64)], tol_m: f64) -> bool {
     if points.len() < 16 {
         return false;

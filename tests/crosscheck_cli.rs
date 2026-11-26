@@ -1,3 +1,10 @@
+// Integration tests panic on purpose; the workspace lints deny that only in production code.
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "assertions in tests"
+)]
+
 use std::{fs, process::Command};
 
 #[test]

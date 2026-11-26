@@ -182,6 +182,8 @@ impl Config {
     /// 注册表值 → 结构体字段。键来自注册表，这里必须全覆盖；
     /// 漏一个键，该开关就永远到不了字段上——`registry_matches_config_keys`
     /// 测试保证键集合一致，本函数的 `_` 分支兜住理论上的不一致。
+    // Every registry key must have an assignment below; a missing one is a programming error.
+    #[expect(clippy::panic, reason = "registry keys are exhaustive here")]
     pub(crate) fn from_values(values: &HashMap<&'static str, Value>) -> Config {
         let mut cfg = Config::default();
         for (key, v) in values {

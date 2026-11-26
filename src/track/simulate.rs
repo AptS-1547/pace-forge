@@ -301,6 +301,10 @@ fn distribute_steps(
 /// 对 `[begin, end)` 区间积分步频（步/分），返回步数。
 ///
 /// 线性插值 + 梯形法，端点精确落在区间边界上。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the guard above"
+)]
 fn integrate_cadence(times: &[i64], cadences: &[f64], begin: i64, end: i64) -> f64 {
     if end <= begin || times.len() < 2 {
         return 0.0;

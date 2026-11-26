@@ -18,12 +18,14 @@ mod state;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
-use tiny_http::{Header, Method, Response, Server};
+use tiny_http::{Method, Response, Server};
 
 use crate::api::session;
 use crate::web::assets::{INDEX_HTML, STATIC_ASSETS};
 use crate::web::console_auth::{auth_token, check_auth, origin_matches_host};
-use crate::web::http::{json_err, json_err_code, json_ok, query_param, read_json, respond_static};
+use crate::web::http::{
+    header, json_err, json_err_code, json_ok, query_param, read_json, respond_static,
+};
 use crate::web::state::{AccountSessionAction, Shared, State, lock_state};
 use routes::*;
 
@@ -75,10 +77,7 @@ pub fn serve(addr: &str) -> Result<(), String> {
             let _ = request.respond(
                 Response::from_string("{\"error\":\"控制台繁忙，请稍后重试\"}")
                     .with_status_code(503)
-                    .with_header(
-                        Header::from_bytes("Content-Type", "application/json; charset=utf-8")
-                            .expect("静态头合法"),
-                    ),
+                    .with_header(header("Content-Type", "application/json; charset=utf-8")),
             );
             continue;
         };

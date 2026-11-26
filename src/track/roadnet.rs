@@ -673,6 +673,10 @@ pub fn route_on_roads(
 /// OSM 的段是完整 way，端点未必严格相接，250m 的宽容度能多串一些路；
 /// 而瓦片路网是像素骨架提出的碎片，只保留真正连通的段——宽容度给大了
 /// 就会跨着空地跳，`route_on_roads` 输出过 119m 的瞬移。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the guard above"
+)]
 pub fn route_on_roads_with(
     net: &RoadNet,
     start_hint: (f64, f64),
@@ -776,6 +780,10 @@ pub fn route_on_roads_with(
 
         // 接上这一段
         for &p in pts.iter().skip(1) {
+            #[expect(
+                clippy::unwrap_used,
+                reason = "non-empty is guaranteed by the guard above"
+            )]
             let d = distance(*points.last().unwrap(), p);
             if total + d > want_m {
                 break;

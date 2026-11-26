@@ -154,13 +154,15 @@ pub fn with_extra_ca(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
         .collect();
     roots.add_parsable_certificates(certs);
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let cfg = ureq::rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+    let versions = ureq::rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
         ureq::rustls::crypto::ring::default_provider(),
     ))
-    .with_safe_default_protocol_versions()
-    .expect("rustls 默认协议版本")
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    .with_safe_default_protocol_versions();
+    let Ok(versions) = versions else {
+        report_once("rustls 没给出默认协议版本，本次按默认 CA 走");
+        return builder;
+    };
+    let cfg = versions.with_root_certificates(roots).with_no_client_auth();
     builder.tls_config(std::sync::Arc::new(cfg))
 }
 

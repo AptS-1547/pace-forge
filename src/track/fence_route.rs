@@ -300,6 +300,10 @@ fn detour_around(
 /// 整条折线避让障碍：逐点推出 + 逐段绕行。
 ///
 /// 返回新点列。避不开的部分保持原样（宁可穿一次也不要整条轨迹断掉）。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the guard above"
+)]
 pub fn avoid_blockers(
     points: &[(f64, f64)],
     blockers: &[Vec<(f64, f64)>],
@@ -730,6 +734,10 @@ pub fn round_corners(path: &[(f64, f64)], radius_m: f64, seg_per_corner: usize) 
             ));
         }
     }
+    #[expect(
+        clippy::unwrap_used,
+        reason = "non-empty is guaranteed by the guard above"
+    )]
     out.push(*path.last().unwrap());
     out
 }
@@ -887,6 +895,10 @@ pub fn route_along_fence(
 ///
 /// 走法：每两个点之间走一条绕行弧（不是直线），弧朝围栏内侧鼓出，这样
 /// 既按顺序经过，又不会横穿整个校区。里程不够就在最后两个点之间多绕。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the guard above"
+)]
 pub fn route_through_in_order(
     fence: &[(f64, f64)],
     want_m: f64,
@@ -1055,6 +1067,10 @@ pub fn route_through_in_order(
     let stop_at = (want_m - super::geo::length_tolerance(want_m)).max(want_m * 0.7);
     while total < stop_at && guard < 200 && total < hard_cap {
         guard += 1;
+        #[expect(
+            clippy::unwrap_used,
+            reason = "non-empty is guaranteed by the guard above"
+        )]
         let anchor = *points.last().unwrap();
         // 绕圈半径 40~90m，圈心朝围栏中心
         let cx = fence.iter().map(|p| p.0).sum::<f64>() / fence.len() as f64;

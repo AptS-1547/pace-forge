@@ -73,6 +73,8 @@ pub(super) fn query_param(query: &str, key: &str) -> Option<String> {
     })
 }
 
+// Every caller passes a constant header name and a MIME type from the asset table.
+#[expect(clippy::expect_used, reason = "arguments are compile-time constants")]
 pub(super) fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("header 构造失败")
 }

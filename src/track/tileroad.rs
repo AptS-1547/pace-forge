@@ -724,6 +724,10 @@ pub fn fetch_roadnet(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
 ///
 /// 用网格哈希分桶（20m 一格），只比较同桶和相邻桶，避免 O(n²)——实测一个
 /// 校区能提出 2000 多段，两两比较要 400 万次。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the guard above"
+)]
 fn merge_segments(mut segs: Vec<RoadSegment>, tol_m: f64) -> Vec<RoadSegment> {
     if segs.len() < 2 {
         return segs;
@@ -743,6 +747,10 @@ fn merge_segments(mut segs: Vec<RoadSegment>, tol_m: f64) -> Vec<RoadSegment> {
                 continue;
             }
             let h = sg.points[0];
+            #[expect(
+                clippy::unwrap_used,
+                reason = "non-empty is guaranteed by the guard above"
+            )]
             let t = *sg.points.last().unwrap();
             grid.entry(key(h)).or_default().push((i, false));
             grid.entry(key(t)).or_default().push((i, true));
@@ -757,6 +765,10 @@ fn merge_segments(mut segs: Vec<RoadSegment>, tol_m: f64) -> Vec<RoadSegment> {
                 continue;
             }
             // 找 i 的尾端点附近有没有别的段端点
+            #[expect(
+                clippy::unwrap_used,
+                reason = "non-empty is guaranteed by the guard above"
+            )]
             let tail = *segs[i].points.last().unwrap();
             let (kx, ky) = key(tail);
             let mut found: Option<(usize, bool)> = None;
@@ -960,6 +972,10 @@ pub fn route_through_ex(
     };
     while total < want_m - 150.0 && hops < 5 {
         hops += 1;
+        #[expect(
+            clippy::unwrap_used,
+            reason = "non-empty is guaranteed by the guard above"
+        )]
         let last = *path.last().unwrap();
         let de = dijkstra_all(g, last);
         let need = want_m - total;
@@ -1008,7 +1024,15 @@ pub fn route_through_ex(
 
     // fix_end：最后单独走一段到终点（前面所有凑里程都在它之前完成）。
     if fix_end && must.len() >= 2 {
+        #[expect(
+            clippy::unwrap_used,
+            reason = "non-empty is guaranteed by the guard above"
+        )]
         let a = *path.last().unwrap();
+        #[expect(
+            clippy::unwrap_used,
+            reason = "non-empty is guaranteed by the guard above"
+        )]
         let b = g.nearest(*must.last().unwrap());
         if a != b {
             if let Some(seg) = astar(g, a, b) {

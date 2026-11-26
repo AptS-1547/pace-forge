@@ -124,6 +124,10 @@ fn catmull_point(
     (f(p0.0, p1.0, p2.0, p3.0), f(p0.1, p1.1, p2.1, p3.1))
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the construction above"
+)]
 pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String> {
     if req.total_distance_m <= 0.0 {
         return Err("目标里程必须为正".into());
@@ -395,6 +399,10 @@ fn closed_ring(
 /// 「按顺序通过所有点位」看的就是首次经过次序等于数组次序；最近邻串出来的
 /// 环次序由几何决定，和数组多半不同序（issue #37 的补充：无围栏学校关掉
 /// 操场后首过次序是 1→2→0→3→4）。合成点位没有这个约束，仍走最近邻。
+#[expect(
+    clippy::unwrap_used,
+    reason = "non-empty is guaranteed by the construction above"
+)]
 fn loop_waypoints(start: (f64, f64), cps: &[(f64, f64)], in_order: bool) -> Vec<(f64, f64)> {
     if cps.is_empty() {
         // 无点位：方形小环，边长按 120m 起步

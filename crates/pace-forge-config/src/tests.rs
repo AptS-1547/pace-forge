@@ -1,3 +1,6 @@
+// Tests panic on purpose; the workspace lints deny that only in production code.
+#![cfg_attr(test, expect(clippy::unwrap_used, reason = "assertions in tests"))]
+
 //! 配置加载的等价性与边界测试矩阵。词汇表、优先级、来源标注、
 //! 与旧 `PACE_*` 散装解析的逐字节对齐都锁在这里。
 

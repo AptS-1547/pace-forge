@@ -12,24 +12,32 @@ pub enum Value {
 }
 
 impl Value {
+    // The registry fixes each key's kind, so a mismatch is a programming error.
+    #[expect(clippy::panic, reason = "kind is guaranteed by the registry")]
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Value::Str(s) => s,
             other => panic!("配置键的 kind 不是字符串，却是 {other:?}"),
         }
     }
+    // The registry fixes each key's kind, so a mismatch is a programming error.
+    #[expect(clippy::panic, reason = "kind is guaranteed by the registry")]
     pub(crate) fn as_int(&self) -> i64 {
         match self {
             Value::Int(v) => *v,
             other => panic!("配置键的 kind 不是整数，却是 {other:?}"),
         }
     }
+    // The registry fixes each key's kind, so a mismatch is a programming error.
+    #[expect(clippy::panic, reason = "kind is guaranteed by the registry")]
     pub(crate) fn as_float(&self) -> f64 {
         match self {
             Value::Float(v) => *v,
             other => panic!("配置键的 kind 不是浮点数，却是 {other:?}"),
         }
     }
+    // The registry fixes each key's kind, so a mismatch is a programming error.
+    #[expect(clippy::panic, reason = "kind is guaranteed by the registry")]
     pub(crate) fn as_bool(&self) -> bool {
         match self {
             Value::Bool(v) => *v,
