@@ -15,6 +15,7 @@ use super::client::{Client, expect_ok};
 use super::coord::bd09_to_gcj02;
 use super::policy::point_xy;
 use crate::crypto::consts::hosts;
+use crate::error::{Error, ErrorKind};
 
 /// 围栏接口路径。
 pub const FENCE_PATH: &str = "/api/v1/getGeoFenceForRun";
@@ -156,15 +157,13 @@ pub struct FencePick {
 ///
 /// **可能返回空数组**：`geoFences` 显式为 null（学校没配围栏）。调用方取
 /// 中心点走 [`center_from_fences`] / [`fetch_center`]，别直接索引 `[0]`。
-pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
-    let raw = client
-        .request(
-            "POST",
-            &format!("{}{}", hosts::RUN, FENCE_PATH),
-            Some(&json!({ "geoFenceUpdateTime": 0 })),
-        )
-        .map_err(|e| e.to_string())?;
-    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
+pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, Error> {
+    let raw = client.request(
+        "POST",
+        &format!("{}{}", hosts::RUN, FENCE_PATH),
+        Some(&json!({ "geoFenceUpdateTime": 0 })),
+    )?;
+    let v = expect_ok(&raw)?;
     // `geoFences` 显式为 null：服务端**没有配置围栏**，不是解析失败。
     //
     // 这是一次真实的降级：service 端判定项里没有「围栏」这一条（reasonList
@@ -178,7 +177,10 @@ pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
     }
     let fences = parse_fences(&v)?;
     if fences.is_empty() {
-        return Err(format!("服务端下发的围栏不成边界（{}）", fence_diag(&v)));
+        return Err(ErrorKind::Fence(format!(
+            "服务端下发的围栏不成边界（{}）",
+            fence_diag(&v)
+        )));
     }
     Ok(fences)
 }
@@ -187,14 +189,13 @@ pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
 ///
 /// `fetch_fences` 在 `geoFences=null` 时返回空数组（issue #34），调用方
 /// 直接取 `[0]` 会 panic（issue #36）。
-pub fn center_from_fences(fences: &[Fence]) -> Result<(f64, f64), String> {
+pub fn center_from_fences(fences: &[Fence]) -> Result<(f64, f64), Error> {
     let ring = match fences.first() {
         Some(f) if f.ring.len() >= 3 => &f.ring,
         _ => {
-            return Err(
-                "服务端未配置围栏（geoFences=null）：请同时设置 PACE_CENTER_LAT 和 PACE_CENTER_LNG 指定校区锚点"
-                    .to_string(),
-            )
+            return Err(ErrorKind::Fence(
+                "服务端未配置围栏（geoFences=null）：请同时设置 PACE_CENTER_LAT 和 PACE_CENTER_LNG 指定校区锚点".into(),
+            ))
         }
     };
     let n = ring.len() as f64;
@@ -211,7 +212,7 @@ pub fn env_anchor() -> Option<(f64, f64)> {
 }
 
 /// 锚点优先，否则取围栏质心。
-pub fn choose_center(anchor: Option<(f64, f64)>, fences: &[Fence]) -> Result<(f64, f64), String> {
+pub fn choose_center(anchor: Option<(f64, f64)>, fences: &[Fence]) -> Result<(f64, f64), Error> {
     match anchor {
         Some(a) => Ok(a),
         None => center_from_fences(fences),
@@ -219,7 +220,7 @@ pub fn choose_center(anchor: Option<(f64, f64)>, fences: &[Fence]) -> Result<(f6
 }
 
 /// CLI 的中心点来源：有锚点不发请求，否则拉围栏取质心。
-pub fn fetch_center(client: &Client) -> Result<(f64, f64), String> {
+pub fn fetch_center(client: &Client) -> Result<(f64, f64), Error> {
     match env_anchor() {
         Some(a) => Ok(a),
         None => center_from_fences(&fetch_fences(client)?),
@@ -358,7 +359,7 @@ fn fence_diag(v: &Value) -> String {
 }
 
 /// 解析围栏响应。
-pub fn parse_fences(v: &Value) -> Result<Vec<Fence>, String> {
+pub fn parse_fences(v: &Value) -> Result<Vec<Fence>, Error> {
     let data = v.get("data").unwrap_or(v);
     let fences = data
         .get("geoFences")
@@ -418,9 +419,9 @@ pub fn select_by_anchor(
     fences: &[Fence],
     anchor: (f64, f64),
     service_area_id: i64,
-) -> Result<FencePick, String> {
+) -> Result<FencePick, Error> {
     if fences.is_empty() {
-        return Err("没有可用围栏".into());
+        return Err(ErrorKind::Fence("没有可用围栏".into()));
     }
     let containing: Vec<usize> = fences
         .iter()
@@ -633,7 +634,7 @@ mod tests {
     #[test]
     fn center_from_fences_rejects_unconfigured() {
         let e = center_from_fences(&[]).expect_err("empty fences must be rejected");
-        assert!(e.contains("PACE_CENTER_LAT"), "{e}");
+        assert!(e.to_string().contains("PACE_CENTER_LAT"), "{e}");
     }
 
     /// 成环的围栏照样报错，但一个不成环的围栏不能 panic。
@@ -655,8 +656,8 @@ mod tests {
             &json!({ "data": { "geoFences": null } })
         ));
         assert_eq!(
-            choose_center(None, &[]).unwrap_err(),
-            center_from_fences(&[]).unwrap_err()
+            choose_center(None, &[]).unwrap_err().to_string(),
+            center_from_fences(&[]).unwrap_err().to_string()
         );
     }
 

@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::gt4image::get_distance_original;
+use crate::error::{Error, ErrorKind};
 
 const GEE_HOST: &str = "https://gcaptcha4.geetest.com";
 const STATIC_HOST: &str = "https://static.geetest.com/";
@@ -78,7 +79,7 @@ fn get_str_16(rng: &mut impl Rng) -> String {
 const POW_MAX_ATTEMPTS: u64 = 200_000;
 
 /// 找 nonce（16 个随机 hex 字符）使 sha256(base+nonce) 以 "00" 开头。
-fn get_pow_msg_str_16(pow_msg_base: &str, log: &mut dyn FnMut(&str)) -> Result<String, String> {
+fn get_pow_msg_str_16(pow_msg_base: &str, log: &mut dyn FnMut(&str)) -> Result<String, Error> {
     get_pow_nonce(pow_msg_base, POW_MAX_ATTEMPTS, log)
 }
 
@@ -86,7 +87,7 @@ fn get_pow_nonce(
     pow_msg_base: &str,
     max_attempts: u64,
     log: &mut dyn FnMut(&str),
-) -> Result<String, String> {
+) -> Result<String, Error> {
     const HEX: &[u8] = b"0123456789abcdef";
     let mut rng = rand::rng();
     let mut attempts = 0u64;
@@ -97,7 +98,9 @@ fn get_pow_nonce(
         // CI 上真的踩中过。放前面之后 0 次上限必然立刻报错，给的次数预算
         // 一次不少（max_attempts=N 仍然允许恰好 N 次尝试）。
         if attempts >= max_attempts {
-            return Err(format!("PoW 超过 {max_attempts} 次仍未找到 nonce"));
+            return Err(ErrorKind::Client(format!(
+                "PoW 超过 {max_attempts} 次仍未找到 nonce"
+            )));
         }
         let nonce: String = (0..16)
             .map(|_| HEX[rng.random_range(0..16)] as char)
@@ -120,7 +123,7 @@ fn get_pow_msg(
     captcha_id: &str,
     lot_number: &str,
     log: &mut dyn FnMut(&str),
-) -> Result<String, String> {
+) -> Result<String, Error> {
     let base = format!(
         "{}|{}|{}|{}|{}|{}||",
         pow_detail["version"].as_str().unwrap_or(""),
@@ -177,14 +180,14 @@ fn get_w(
     pow_msg: &str,
     pow_sign: &str,
     str16: &str,
-) -> Result<String, String> {
+) -> Result<String, Error> {
     // lot_number 要按字节切 [6,14)、[7,11)、[26,30)；短报文直接切片会越界
     // panic。先校验长度，不够就明确报错交给外层重试。
     if lot_number.len() < 30 {
-        return Err(format!(
+        return Err(ErrorKind::Client(format!(
             "lot_number 长度 {} 不足 30，无法切片",
             lot_number.len()
-        ));
+        )));
     }
     let pk = gee_rsa_public_key();
     let userresponse = set_left as f64 / 1.005_946_666_666_666_5 + 2.0;
@@ -204,32 +207,35 @@ fn get_w(
     Ok(i + &r)
 }
 
-fn jsonp_value(text: &str) -> Result<Value, String> {
+fn jsonp_value(text: &str) -> Result<Value, Error> {
     let start = text.find('(').ok_or("JSONP 缺左括号")?;
     let end = text.rfind(')').ok_or("JSONP 缺右括号")?;
     if end <= start {
-        return Err("JSONP 格式错误".into());
+        return Err(ErrorKind::Client("JSONP 格式错误".into()));
     }
-    serde_json::from_str(&text[start + 1..end]).map_err(|e| format!("JSONP JSON 解析失败: {e}"))
+    Ok(serde_json::from_str(&text[start + 1..end])?)
 }
 
 /// 完整 GT4 求解（带重试）。返回 `{lotNumber, captchaOutput, passToken, genTime}`。
-pub fn solve_gt4(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, String> {
-    let mut last_err = String::new();
+pub fn solve_gt4(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Error> {
+    let mut last_err: Option<Error> = None;
     for attempt in 1..=5 {
         match solve_once(captcha_id, log) {
             Ok(v) => return Ok(v),
             Err(e) => {
                 log(&format!("× [gt4] 第 {attempt} 次失败: {e}"));
-                last_err = e;
+                last_err = Some(e);
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }
         }
     }
-    Err(format!("GT4 连续 5 次失败: {last_err}"))
+    Err(match last_err {
+        Some(e) => e,
+        None => ErrorKind::Client("GT4 连续 5 次失败".into()),
+    })
 }
 
-fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, String> {
+fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Error> {
     let agent = make_agent();
     let challenge: String = super::client::uuid_v4().replace('-', "");
     let callback = format!("geetest_{}", crate::crypto::envelope::now_ms());
@@ -244,7 +250,7 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
         .set("User-Agent", UA_WEB)
         .call()
         .map_err(ureq_err)?;
-    let text = resp.into_string().map_err(|e| e.to_string())?;
+    let text = resp.into_string()?;
     let data = jsonp_value(&text)?["data"]
         .as_object()
         .ok_or("GT4 /load 缺 data")?
@@ -273,7 +279,9 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
     // 模板匹配失败的典型特征是 distance=0 或贴到左边。这种结果必然被判 fail，
     // 与其等极验返回 fail 再重试，不如当场换一张图重来（每张图都是新缺口）。
     if dist < 20 {
-        return Err(format!("缺口识别结果异常 distance={dist}，换图重试"));
+        return Err(ErrorKind::Client(format!(
+            "缺口识别结果异常 distance={dist}，换图重试"
+        )));
     }
 
     let pow_msg = get_pow_msg(&pow_detail, captcha_id, &lot_number, log)?;
@@ -295,20 +303,23 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
         .set("User-Agent", UA_WEB)
         .call()
         .map_err(ureq_err)?;
-    let text = resp.into_string().map_err(|e| e.to_string())?;
+    let text = resp.into_string()?;
     let root = jsonp_value(&text)?;
     if root["status"].as_str() != Some("success") {
-        return Err(format!("GT4 /verify 请求失败: {}", truncate(&text, 200)));
+        return Err(ErrorKind::Network(format!(
+            "GT4 /verify 请求失败: {}",
+            truncate(&text, 200)
+        )));
     }
     // 关键：status=success 只表示 API 调用成功。滑块是否真的通过要看 data.result。
     // 漏掉这一层会把 "result":"fail" 当成通过，后续拿到一堆 null 凭证。
     let result = root["data"]["result"].as_str().unwrap_or("");
     if result != "success" {
         let dist = root["data"]["distance"].as_i64();
-        return Err(format!(
+        return Err(ErrorKind::Client(format!(
             "GT4 滑块未通过 result={result} fail_count={} 识别距离={dist:?}",
             root["data"]["fail_count"]
-        ));
+        )));
     }
     let seccode = &root["data"]["seccode"];
     Ok(json!({
@@ -319,14 +330,14 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
     }))
 }
 
-fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
+fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, Error> {
     let resp = agent
         .get(url)
         .set("User-Agent", UA_WEB)
         .call()
         .map_err(ureq_err)?;
     let mut buf = Vec::new();
-    std::io::Read::read_to_end(&mut resp.into_reader(), &mut buf).map_err(|e| e.to_string())?;
+    std::io::Read::read_to_end(&mut resp.into_reader(), &mut buf)?;
     Ok(buf)
 }
 

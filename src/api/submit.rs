@@ -42,6 +42,7 @@ pub(crate) fn fmt_run_time(ms: i64) -> String {
 }
 
 use crate::crypto::sign::{SignFields, sport_signature};
+use crate::error::{Error, ErrorKind};
 use crate::track::TrackPoint;
 
 /// 默认体重（kg）。
@@ -1119,7 +1120,7 @@ impl VerifyView {
 }
 
 /// 从提交报文反解出校验视图。字段名和 `point_json_full` / `build` 一一对应。
-pub fn verify_view(body: &Value, pts: &[Value]) -> Result<VerifyView, String> {
+pub fn verify_view(body: &Value, pts: &[Value]) -> Result<VerifyView, Error> {
     // 报文里的 allLocJson 现在是空串（轨迹只走 OBS），点位由调用方传进来
     let start_ms = body
         .get("startTime")
@@ -1134,7 +1135,7 @@ pub fn verify_view(body: &Value, pts: &[Value]) -> Result<VerifyView, String> {
 
     let arr: Vec<Value> = pts.to_vec();
     if arr.is_empty() {
-        return Err("点位列是空的".into());
+        return Err(ErrorKind::Client("点位列是空的".into()));
     }
 
     let mut points: Vec<TrackPoint> = Vec::with_capacity(arr.len());
@@ -1143,7 +1144,7 @@ pub fn verify_view(body: &Value, pts: &[Value]) -> Result<VerifyView, String> {
         let glat = q.get("gLat").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let glng = q.get("gLng").and_then(|v| v.as_f64()).unwrap_or(0.0);
         if glat == 0.0 || glng == 0.0 {
-            return Err(format!("第 {i} 个点缺 gLat/gLng"));
+            return Err(ErrorKind::Client(format!("第 {i} 个点缺 gLat/gLng")));
         }
         let (lat, lon) = crate::api::coord::gcj02_to_bd09(glat, glng);
         let total_time = q.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1727,7 +1728,7 @@ pub fn build(
     points: &[TrackPoint],
     fixed: &[FixedPoint],
     sim: &crate::track::SimResult,
-) -> Result<Submission, String> {
+) -> Result<Submission, Error> {
     let loc_items = build_points(points, fixed, params.start_time_ms, params.alt_range)?;
     build_from_points(params, points, fixed, sim, loc_items)
 }
@@ -1760,9 +1761,9 @@ pub fn build_points(
     fixed: &[FixedPoint],
     start_ms: i64,
     alt_range: Option<(f64, f64)>,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<Value>, Error> {
     if track.is_empty() {
-        return Err("轨迹为空，无法组装点位".into());
+        return Err(ErrorKind::Fence("轨迹为空，无法组装点位".into()));
     }
     // 逐点生成，累计量必须顺序推进。游标状态收成一个 `PointCursor`（#38）：
     // 首点坐标进 prev，prev_time 取首点时间戳，bdS 的上一拍速度从 0 起。
@@ -1907,19 +1908,19 @@ pub fn build_from_points(
     fixed: &[FixedPoint],
     sim: &crate::track::SimResult,
     loc_items: Vec<Value>,
-) -> Result<Submission, String> {
+) -> Result<Submission, Error> {
     if points.is_empty() {
-        return Err("轨迹为空，无法组装报文".into());
+        return Err(ErrorKind::Fence("轨迹为空，无法组装报文".into()));
     }
     if loc_items.len() != points.len() {
-        return Err(format!(
+        return Err(ErrorKind::Fence(format!(
             "点位数组 {} 条与轨迹 {} 点不一致，不能当同一份数据用",
             loc_items.len(),
             points.len()
-        ));
+        )));
     }
     if params.total_distance_m <= 0 || params.total_steps < 0 {
-        return Err("距离必须为正，步数不能为负".into());
+        return Err(ErrorKind::Client("距离必须为正，步数不能为负".into()));
     }
 
     let complete = params.total_distance_m >= params.sel_distance_m
@@ -1970,7 +1971,7 @@ pub fn build_from_points(
     // 点位数据走的是 OBS 明细里的 fixed_point_json。
     // 键序按真机样本排列（五个键），字段集合与真机完全一致。
     let five_envelope = json!({
-        "fivePointJson": serde_json::to_string(&fp_items).map_err(|e| e.to_string())?,
+        "fivePointJson": serde_json::to_string(&fp_items)?,
         "freedomShowFence": false,
         "geoFencesJson": params.geo_fences_json,
         // 真机这份对象里是 -1（真实围栏 id 只在 geoFencesJson[0].id 里），
@@ -1979,7 +1980,7 @@ pub fn build_from_points(
         "runAreaId": payload_run_area_id(params.run_area_id),
         "useZip": false,
     });
-    let five_pt_json = serde_json::to_string(&five_envelope).map_err(|e| e.to_string())?;
+    let five_pt_json = serde_json::to_string(&five_envelope)?;
 
     // 提交报文的桶 id 规则：60000+i；`queueNum` 不是 `i`，走与点位同一套
     // floor 分区（桶网格上的起步窗口 = startup_sec/10 整桶），见 apply_submit_ids
@@ -1988,8 +1989,8 @@ pub fn build_from_points(
     crate::track::buckets::apply_submit_ids(&mut sb, &mut stb);
     // 服务端要的是**数组**，不是字符串化的 JSON。
     // 早先按 allLocJson 的模式套成了字符串，结果提交回来 -10000。
-    let speed_arr = serde_json::to_value(&sb).map_err(|e| e.to_string())?;
-    let step_arr = serde_json::to_value(&stb).map_err(|e| e.to_string())?;
+    let speed_arr = serde_json::to_value(&sb)?;
+    let step_arr = serde_json::to_value(&stb)?;
 
     // ---- geeToken ----
     //
@@ -2474,8 +2475,9 @@ pub fn save_record(
     body: &Value,
     runes: &str,
     runef: &str,
-) -> Result<Value, String> {
-    save_record_detailed(client, body, runes, runef).map_err(|f| f.message)
+) -> Result<Value, Error> {
+    // TODO(#62): SubmitFailure 带 kind 后直接透传
+    save_record_detailed(client, body, runes, runef).map_err(|f| f.message.into())
 }
 
 /// 同 [`save_record`]，但把「明确驳回」和「结果未知」分开回报。
@@ -2503,7 +2505,6 @@ pub fn save_record_detailed(
             &[("runes", runes), ("runef", runef)],
         )
         .map_err(|e| SubmitFailure {
-            // TODO(#62): submit 转换后直接携带 ErrorKind
             message: e.to_string(),
             rejected: false,
         })?;
@@ -2523,7 +2524,6 @@ pub fn save_record_detailed(
             };
             return Err(SubmitFailure {
                 message: if hint.is_empty() {
-                    // TODO(#62): submit 转换后直接携带 ErrorKind
                     e.to_string()
                 } else {
                     format!("{e}{hint}")

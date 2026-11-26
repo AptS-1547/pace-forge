@@ -1,5 +1,6 @@
 //! 起跑时段、学期进度、出口设置、设备机型与网络自检。
 
+use crate::web::http::json_err_kind;
 use crate::web::http::{host_short, json_err, json_ok, percent_encode, query_param};
 use crate::web::state::{Shared, device_scope, lock_state};
 use serde_json::{Value, json};
@@ -33,7 +34,7 @@ pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), Strin
             let hhmm = get("hhmm").unwrap_or_else(|| "07:30".into());
             match st::parse_hhmm(&hhmm) {
                 Ok((h, m)) => st::specified(now, days, h, m, dur_s),
-                Err(e) => return json_err(request, &e),
+                Err(e) => return json_err_kind(request, &e),
             }
         }
         "ago" => {
@@ -73,7 +74,7 @@ pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), Strin
                 },
             }),
         ),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -197,7 +198,7 @@ pub(crate) fn handle_egress_put(
         .map(str::trim)
         .filter(|p| !p.is_empty());
     if let Err(e) = egress::save_proxy(spec) {
-        return json_err(request, &e);
+        return json_err_kind(request, &e);
     }
     let n = {
         let mut st = lock_state(&state);
@@ -324,10 +325,10 @@ pub(crate) fn handle_device_put(
             .filter(|p| !p.is_empty()),
     ) && let Err(e) = crate::api::device_table::set_user_model(m, plat)
     {
-        return json_err(request, &e);
+        return json_err_kind(request, &e);
     }
     if let Err(e) = client::save_account_model(&scope, model) {
-        return json_err(request, &e);
+        return json_err_kind(request, &e);
     }
     // 重建当前 client，让新的 cpuModel 立刻生效（下一次请求就是新机型）
     {

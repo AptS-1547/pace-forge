@@ -9,6 +9,7 @@
 //! 数组，也可以是 `{"records":[...]}`；每条记录的字段名按常见别名挑，
 //! 轨迹可选（没有轨迹就算不了重合度）。
 
+use crate::error::{Error, ErrorKind};
 use serde_json::Value;
 
 /// 本地时区偏移（秒），复用 OBS key 与时间戳那一套口径。
@@ -177,10 +178,11 @@ pub struct LocalRecordImport {
     pub issues: Vec<String>,
 }
 
-fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, String> {
+fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, Error> {
     let decoded;
     let value = if let Some(raw) = value.as_str() {
-        decoded = serde_json::from_str::<Value>(raw).map_err(|_| "轨迹字符串不是合法 JSON")?;
+        decoded = serde_json::from_str::<Value>(raw)
+            .map_err(|_| ErrorKind::Other("轨迹字符串不是合法 JSON".into()))?;
         &decoded
     } else {
         value
@@ -195,7 +197,11 @@ fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, String> {
             {
                 Ok((lat, lon))
             }
-            _ => Err(format!("轨迹第 {} 点的经纬度无效", index + 1)),
+            // Other:Display 是裸消息,issues 文本直接拼接,不加分类前缀
+            _ => Err(ErrorKind::Other(format!(
+                "轨迹第 {} 点的经纬度无效",
+                index + 1
+            ))),
         })
         .collect()
 }

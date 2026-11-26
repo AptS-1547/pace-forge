@@ -6,8 +6,11 @@
 //! 算法本身与业务无关，未做改动，仅保留本地测试。
 
 /// PNG 解码 → 灰度（RGBA 合成到黑底）。
-pub fn decode_gray(png: &[u8]) -> Result<(Vec<u8>, usize, usize), String> {
-    let img = image::load_from_memory(png).map_err(|e| format!("PNG 解码失败: {e}"))?;
+use crate::error::{Error, ErrorKind};
+
+pub fn decode_gray(png: &[u8]) -> Result<(Vec<u8>, usize, usize), Error> {
+    let img = image::load_from_memory(png)
+        .map_err(|e| ErrorKind::Client(format!("验证码图解析失败: {e}")))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let mut gray = vec![0u8; (w * h) as usize];
@@ -200,7 +203,7 @@ pub fn match_x(bg: &[u8], bw: usize, bh: usize, tpl: &[u8], tw: usize, th: usize
 }
 
 /// getDistance_original：bg/slice 两张 PNG → 缺口 x。
-pub fn get_distance_original(bg_png: &[u8], slice_png: &[u8]) -> Result<usize, String> {
+pub fn get_distance_original(bg_png: &[u8], slice_png: &[u8]) -> Result<usize, Error> {
     let (bg_gray, bw, bh) = decode_gray(bg_png)?;
     let (slice_gray, sw, sh) = decode_gray(slice_png)?;
     let bg_blur = gaussian_blur(&bg_gray, bw, bh);
@@ -208,7 +211,7 @@ pub fn get_distance_original(bg_png: &[u8], slice_png: &[u8]) -> Result<usize, S
     let slice_blur = gaussian_blur(&slice_gray, sw, sh);
     let slice_edges = canny(&slice_blur, sw, sh, 100.0, 200.0);
     if slice_edges.iter().filter(|&&v| v == 255).count() < 10 {
-        return Err("切片图无边缘特征（识别失败）".into());
+        return Err(ErrorKind::Client("切片图无边缘特征（识别失败）".into()));
     }
     Ok(match_x(&bg_edges, bw, bh, &slice_edges, sw, sh))
 }

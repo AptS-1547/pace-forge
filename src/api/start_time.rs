@@ -8,6 +8,8 @@
 //! 测试就能用固定时刻复现，不会因为跑测试的时间点不同而时好时坏。
 
 /// 提交时的 0~4 秒抖动，预留 5 秒余量。
+use crate::error::{Error, ErrorKind};
+
 pub const JITTER_MARGIN_MS: i64 = 5_000;
 /// 最多往前补 3 天。
 pub const MAX_DAYS_AGO: i64 = 3;
@@ -75,7 +77,7 @@ pub fn clamp(start_ms: i64, now_ms: i64, dur_s: i64) -> StartTime {
 }
 
 /// 解析 `HH:MM`（也接受只有小时 `H`，分钟按 0）。
-pub fn parse_hhmm(s: &str) -> Result<(u32, u32), String> {
+pub fn parse_hhmm(s: &str) -> Result<(u32, u32), Error> {
     let s = s.trim();
     let (h, m) = s.split_once(':').unwrap_or((s, "0"));
     let num = |part: &str, max: u32| -> Option<u32> {
@@ -86,16 +88,20 @@ pub fn parse_hhmm(s: &str) -> Result<(u32, u32), String> {
     };
     match (num(h, 23), num(m, 59)) {
         (Some(h), Some(m)) => Ok((h, m)),
-        _ => Err(format!("时间格式应为 HH:MM（00:00-23:59），收到 {s:?}")),
+        _ => Err(ErrorKind::Client(format!(
+            "时间格式应为 HH:MM（00:00-23:59），收到 {s:?}"
+        ))),
     }
 }
 
 /// 校验天数偏移（0=今天，最多 3 天前）。
-pub fn check_days_ago(days_ago: i64) -> Result<i64, String> {
+pub fn check_days_ago(days_ago: i64) -> Result<i64, Error> {
     if (0..=MAX_DAYS_AGO).contains(&days_ago) {
         Ok(days_ago)
     } else {
-        Err(format!("天数应为 0-{MAX_DAYS_AGO}，收到 {days_ago}"))
+        Err(ErrorKind::Client(format!(
+            "天数应为 0-{MAX_DAYS_AGO}，收到 {days_ago}"
+        )))
     }
 }
 
@@ -166,10 +172,10 @@ pub fn specified(
     hour: u32,
     minute: u32,
     dur_s: i64,
-) -> Result<StartTime, String> {
+) -> Result<StartTime, Error> {
     let days_ago = check_days_ago(days_ago)?;
     if hour > 23 || minute > 59 {
-        return Err(format!("无效时刻 {hour:02}:{minute:02}"));
+        return Err(ErrorKind::Client(format!("无效时刻 {hour:02}:{minute:02}")));
     }
     let tz = default_tz_offset_min();
     let local_now = now_ms + tz * 60_000;
@@ -182,9 +188,11 @@ pub fn specified(
 }
 
 /// `ago N`：N 分钟前开跑（1 ≤ N ≤ 4320，即最多 3 天）。
-pub fn ago(now_ms: i64, ago_min: i64, dur_s: i64) -> Result<StartTime, String> {
+pub fn ago(now_ms: i64, ago_min: i64, dur_s: i64) -> Result<StartTime, Error> {
     if !(1..=MAX_AGO_MIN).contains(&ago_min) {
-        return Err(format!("分钟数应为 1-{MAX_AGO_MIN}，收到 {ago_min}"));
+        return Err(ErrorKind::Client(format!(
+            "分钟数应为 1-{MAX_AGO_MIN}，收到 {ago_min}"
+        )));
     }
     Ok(clamp(now_ms - ago_min * 60_000, now_ms, dur_s))
 }
@@ -202,7 +210,7 @@ pub fn random_ago(now_ms: i64, dur_s: i64, r: f64) -> StartTime {
 }
 
 /// 指定日期内的随机时刻（7:00~20:00）。`r` ∈ [0,1)。
-pub fn random_in_day(now_ms: i64, days_ago: i64, dur_s: i64, r: f64) -> Result<StartTime, String> {
+pub fn random_in_day(now_ms: i64, days_ago: i64, dur_s: i64, r: f64) -> Result<StartTime, Error> {
     let days_ago = check_days_ago(days_ago)?;
     let r = if r.is_finite() {
         r.clamp(0.0, 1.0)

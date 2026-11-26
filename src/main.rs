@@ -183,7 +183,7 @@ fn main() {
                 Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
                 Err(e) => {
                     eprintln!("回读失败: {e}");
-                    std::process::exit(1);
+                    std::process::exit(e.exit_code());
                 }
             }
         }
@@ -326,7 +326,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     println!("围栏中心: ({clat:.5}, {clng:.5})");
@@ -364,7 +364,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         }
         Err(e) => {
             eprintln!("\n预演失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -531,7 +531,7 @@ fn do_login(username: &str, password: &str) {
         }
         Err(e) => {
             eprintln!("登录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -555,7 +555,7 @@ fn do_relogin() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("密码解密失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
 
@@ -591,7 +591,7 @@ fn do_relogin() {
         }
         Err(e) => {
             eprintln!("登录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -637,7 +637,7 @@ fn do_logout() {
         Ok(false) => println!("服务端没有返回明确的注销结果，可能是 token 已失效"),
         Err(e) => {
             eprintln!("注销请求失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 
@@ -713,7 +713,7 @@ fn do_review(n: u32) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("拉取记录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     let rows = list
@@ -1052,7 +1052,7 @@ fn do_export_records(rest: &[String]) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("拉记录列表失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     let rows = list
@@ -1200,7 +1200,7 @@ fn do_cheat() {
         }
         Err(e) => {
             eprintln!("查询失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -1384,7 +1384,7 @@ fn run_with_start(
         }
         Err(e) => {
             eprintln!("\n失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -1448,7 +1448,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     let now = pace_forge::crypto::envelope::now_ms() as i64;
@@ -1457,7 +1457,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     show_plan(st, dur_min);
@@ -1472,7 +1472,7 @@ fn do_ago(mins: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     show_plan(st, dur_min);
@@ -1489,7 +1489,7 @@ fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     };
     show_plan(st, dur_min);
@@ -1527,7 +1527,7 @@ fn do_ai_list() {
         }
         Err(e) => {
             eprintln!("拉项目列表失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -1579,7 +1579,7 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
                 Ok(st) => Some(st.ms),
                 Err(e) => {
                     eprintln!("{e}");
-                    std::process::exit(1);
+                    std::process::exit(e.exit_code());
                 }
             }
         }
@@ -1608,7 +1608,7 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
         Ok(v) => println!("✅ 提交成功：{}", v.get("data").unwrap_or(&v)),
         Err(e) => {
             eprintln!("提交失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -1659,7 +1659,7 @@ fn do_ai_records(sport: i64, n: i64) {
         }
         Err(e) => {
             eprintln!("拉记录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }

@@ -22,6 +22,7 @@ use super::biomech::{fatigue_from_km, ou_cadence_series};
 use super::buckets::{SpeedBucket, StepBucket, speed_buckets};
 use super::geo::{distance, path_length};
 use super::kinematics::{KinParams, pace_profile};
+use crate::error::{Error, ErrorKind};
 
 /// 合成参数。
 #[derive(Debug, Clone)]
@@ -74,12 +75,12 @@ pub struct SimResult {
 }
 
 /// 从轨迹点合成完整数据流。
-pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, String> {
+pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, Error> {
     if points.len() < 2 {
-        return Err("轨迹点不足，无法合成".into());
+        return Err(ErrorKind::Fence("轨迹点不足，无法合成".into()));
     }
     if p.total_sec <= 0 {
-        return Err("时长必须为正".into());
+        return Err(ErrorKind::Client("时长必须为正".into()));
     }
 
     let xy: Vec<(f64, f64)> = points.iter().map(|(a, b, _)| (*a, *b)).collect();
@@ -90,7 +91,7 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
 
     let total_len = path_length(&xy);
     if total_len <= 0.0 {
-        return Err("轨迹长度为 0".into());
+        return Err(ErrorKind::Fence("轨迹长度为 0".into()));
     }
 
     // ① 速度剖面：OU + 弯道预判 + 精确命中里程

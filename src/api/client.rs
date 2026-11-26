@@ -283,7 +283,7 @@ pub(crate) fn device_model_in(base: &std::path::Path, scope: &str) -> Option<Str
 }
 
 /// 写账号级机型。`None` 或空串表示清掉（回到 ABI）。
-pub fn save_account_model(scope: &str, model: Option<&str>) -> Result<(), String> {
+pub fn save_account_model(scope: &str, model: Option<&str>) -> Result<(), Error> {
     let base = crate::api::session::home_dir();
     save_account_model_in(&base, scope, model)
 }
@@ -292,14 +292,17 @@ pub(crate) fn save_account_model_in(
     base: &std::path::Path,
     scope: &str,
     model: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let path = device_model_path_in(base, scope);
     match model.map(str::trim).filter(|m| !m.is_empty()) {
         Some(m) => crate::api::session::write_file_private(&path, m.as_bytes()),
         None => match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!("清机型配置失败 {}: {e}", path.display())),
+            Err(e) => Err(ErrorKind::Client(format!(
+                "清机型配置失败 {}: {e}",
+                path.display()
+            ))),
         },
     }
 }
@@ -422,10 +425,10 @@ impl Client {
     /// 组装请求头，返回 (headers, headerSign 会话)。
     ///
     /// `headerSign` 的会话密钥必须保留——响应是用它解密的。
-    fn build_headers(&self) -> Result<(Vec<(String, String)>, SessionKeys), String> {
+    fn build_headers(&self) -> Result<(Vec<(String, String)>, SessionKeys), Error> {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| format!("系统时间异常: {e}"))?
+            .map_err(|e| ErrorKind::Client(format!("系统时间异常: {e}")))?
             .as_millis() as u64;
         let nonce = uuid_v4();
 
@@ -518,7 +521,7 @@ impl Client {
         body: Option<&Value>,
         extra_headers: &[(&str, &str)],
     ) -> Result<String, Error> {
-        let (headers, session) = self.build_headers().map_err(ErrorKind::Client)?;
+        let (headers, session) = self.build_headers()?;
 
         let mut req = match method.to_uppercase().as_str() {
             "GET" => self.agent.get(url),

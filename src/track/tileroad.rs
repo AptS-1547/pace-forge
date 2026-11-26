@@ -27,6 +27,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::error::{Error, ErrorKind};
 use crate::track::roadnet::{RoadNet, RoadSegment};
 
 /// 瓦片服务。四个子域轮着用，避开单域限流。
@@ -178,11 +179,11 @@ fn tile_path_in(base: &std::path::Path, x: i32, y: i32) -> PathBuf {
 /// 或过短的文件会被删掉重拉；超过 512B 但解码失败的坏文件同样删除，避免
 /// 坏字节永久留在缓存里毒化该格网。若要按天过期，需要在读到可用文件后再
 /// 查 mtime——目前没有做。
-fn fetch_tile(x: i32, y: i32) -> Result<image::RgbImage, String> {
+fn fetch_tile(x: i32, y: i32) -> Result<image::RgbImage, Error> {
     fetch_tile_in(&crate::api::session::home_dir(), x, y)
 }
 
-fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbImage, String> {
+fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbImage, Error> {
     let path = tile_path_in(base, x, y);
     let bytes = if let Ok(b) = std::fs::read(&path) {
         // 空文件或过短文件当没有
@@ -201,7 +202,7 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
             tile_now_ms(),
             TILE_DOWN_AT_MS.load(std::sync::atomic::Ordering::Relaxed),
         ) {
-            return Err("高德瓦片刚全失败过，冷却中".into());
+            return Err(ErrorKind::Network("高德瓦片刚全失败过，冷却中".into()));
         }
         let mut last = String::new();
         let mut got: Option<Vec<u8>> = None;
@@ -234,7 +235,9 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
             None => {
                 // 四个域名全挂：记冷却，后面的瓦片直接快速失败，不再逐张等。
                 TILE_DOWN_AT_MS.store(tile_now_ms(), std::sync::atomic::Ordering::Relaxed);
-                return Err(format!("瓦片 {x}/{y} 拉取失败（{last}）"));
+                return Err(ErrorKind::Network(format!(
+                    "瓦片 {x}/{y} 拉取失败（{last}）"
+                )));
             }
         };
         // 目录不存在时由 write_file_private 建出来（首次运行）
@@ -250,7 +253,7 @@ fn fetch_tile_in(base: &std::path::Path, x: i32, y: i32) -> Result<image::RgbIma
             // 解码失败说明缓存里是坏字节：删掉文件，下次请求重新拉，
             // 不能让坏文件一直留在缓存里把这一格网毒化。
             let _ = std::fs::remove_file(&path);
-            Err(format!("瓦片 {x}/{y} 解码失败: {e}"))
+            Err(ErrorKind::Network(format!("瓦片 {x}/{y} 解码失败: {e}")))
         }
     }
 }
@@ -608,10 +611,10 @@ fn trace_lines(bits: &[bool], w: usize, h: usize) -> Vec<Vec<(usize, usize)>> {
 ///
 /// `bbox` 是 `(min_lat, min_lon, max_lat, max_lon)`，**BD-09**——调用方
 /// 传的是围栏范围，跟服务端数据同一套坐标系。
-pub fn fetch_roadnet(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
+pub fn fetch_roadnet(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, Error> {
     let (min_lat, min_lon, max_lat, max_lon) = bbox;
     if !(min_lat < max_lat && min_lon < max_lon) {
-        return Err("bbox 非法".into());
+        return Err(ErrorKind::Client("bbox 非法".into()));
     }
 
     // BD-09 → GCJ-02：瓦片是高德的网格，必须用 GCJ-02 去查。
@@ -628,10 +631,10 @@ pub fn fetch_roadnet(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
     let nx = (tx1 - tx0 + 1).max(1) as usize;
     let ny = (ty1 - ty0 + 1).max(1) as usize;
     if nx * ny > MAX_TILES {
-        return Err(format!(
+        return Err(ErrorKind::Network(format!(
             "范围过大：{nx}×{ny} = {} 张瓦片，上限 {MAX_TILES}",
             nx * ny
-        ));
+        )));
     }
 
     let w = nx * 256;
@@ -658,11 +661,13 @@ pub fn fetch_roadnet(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
     }
 
     if failed == nx * ny {
-        return Err(format!("{nx}×{ny} 张瓦片全部拉取失败"));
+        return Err(ErrorKind::Network(format!("{nx}×{ny} 张瓦片全部拉取失败")));
     }
     let raw = bits.iter().filter(|v| **v).count();
     if raw < 200 {
-        return Err(format!("掩膜只有 {raw} px，这一带瓦片上没有道路"));
+        return Err(ErrorKind::Network(format!(
+            "掩膜只有 {raw} px，这一带瓦片上没有道路"
+        )));
     }
 
     let mut mask = Mask {
@@ -699,7 +704,9 @@ pub fn fetch_roadnet(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
     }
 
     if segments.is_empty() {
-        return Err("瓦片上找到了路面，但没串出可用线段".into());
+        return Err(ErrorKind::Network(
+            "瓦片上找到了路面，但没串出可用线段".into(),
+        ));
     }
 
     let before = segments.len();
@@ -834,7 +841,7 @@ pub fn route_through(
     g: &RoadGraph,
     must: &[(f64, f64)],
     want_m: f64,
-) -> Result<Vec<(f64, f64)>, String> {
+) -> Result<Vec<(f64, f64)>, Error> {
     route_through_ex(g, must, want_m, false)
 }
 
@@ -851,9 +858,9 @@ pub fn route_through_ex(
     must: &[(f64, f64)],
     want_m: f64,
     fix_end: bool,
-) -> Result<Vec<(f64, f64)>, String> {
+) -> Result<Vec<(f64, f64)>, Error> {
     if must.len() < 2 {
-        return Err("至少要两个点".into());
+        return Err(ErrorKind::Client("至少要两个点".into()));
     }
     let mut path: Vec<usize> = Vec::new();
     // 已经走过的边。闭环那一段拿它做惩罚，尽量别再原路走一遍。
@@ -935,7 +942,7 @@ pub fn route_through_ex(
         }
     }
     if path.len() < 3 {
-        return Err("连出来的路径太短".into());
+        return Err(ErrorKind::Fence("连出来的路径太短".into()));
     }
 
     // 5 个点走完后，从最后一个点继续往前延伸，把剩余里程走满。
@@ -1014,7 +1021,7 @@ pub fn route_through_ex(
             if let Some(seg) = astar(g, a, b) {
                 path.extend(seg.into_iter().skip(1));
             } else {
-                return Err("最后一段到终点的路网不连通".into());
+                return Err(ErrorKind::Client("最后一段到终点的路网不连通".into()));
             }
         }
     }
@@ -1348,9 +1355,9 @@ pub fn walk_graph(
     must: &[(f64, f64)],
     want_m: f64,
     seed: u64,
-) -> Result<Vec<(f64, f64)>, String> {
+) -> Result<Vec<(f64, f64)>, Error> {
     if g.nodes.is_empty() {
-        return Err("图为空".into());
+        return Err(ErrorKind::Client("图为空".into()));
     }
     let mut rng = seed | 1;
     let mut next_rand = || {
@@ -1468,7 +1475,7 @@ pub fn walk_graph(
     }
 
     if path.len() < 3 {
-        return Err("图上游走失败，没走出路径".into());
+        return Err(ErrorKind::Fence("图上游走失败，没走出路径".into()));
     }
     Ok(path.into_iter().map(|i| g.nodes[i]).collect())
 }
@@ -1556,7 +1563,7 @@ mod tests {
         assert!(path.exists());
 
         let err = fetch_tile_in(t.home(), 7, 9).expect_err("坏瓦片必须解码失败");
-        assert!(err.contains("解码失败"), "错误信息: {err}");
+        assert!(err.to_string().contains("解码失败"), "错误信息: {err}");
         assert!(!path.exists(), "解码失败的坏文件应被删除，不能留在缓存里");
     }
 

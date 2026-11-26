@@ -177,11 +177,13 @@ impl State {
             }
         }
         // 先清理会话，再保存账号库，避免 Web 重启时恢复已退出或删除的账号。
+        // TODO(#62): web 层转 Error 后移除
         session::clear_session_if_below(dir, |cached| {
             session_owner(&self.book, cached)
                 .is_some_and(|index| self.book.accounts[index].id == id)
-        })?;
-        accounts::save_in_dir(dir, &book)?;
+        })
+        .map_err(|e| e.to_string())?;
+        accounts::save_in_dir(dir, &book).map_err(|e| e.to_string())?;
 
         self.book = book;
         self.clients.remove(id);

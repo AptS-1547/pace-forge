@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use super::session::{data_dir_in, ensure_dir, home_dir, write_file_private};
+use crate::error::{Error, ErrorKind};
 
 /// 一个账号。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -276,7 +277,7 @@ const PW_V2_PREFIX: &str = "v2:";
 /// 格式：`v2:` + base64( salt[16] || iv[16] || AES-128-CBC(PKCS#7)(明文) )。
 /// 盐和 IV 每条都重新随机，因此**同一密码每次密文都不同**，从 `accounts.json`
 /// 看不出哪些账号用了相同密码。
-pub fn seal_password(plain: &str) -> Result<String, String> {
+pub fn seal_password(plain: &str) -> Result<String, Error> {
     use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
     type Enc = cbc::Encryptor<aes::Aes128>;
 
@@ -304,7 +305,7 @@ pub fn seal_password(plain: &str) -> Result<String, String> {
 ///
 /// 先按当前机器密钥解；解不开再退回旧派生方式——旧版写在盘上的库是用
 /// 旧 key 加的密，不兜这一层，换 key 当天老用户就登不进去。
-pub fn open_password(enc: &str) -> Result<String, String> {
+pub fn open_password(enc: &str) -> Result<String, Error> {
     use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     type Dec = cbc::Decryptor<aes::Aes128>;
 
@@ -315,11 +316,13 @@ pub fn open_password(enc: &str) -> Result<String, String> {
     };
     let raw = base64::engine::general_purpose::STANDARD
         .decode(body)
-        .map_err(|e| format!("密码字段不是合法 base64: {e}"))?;
+        .map_err(|e| ErrorKind::Client(format!("密码字段不是合法 base64: {e}")))?;
 
     if is_v2 {
         if raw.len() < 32 || (raw.len() - 32) % 16 != 0 {
-            return Err("密码字段格式损坏（v2 密文长度不对）".into());
+            return Err(ErrorKind::Auth(
+                "密码字段格式损坏（v2 密文长度不对）".into(),
+            ));
         }
         let salt = &raw[..16];
         let mut iv = [0u8; 16];
@@ -328,8 +331,12 @@ pub fn open_password(enc: &str) -> Result<String, String> {
         let key = derive_key_v2(salt);
         let dec = Dec::new(&key.into(), &iv.into());
         return match dec.decrypt_padded_vec_mut::<Pkcs7>(ct) {
-            Ok(pt) => String::from_utf8(pt).map_err(|e| format!("密码不是 UTF-8: {e}")),
-            Err(e) => Err(format!("密码解密失败（可能换了机器）: {e}")),
+            Ok(pt) => {
+                String::from_utf8(pt).map_err(|e| ErrorKind::Client(format!("密码不是 UTF-8: {e}")))
+            }
+            Err(e) => Err(ErrorKind::Client(format!(
+                "密码解密失败（可能换了机器）: {e}"
+            ))),
         };
     }
 
@@ -346,7 +353,7 @@ pub fn open_password(enc: &str) -> Result<String, String> {
             Err(e) => last = format!("密码解密失败（可能换了机器）: {e}"),
         }
     }
-    Err(last)
+    Err(last.into())
 }
 
 /// 读账号库。文件不存在返回空库（不是错误）。
@@ -394,7 +401,7 @@ pub(crate) fn load_in_dir(dir: &Path) -> Book {
 ///
 /// 目录创建走 [`ensure_dir`]，文件写入走 [`write_file_private`]（0600）——
 /// 与 `session.json` 用的是同一套原语，不再各写一遍。
-pub fn save(book: &Book) -> Result<(), String> {
+pub fn save(book: &Book) -> Result<(), Error> {
     if let Some(dir) = crate::api::session::data_dir_override() {
         return save_in_dir(&dir, book);
     }
@@ -405,34 +412,36 @@ pub fn save(book: &Book) -> Result<(), String> {
 ///
 /// **测试必须用这个而不是 `save()`**：`save()` 写的是真实
 /// `$HOME/.pace-forge/accounts.json`。
-pub(crate) fn save_in(base: &Path, book: &Book) -> Result<(), String> {
+pub(crate) fn save_in(base: &Path, book: &Book) -> Result<(), Error> {
     save_in_dir(&data_dir_in(base), book)
 }
 
 /// 直接给数据目录（不再追加 `.pace-forge`）。
-pub(crate) fn save_in_dir(dir: &Path, book: &Book) -> Result<(), String> {
+pub(crate) fn save_in_dir(dir: &Path, book: &Book) -> Result<(), Error> {
     // 首次运行目录还不存在，这里负责建出来（写前必须确保）
     ensure_dir(dir)?;
     // 落盘时补上密钥指纹（调用方不用关心）
     let mut to_write = book.clone();
     to_write.key_id = Some(key_id());
-    let text = serde_json::to_string_pretty(&to_write).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&to_write)?;
     let p = dir.join("accounts.json");
 
     // 先写临时文件再改名，避免写一半断电把库毁了
     let tmp = p.with_extension("json.tmp");
-    write_file_private(&tmp, text.as_bytes()).map_err(|e| format!("写账号库失败: {e}"))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("替换账号库失败: {e}"))?;
+    write_file_private(&tmp, text.as_bytes())
+        .map_err(|e| ErrorKind::Storage(std::io::Error::other(format!("账号库写入失败: {e}"))))?;
+    std::fs::rename(&tmp, &p)
+        .map_err(|e| ErrorKind::Storage(std::io::Error::other(format!("账号库落盘失败: {e}"))))?;
     Ok(())
 }
 
 /// 清掉本地所有账号的 token 并落盘。
-pub fn clear_tokens() -> Result<usize, String> {
+pub fn clear_tokens() -> Result<usize, Error> {
     clear_tokens_in(&home_dir())
 }
 
 /// 同上，但 HOME 基目录由调用方指定。
-pub(crate) fn clear_tokens_in(base: &Path) -> Result<usize, String> {
+pub(crate) fn clear_tokens_in(base: &Path) -> Result<usize, Error> {
     let mut book = load_in(base);
     let n = book.clear_tokens();
     save_in(base, &book)?;

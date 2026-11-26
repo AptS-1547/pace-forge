@@ -40,9 +40,26 @@ pub enum ErrorKind {
     /// 坏响应体:厂商响应不是合法 JSON。
     #[error("业务响应不是合法 JSON：{0}")]
     Json(#[from] serde_json::Error),
+    /// 迁移尾差(#62):尚未归入具体变体的本地/数据形态消息。
+    /// 域内已知语义(厂商码、几何、IO、认证)都应落在上面的具体变体;
+    /// `Other` 的站点数随模块内审逐步清零。
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type Error = ErrorKind;
+
+impl From<&str> for ErrorKind {
+    fn from(s: &str) -> Self {
+        Self::Other(s.to_string())
+    }
+}
+
+impl From<String> for ErrorKind {
+    fn from(s: String) -> Self {
+        Self::Other(s)
+    }
+}
 
 fn protocol_display(code: &Option<i64>, m: &str) -> String {
     match code {
@@ -82,6 +99,25 @@ impl ErrorKind {
             Self::Protocol { .. } | Self::Network(_) | Self::Json(_) => 502,
             Self::Fence(_) => 400,
             Self::Client(_) | Self::Storage(_) => 500,
+            Self::Other(_) => 500,
+        }
+    }
+
+    /// CLI 退出码分类(#62 第三步):脚本可按退出码分流,不再解析中文输出。
+    ///
+    /// 不与既有退出码冲突:0 成功、1 通用失败、2 用法/参数错误、
+    /// 3 `cheat` 结果未知。类型化错误从 10 起按变体编号。
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Auth(_) => 10,
+            Self::Protocol { .. } => 11,
+            Self::Network(_) => 12,
+            Self::RateLimit(_) => 13,
+            Self::Fence(_) => 14,
+            Self::Client(_) => 15,
+            Self::Storage(_) => 16,
+            Self::Json(_) => 17,
+            Self::Other(_) => 18,
         }
     }
 
@@ -96,6 +132,7 @@ impl ErrorKind {
             Self::Client(_) => "client",
             Self::Storage(_) => "storage",
             Self::Json(_) => "json",
+            Self::Other(_) => "other",
         }
     }
 }
@@ -180,6 +217,7 @@ mod tests {
             ErrorKind::Client("x".into()).kind_name(),
             ErrorKind::Storage(std::io::Error::other("x")).kind_name(),
             ErrorKind::Json(serde_json::from_str::<Value>("{").unwrap_err()).kind_name(),
+            ErrorKind::Other("x".into()).kind_name(),
         ];
         assert_eq!(
             names,
@@ -191,8 +229,36 @@ mod tests {
                 "fence",
                 "client",
                 "storage",
-                "json"
+                "json",
+                "other"
             ]
+        );
+    }
+
+    #[test]
+    fn exit_codes_are_distinct_per_variant() {
+        let codes = [
+            ErrorKind::Auth("x".into()).exit_code(),
+            ErrorKind::Protocol {
+                code: None,
+                msg: "x".into(),
+            }
+            .exit_code(),
+            ErrorKind::Network("x".into()).exit_code(),
+            ErrorKind::RateLimit("x".into()).exit_code(),
+            ErrorKind::Fence("x".into()).exit_code(),
+            ErrorKind::Client("x".into()).exit_code(),
+            ErrorKind::Storage(std::io::Error::other("x")).exit_code(),
+            ErrorKind::Json(serde_json::from_str::<Value>("{").unwrap_err()).exit_code(),
+            ErrorKind::Other("x".into()).exit_code(),
+        ];
+        let mut sorted = codes.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(codes.len(), sorted.len(), "退出码必须两两不同: {codes:?}");
+        assert!(
+            codes.iter().all(|c| (10..=18).contains(c)),
+            "不得与既有退出码冲突"
         );
     }
 

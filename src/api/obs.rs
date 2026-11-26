@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::client::{Client, expect_ok};
 use crate::crypto::consts::hosts;
+use crate::error::{Error, ErrorKind};
 
 /// OBS 签名接口路径。
 pub const OBS_SIGN_PATH: &str = "/api/obs/temporary/url";
@@ -19,29 +20,26 @@ pub const OBS_SIGN_PATH: &str = "/api/obs/temporary/url";
 pub const BUCKET: &str = "iydsj-hbase-hot";
 
 /// 换签名 URL。
-pub fn sign_url(client: &Client, method: &str, key: &str) -> Result<String, String> {
+pub fn sign_url(client: &Client, method: &str, key: &str) -> Result<String, Error> {
     let body = json!({
         "bucketName": BUCKET,
         "objectKey": key,
         "method": method,
         "contentType": "application/json",
     });
-    let raw = client
-        .request(
-            "POST",
-            &format!("{}{}", hosts::RUN, OBS_SIGN_PATH),
-            Some(&body),
-        )
-        .map_err(|e| e.to_string())?;
-    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
+    let raw = client.request(
+        "POST",
+        &format!("{}{}", hosts::RUN, OBS_SIGN_PATH),
+        Some(&body),
+    )?;
+    let v = expect_ok(&raw)?;
     let data = v.get("data").unwrap_or(&v);
 
     // data 可能是对象，也可能是字符串化的 JSON
     let signed = if let Some(s) = data.get("signedUrl").and_then(|x| x.as_str()) {
         s.to_string()
     } else if let Some(s) = data.as_str() {
-        let parsed: Value =
-            serde_json::from_str(s).map_err(|e| format!("签名响应解析失败: {e}"))?;
+        let parsed: Value = serde_json::from_str(s)?;
         parsed
             .get("signedUrl")
             .and_then(|x| x.as_str())
@@ -50,13 +48,16 @@ pub fn sign_url(client: &Client, method: &str, key: &str) -> Result<String, Stri
     } else if let Some(s) = v.get("signedUrl").and_then(|x| x.as_str()) {
         s.to_string()
     } else {
-        return Err("OBS 签名响应缺 signedUrl".into());
+        return Err(ErrorKind::Protocol {
+            code: None,
+            msg: "OBS 签名响应缺 signedUrl".into(),
+        });
     };
     Ok(signed)
 }
 
 /// PUT 上传。
-pub fn put_object(signed_url: &str, payload: &[u8]) -> Result<(), String> {
+pub fn put_object(signed_url: &str, payload: &[u8]) -> Result<(), Error> {
     // ureq/rustls 对腾讯 COS 端点握手偶发 "tls connection init failed:
     // unexpected end of file"（curl 直连正常，说明是客户端侧的间歇性握手
     // 失败）。一次抖动就够让明细整条传不上去，详情页于是没有步频和轨迹。
@@ -77,11 +78,13 @@ pub fn put_object(signed_url: &str, payload: &[u8]) -> Result<(), String> {
         {
             Ok(_) => return Ok(()),
             // 服务端给了状态码就是明确拒绝（签名过期、桶权限），重试没用
-            Err(e @ ureq::Error::Status(..)) => return Err(format!("OBS PUT 失败: {e}")),
+            Err(e @ ureq::Error::Status(..)) => {
+                return Err(ErrorKind::Client(format!("OBS PUT 失败: {e}")));
+            }
             Err(e) => last = format!("OBS PUT 失败: {e}"),
         }
     }
-    Err(last)
+    Err(last.into())
 }
 
 /// 上传到多个 objectKey，返回成功个数。
@@ -119,7 +122,7 @@ pub fn upload_keys(client: &Client, keys: &[String], payload: &[u8]) -> (usize, 
 }
 
 /// 回读校验。
-pub fn fetch_object(client: &Client, key: &str) -> Result<Value, String> {
+pub fn fetch_object(client: &Client, key: &str) -> Result<Value, Error> {
     let signed = sign_url(client, "Get", key)?;
     // 同 put_object：握手抖动重试，404 这类状态码不重试（那是对象真的不存在）
     let mut last = String::new();
@@ -135,14 +138,19 @@ pub fn fetch_object(client: &Client, key: &str) -> Result<Value, String> {
             Ok(resp) => {
                 let text = resp
                     .into_string()
-                    .map_err(|e| format!("OBS 读取失败: {e}"))?;
-                return serde_json::from_str(&text).map_err(|e| format!("OBS 对象解析失败: {e}"));
+                    .map_err(|e| ErrorKind::Network(e.to_string()))?;
+                return serde_json::from_str(&text).map_err(|e| ErrorKind::Protocol {
+                    code: None,
+                    msg: format!("OBS 响应不是合法 JSON: {e}"),
+                });
             }
-            Err(e @ ureq::Error::Status(..)) => return Err(format!("OBS GET 失败: {e}")),
+            Err(e @ ureq::Error::Status(..)) => {
+                return Err(ErrorKind::Client(format!("OBS GET 失败: {e}")));
+            }
             Err(e) => last = format!("OBS GET 失败: {e}"),
         }
     }
-    Err(last)
+    Err(last.into())
 }
 
 /// 服务端所在时区偏移（秒）。

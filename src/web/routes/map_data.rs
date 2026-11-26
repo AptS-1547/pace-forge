@@ -1,6 +1,6 @@
 //! `/api/points` `/api/fences` `/api/blockers`：点位、围栏与手绘禁区。
 
-use crate::web::http::{json_err, json_ok, query_param};
+use crate::web::http::{json_err, json_err_kind, json_ok, query_param};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
 
@@ -217,6 +217,6 @@ pub(crate) fn handle_blockers_put(request: tiny_http::Request, body: &Value) -> 
     }
     match crate::track::roadnet::save_local_blockers(&polys) {
         Ok(()) => json_ok(request, json!({"saved": polys.len()})),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }

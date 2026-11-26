@@ -214,7 +214,7 @@ pub(crate) fn handle_login_one(
                 }
                 match crate::api::accounts::open_password(&a.password_enc) {
                     Ok(p) => (a.username.clone(), p),
-                    Err(e) => return json_err(request, &e),
+                    Err(e) => return json_err_kind(request, &e),
                 }
             }
             None => return json_err(request, "账号不存在"),
@@ -427,7 +427,7 @@ pub(crate) fn handle_batch(
                 }));
             }
             Err(e) => results.push(json!({
-                "id": id, "ok": false, "error": e,
+                "id": id, "ok": false, "error": e.to_string(), "kind": e.kind_name(),
                 "logs": logs.borrow().clone(),
             })),
         }
