@@ -10,6 +10,7 @@
 //! 报文里 `allLocJson` / `fivePointJson` / `speedPerTenSec` 等是**字符串化的 JSON**
 //! （双重序列化），不是嵌套对象。服务端按字符串取出来再解析一层。
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::client::Client;
@@ -387,6 +388,32 @@ fn fixed_strict() -> bool {
 /// `isPass` 用「轨迹是否真的经过它」判断：真机五个点全经过，所以全 true；
 /// 我们按真实匹配结果填，没经过的点标 false（同时 `flow` 的点位顺序自检
 /// 会把这种情况打出来），不再无条件发 true。
+/// `fivePointJson` 里的单个点位（#38 serde 试点）。
+///
+/// 字段**声明顺序就是报文键序**（serde_json 开了 `preserve_order`）：照 11-11
+/// 那版 `lon` 开头的排法，App 若按位置解析，顺序错一个字段就少画点。原来
+/// 靠手拼 `json!` 时把键序写在注释里让人记，现在由 struct 声明钉死。
+#[derive(Debug, Clone, Serialize)]
+pub struct FixedPointItem<'a> {
+    pub lon: f64,
+    pub lat: f64,
+    /// 0 普通 / 1 必经。策略见 [`fixed_marks`]（#37 三档开关 + auto 规则）。
+    #[serde(rename = "isFixed")]
+    pub is_fixed: i64,
+    #[serde(rename = "pointName")]
+    pub point_name: &'a str,
+    pub glon: f64,
+    pub glat: f64,
+    /// 该点在轨迹里的**首次经过下标**；没经过时用 rank 占位，不发 null。
+    pub position: i64,
+    pub flag: i64,
+    pub id: i64,
+    /// 给 App 详情页画绿点用，**恒 true**（服务端不认这个字段，它自己从轨迹判）。
+    #[serde(rename = "isPass")]
+    pub is_pass: bool,
+    pub state: i64,
+}
+
 pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i64) -> Vec<Value> {
     // 每个点的首次经过下标；None = 轨迹没经过它
     let hits: Vec<Option<usize>> = fixed
@@ -442,30 +469,24 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
             // 11-11 那版，它发的是 lon/lat/isFixed/pointName/glon/glat/
             // position/flag/id/isPass/state。`preserve_order` 开着，键序直接
             // 决定序列化字节，App 若按位置解析就会差一个字段。
-            json!({
-                "lon": f.lon,
-                "lat": f.lat,
-                // `isFixed` 决定 App 用「必经点」还是「普通点」那套图标。
-                // issue #37：默认 auto（保留 ≥1 必经点 + ≥2 普通点，次数才计），
-                // 对照实验用 PACE_FIXED_POINT=all0 / server 覆盖。
-                "isFixed": marks[i],
-                "pointName": f.point_name,
-                "glon": glon,
-                "glat": glat,
-                "position": hits[i].map(|h| h as i64).unwrap_or(rank as i64),
-                "flag": flag_ms,
-                "id": FIXED_POINT_ID_BASE + rank as i64,
-                // `isPass` **恒发 true**：它是给 App 详情页画绿点用的，
-                // 服务端不认这个字段——它自己从轨迹判「有没有经过」
-                // （实测 reasonList 里那条「经过必经点位」就是它自己算的，
-                // 与我们的 isPass 无关）。
-                //
-                // 早先按 `hits[i].is_some()`（严格 10m 命中）发，于是起点/灰点
-                // 占掉采样点的那一个必然 false → App 画橙。同类实现
-                // Inverx/com.zjwh.android_wh_physicalfitness（★317）也是恒 true。
-                "isPass": true,
-                "state": 0,
-            })
+            // 键序、字段集由 `FixedPointItem` 的声明钉死（#38 serde 试点）。
+            // `isPass` 恒 true：给 App 详情页画绿点用，服务端不认它（自己从
+            // 轨迹判）。早先按严格 10m 命中发，起点/灰点占掉采样点那个必然
+            // false → App 画橙；同类实现 Inverx 也是恒 true。
+            let item = FixedPointItem {
+                lon: f.lon,
+                lat: f.lat,
+                is_fixed: marks[i],
+                point_name: &f.point_name,
+                glon,
+                glat,
+                position: hits[i].map(|h| h as i64).unwrap_or(rank as i64),
+                flag: flag_ms,
+                id: FIXED_POINT_ID_BASE + rank as i64,
+                is_pass: true,
+                state: 0,
+            };
+            serde_json::to_value(&item).expect("FixedPointItem serializes infallibly")
         })
         .collect()
 }
@@ -5070,5 +5091,68 @@ mod speed_units_tests {
         assert_eq!(sp.avg_speed_json(), 3.3333);
         assert_eq!(sp.bd_s_json(), 3.17);
         assert_eq!(sp.speed_json(), 5.0);
+    }
+}
+
+#[cfg(test)]
+mod fixed_point_serde_tests {
+    use super::*;
+
+    fn item() -> FixedPointItem<'static> {
+        FixedPointItem {
+            lon: 116.396651,
+            lat: 40.020208,
+            is_fixed: 1,
+            point_name: "秋实城餐厅",
+            glon: 116.39012345678901,
+            glat: 40.01876543210987,
+            position: 189,
+            flag: 1_790_913_882_164,
+            id: 85,
+            is_pass: true,
+            state: 0,
+        }
+    }
+
+    /// #38 serde 试点：struct 声明顺序 == 报文键序（lon 开头，照 11-11 那版）。
+    #[test]
+    fn struct_field_order_is_wire_key_order() {
+        let s = serde_json::to_string(&item()).unwrap();
+        let v: Value = serde_json::from_str(&s).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "lon",
+                "lat",
+                "isFixed",
+                "pointName",
+                "glon",
+                "glat",
+                "position",
+                "flag",
+                "id",
+                "isPass",
+                "state"
+            ]
+        );
+    }
+
+    /// #38 serde 试点：与原手拼 `json!` **逐字节一致**（含 f64 的 ryu 表示、
+    /// camelCase rename、bool 字面量）。这条测试就是「迁移没动报文」的证明。
+    #[test]
+    fn struct_bytes_equal_legacy_json_macro() {
+        let it = item();
+        let legacy = json!({
+            "lon": it.lon, "lat": it.lat, "isFixed": it.is_fixed,
+            "pointName": it.point_name, "glon": it.glon, "glat": it.glat,
+            "position": it.position, "flag": it.flag, "id": it.id,
+            "isPass": it.is_pass, "state": it.state,
+        });
+        assert_eq!(
+            serde_json::to_string(&it).unwrap(),
+            serde_json::to_string(&legacy).unwrap(),
+            "struct 与手拼 json! 的字节必须完全一致"
+        );
     }
 }
