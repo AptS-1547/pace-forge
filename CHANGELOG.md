@@ -17,6 +17,20 @@
 
 ### 变更
 
+- **[行为变化]** 配置系统重写（#53）：新增 `config.toml`（搜索 `./config.toml` →
+  `~/.pace-forge/config.toml`，或 `--config <路径>` / `PACE_CONFIG` 指定），
+  优先级 `PACE_* 环境变量 > config.toml > 默认值`。配置拆进独立 crate
+  `crates/pace-forge-config`：21 个开关（含旧清单漏掉的
+  `PACE_EXTRA_CA`/`PACE_IGNORE_DAILY_LIMIT`/`PACE_PREFER_STADIUM`/
+  `PACE_CENTER_LAT`/`PACE_CENTER_LNG`/`PACE_FIXED_POINT`/
+  `PACE_FORCE_NORMAL_POINT`）一张注册表同时服务 TOML 解析、env 解析和
+  `pace-forge config` 打表，表还会显示每个值来自哪一层。env 名全部保留，
+  老用法不破。**系统性语义变更：非法值从「静默回落默认」改为「启动报错」**
+  ——包括配置文件未知键（防拼写错误）、词汇外的枚举值、缺一半的
+  `PACE_CENTER_LAT/LNG`（旧版静默忽略）。布尔开关词汇统一为
+  0/1、true/false、yes/no（大小写不敏感；旧版各键口径不一，文档里写过的
+  值行为不变）。`pace-forge config` 仍会打表，`PACE_DUMP_POLICY` 为空串不再
+  被当成目录名。`config.example.toml` 进仓库。
 - **[行为变化]** 源码整体搬进 `src/`（`api/` `crypto/` `track/` `web/` 及入口文件），`data/`、`tests/`、`docs/` 位置不变；对外行为不变（#38）
 - **[行为变化]** 升到 edition 2024 + rand 0.9，并用 `rust-toolchain.toml` 把工具链钉在 1.99.1。同 seed 下 planner 与配速剖面的输出 hash 与升级前逐字节一致（#38）
 - **[行为变化]** `semester` 在 `goalMethod=2` 的学校（服务端次数恒 0）多打一行本地反算：
@@ -35,6 +49,8 @@
 
 ### 修复
 
+- **[仅修复]** `PACE_IGNORE_DAILY_LIMIT=0` 现在是「不绕过日上限」。旧实现用存在性判断（`is_ok()`），设成 `0`、`false`、空串之外的任何值都会**开启**绕过——想关都关不掉
+- **[仅修复]** `key_sources_fall_back_past_the_posix_defaults` 在没有机器标识取源的机器上（macOS：无 `/etc/machine-id`、`/etc/hostname`，未设 `COMPUTERNAME`）跳过，不再让 `cargo test` 在开发机常红
 - **[仅修复]** 打卡点回钉改为按数组次序（`pin_checkpoints_in_order`）：无序遍历会把「去 #2 途中擦过 #4」的 #4 钉在前面，首过次序变成 0,2,3,4,1，服务端按顺序判定直接失败。钉不进次序的会报出距路径多少米。**只跑过单测，夜间点位接口限流（10603）拿不到打卡点，还没真机复测。**
 - **[仅修复]** 路网 A* 对「未轮到的打卡点」改为硬禁（12m 半径，走不通再退回软罚）：原来 25m 半径 + ×5 软罚在单校主路上等于没禁，实测 5 点位仍被判首过乱序。**同上，只跑过单测。**
 - **[仅修复]** `suggest` 补一条出口建议（三个风控维度里唯一能当场查的）
