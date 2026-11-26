@@ -277,11 +277,11 @@ const PW_V2_PREFIX: &str = "v2:";
 /// 盐和 IV 每条都重新随机，因此**同一密码每次密文都不同**，从 `accounts.json`
 /// 看不出哪些账号用了相同密码。
 pub fn seal_password(plain: &str) -> Result<String, String> {
-    use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
     type Enc = cbc::Encryptor<aes::Aes128>;
 
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut salt = [0u8; 16];
     let mut iv = [0u8; 16];
     rng.fill(&mut salt);
@@ -305,7 +305,7 @@ pub fn seal_password(plain: &str) -> Result<String, String> {
 /// 先按当前机器密钥解；解不开再退回旧派生方式——旧版写在盘上的库是用
 /// 旧 key 加的密，不兜这一层，换 key 当天老用户就登不进去。
 pub fn open_password(enc: &str) -> Result<String, String> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     type Dec = cbc::Decryptor<aes::Aes128>;
 
     use base64::Engine;
@@ -442,7 +442,7 @@ pub(crate) fn clear_tokens_in(base: &Path) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{assert_isolated, TestDir};
+    use crate::test_support::{TestDir, assert_isolated};
 
     #[test]
     fn password_roundtrip() {
@@ -607,7 +607,7 @@ mod tests {
     /// 用旧派生方式加密的库必须还能读：老用户盘上就是这种密文。
     #[test]
     fn still_opens_ciphertext_sealed_with_legacy_key() {
-        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
         type Enc = cbc::Encryptor<aes::Aes128>;
         use base64::Engine;
 

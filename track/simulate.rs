@@ -19,9 +19,9 @@
 //! 三个量由同一个速度序列派生，**互相自洽**，不存在对不上的可能。
 
 use super::biomech::{fatigue_from_km, ou_cadence_series};
-use super::buckets::{speed_buckets, SpeedBucket, StepBucket};
+use super::buckets::{SpeedBucket, StepBucket, speed_buckets};
 use super::geo::{distance, path_length};
-use super::kinematics::{pace_profile, KinParams};
+use super::kinematics::{KinParams, pace_profile};
 
 /// 合成参数。
 #[derive(Debug, Clone)]

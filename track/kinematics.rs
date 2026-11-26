@@ -18,14 +18,14 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use super::geo::{distance, m_per_deg_lng, M_PER_DEG_LAT};
+use super::geo::{M_PER_DEG_LAT, distance, m_per_deg_lng};
 
 /// 标准正态抽样（Box-Muller）。
 ///
 /// 不引 `rand_distr`：它要额外拉依赖，而这里只需要一个标准正态。
 fn normal_sample(rng: &mut impl rand::Rng) -> f64 {
-    let u1 = rng.gen::<f64>().max(1e-12);
-    let u2 = rng.gen::<f64>();
+    let u1 = rng.random::<f64>().max(1e-12);
+    let u2 = rng.random::<f64>();
     (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
 }
 
@@ -285,7 +285,7 @@ pub fn pace_profile(
     // 位置随机、避开首尾各 5%（起步窗口和收尾冲刺本来就慢/快，再塞停顿
     // 会连成一片），一次 1~2 个，与真机 114 点里那 1 个同量级。
     if n >= 20 && stall_gain > 0.0 {
-        let stalls = if rng.gen::<f64>() < 0.65 { 1 } else { 2 };
+        let stalls = if rng.random::<f64>() < 0.65 { 1 } else { 2 };
         // 下界不能只按比例：`submit` 里起步窗口内的点 `v_mps` 被强制 0
         // （真机前 18 点就是 0），停顿点落进去等于没停——配速写 0，不进极值，
         // 纵轴照样撑不开。起步窗口约 20 点，所以下界至少 20。
@@ -294,10 +294,10 @@ pub fn pace_profile(
         if hi > lo {
             let mut stalled: Vec<usize> = Vec::new();
             for _ in 0..stalls {
-                let idx = lo + (rng.gen::<f64>() * (hi - lo) as f64) as usize;
+                let idx = lo + (rng.random::<f64>() * (hi - lo) as f64) as usize;
                 if idx < w.len() && !stalled.contains(&idx) {
                     // 真机那个点 0.06 m/s；取一个同样量级但不等于它的值
-                    w[idx] = (0.055 + rng.gen::<f64>() * 0.05) * stall_gain;
+                    w[idx] = (0.055 + rng.random::<f64>() * 0.05) * stall_gain;
                     stalled.push(idx);
                 }
             }
@@ -576,7 +576,7 @@ mod tests {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
         let mut rng = StdRng::seed_from_u64(42);
-        let noise: Vec<f64> = (0..500).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let noise: Vec<f64> = (0..500).map(|_| rng.random_range(-1.0..1.0)).collect();
         let r1 = lag1_autocorr(&noise);
         let bound = noise_upper_bound(noise.len());
         assert!(

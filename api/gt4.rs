@@ -14,7 +14,7 @@
 //! 注意：这条链路直连 `gcaptcha4.geetest.com`，**不经过**运动世界的加密信封。
 
 use rand::Rng;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::gt4image::get_distance_original;
@@ -63,7 +63,7 @@ fn gee_rsa_public_key() -> rsa::RsaPublicKey {
 
 /// 4 个随机 hex 字符。
 fn four_random_chart(rng: &mut impl Rng) -> String {
-    let v = (65536.0 * (1.0 + rng.gen::<f64>())) as u32;
+    let v = (65536.0 * (1.0 + rng.random::<f64>())) as u32;
     let s = format!("{v:x}");
     s[1..5].to_string()
 }
@@ -88,7 +88,7 @@ fn get_pow_nonce(
     log: &mut dyn FnMut(&str),
 ) -> Result<String, String> {
     const HEX: &[u8] = b"0123456789abcdef";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut attempts = 0u64;
     loop {
         // 上限检查放在**掷骰子之前**。原来的顺序是先算一把哈希、再查上限，
@@ -99,7 +99,9 @@ fn get_pow_nonce(
         if attempts >= max_attempts {
             return Err(format!("PoW 超过 {max_attempts} 次仍未找到 nonce"));
         }
-        let nonce: String = (0..16).map(|_| HEX[rng.gen_range(0..16)] as char).collect();
+        let nonce: String = (0..16)
+            .map(|_| HEX[rng.random_range(0..16)] as char)
+            .collect();
         let mut hasher = Sha256::new();
         hasher.update(pow_msg_base.as_bytes());
         hasher.update(nonce.as_bytes());
@@ -156,9 +158,14 @@ fn bytes_to_hex(data: &[u8]) -> String {
 
 /// RSA PKCS1v15 加密 → hex。
 fn encrypt_data(pub_key: &rsa::RsaPublicKey, plaintext: &str) -> String {
-    let mut rng = rand::thread_rng();
+    // rsa 0.9 still consumes rand_core 0.6, which is a different type from rand 0.9's
+    // ThreadRng; Pkcs1v15 encryption is deterministic anyway, so hand it rsa's OsRng.
     let ct = pub_key
-        .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, plaintext.as_bytes())
+        .encrypt(
+            &mut rsa::rand_core::OsRng,
+            rsa::Pkcs1v15Encrypt,
+            plaintext.as_bytes(),
+        )
         .expect("GT4 RSA 加密失败");
     bytes_to_hex(&ct)
 }
@@ -271,7 +278,7 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
 
     let pow_msg = get_pow_msg(&pow_detail, captcha_id, &lot_number, log)?;
     let pow_sign = get_pow_sign(&pow_msg);
-    let str16 = get_str_16(&mut rand::thread_rng());
+    let str16 = get_str_16(&mut rand::rng());
     let w = get_w(dist, &lot_number, &pow_msg, &pow_sign, &str16)?;
 
     let cb = format!("geetest_{}", crate::crypto::envelope::now_ms());
@@ -346,7 +353,7 @@ mod tests {
         let pk = gee_rsa_public_key();
         assert_eq!(pk.e().to_bytes_be(), vec![1, 0, 1]); // 65537
         assert!(pk.size() >= 128, "GT4 key size={}", pk.size());
-        let s = get_str_16(&mut rand::thread_rng());
+        let s = get_str_16(&mut rand::rng());
         assert_eq!(s.len(), 16);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
     }

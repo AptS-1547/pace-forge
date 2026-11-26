@@ -18,15 +18,15 @@
 //! - AES key 每次请求随机，用 RSA-1024 公钥按 PKCS#1 v1.5 加密后放在 `k`
 //! - 内层 JSON 字段顺序和末尾换行都不能改，否则 MD5 对不上
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use md5::{Digest, Md5};
 use rand::Rng;
+use rsa::RsaPublicKey;
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs1v15::Pkcs1v15Encrypt;
-use rsa::RsaPublicKey;
 
-use super::consts::{KEYDATA_TAIL, KEY_ALPHABET, PROTO_VERSION, REQ_RSA_PKCS1_B64};
+use super::consts::{KEY_ALPHABET, KEYDATA_TAIL, PROTO_VERSION, REQ_RSA_PKCS1_B64};
 use super::kdf::response_kdf;
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
@@ -48,10 +48,10 @@ pub struct SessionKeys {
 impl SessionKeys {
     /// 生成新会话：32 位 hex UUID + 固定尾巴，切成四段。
     pub fn generate() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // 取 uuid4 去横线，即 32 位 hex
         let raw: String = (0..32)
-            .map(|_| format!("{:x}", rng.gen_range(0..16u8)))
+            .map(|_| format!("{:x}", rng.random_range(0..16u8)))
             .collect();
         let candidate = format!("{raw}{KEYDATA_TAIL}");
         let kd1 = candidate[0..10].to_string();
@@ -133,9 +133,9 @@ pub fn seal_full(
     let h = format!("{:x}", hasher.finalize());
 
     // 4. 随机 AES-128 key
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let req_key: Vec<u8> = (0..16)
-        .map(|_| KEY_ALPHABET[rng.gen_range(0..KEY_ALPHABET.len())])
+        .map(|_| KEY_ALPHABET[rng.random_range(0..KEY_ALPHABET.len())])
         .collect();
 
     // 5. AES-128-CBC，IV 全零
@@ -150,7 +150,7 @@ pub fn seal_full(
         .map_err(|e| format!("公钥 base64 解码失败: {e}"))?;
     let pubkey = RsaPublicKey::from_pkcs1_der(&der).map_err(|e| format!("公钥解析失败: {e}"))?;
     let enc_key = pubkey
-        .encrypt(&mut rng, Pkcs1v15Encrypt, &req_key)
+        .encrypt(&mut rsa::rand_core::OsRng, Pkcs1v15Encrypt, &req_key)
         .map_err(|e| format!("RSA 加密失败: {e}"))?;
     let k = B64.encode(&enc_key);
 

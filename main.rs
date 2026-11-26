@@ -229,7 +229,9 @@ fn main() {
             println!("  pace-forge run [km] [min] [-y] 刷跑并提交（-y 跳过确认）");
             println!("  pace-forge run-free [km] [min] [-y]  户外跑（=自由跑，不计成绩）");
             println!("  pace-forge ai-list             AI 运动项目列表");
-            println!("  pace-forge ai <id> <成绩> [--minutes] [--days N] [-y]  AI 运动提交（--days 补签）");
+            println!(
+                "  pace-forge ai <id> <成绩> [--minutes] [--days N] [-y]  AI 运动提交（--days 补签）"
+            );
             println!("  pace-forge ai-records <id> [N] AI 运动记录");
             println!("  pace-forge check [km] [min]    离线体检轨迹（不联网、不登录）");
             println!("  pace-forge dry [km] [min]      只预演，不提交（要登录）");
@@ -242,13 +244,19 @@ fn main() {
             println!(
                 "  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合"
             );
-            println!("  pace-forge export-records [N] [out.json]  导出最近 N 条记录（含轨迹）给 crosscheck");
+            println!(
+                "  pace-forge export-records [N] [out.json]  导出最近 N 条记录（含轨迹）给 crosscheck"
+            );
             println!(
                 "  pace-forge audit <json>        账号体检：连续性/时段/离散/重合，命中只提示"
             );
             println!("  pace-forge suggest <json>      同上，再加一段「下一条怎么跑」的动作建议");
-            println!("  pace-forge review [N]        逐条查审核状态（status/isCheat/appeal），默认 10 条");
-            println!("  pace-forge tracks <json> [--top N]  两两重合矩阵，区分同向与反向；--top 只看前 N 对");
+            println!(
+                "  pace-forge review [N]        逐条查审核状态（status/isCheat/appeal），默认 10 条"
+            );
+            println!(
+                "  pace-forge tracks <json> [--top N]  两两重合矩阵，区分同向与反向；--top 只看前 N 对"
+            );
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
@@ -336,9 +344,10 @@ fn dry_run(dist_km: f64, dur_min: f64) {
 /// 完全离线的轨迹体检：不登录、不联网，只看本地合成的数据像不像真跑。
 fn local_check(dist_km: f64, dur_min: f64) {
     use pace_forge::track::{
+        KinParams, SimParams, StadiumSpec,
         buckets::{make_jitter, speed_buckets},
-        detect::{inspect, PointRule},
-        simulate, KinParams, SimParams, StadiumSpec,
+        detect::{PointRule, inspect},
+        simulate,
     };
 
     let total_m = dist_km * 1000.0;
@@ -625,7 +634,9 @@ fn read_audit_records(
 ) -> Vec<pace_forge::api::crosscheck::RunRecord> {
     use pace_forge::api::crosscheck as cc;
     let Some(path) = file else {
-        eprintln!("用法: {usage}\n文件可以是 JSON 数组，也可以是 {{\"records\":[...]}}，（`pace-forge export-records` 导出的就是后者）。");
+        eprintln!(
+            "用法: {usage}\n文件可以是 JSON 数组，也可以是 {{\"records\":[...]}}，（`pace-forge export-records` 导出的就是后者）。"
+        );
         std::process::exit(2);
     };
     let text = match std::fs::read_to_string(path) {
@@ -868,7 +879,9 @@ fn do_tracks(file: Option<&str>, top: Option<usize>) {
 fn do_crosscheck(file: Option<&str>) {
     use pace_forge::api::crosscheck as cc;
     let Some(path) = file else {
-        eprintln!("用法: pace-forge crosscheck <records.json>\n文件可以是 JSON 数组，也可以是包含 records/list 数组的对象。");
+        eprintln!(
+            "用法: pace-forge crosscheck <records.json>\n文件可以是 JSON 数组，也可以是包含 records/list 数组的对象。"
+        );
         std::process::exit(2);
     };
     let text = match std::fs::read_to_string(path) {
@@ -1192,14 +1205,14 @@ fn show_semester() {
                 println!("  · 本校按里程考核，服务端不统计次数（上面的 0 次不是查询失败）");
                 // 服务端不给，就按记录列表自己数：每条带 validDis/sportType，
                 // 按学期起止筛一遍即可（不做日上限假设，次数不受上限影响）。
-                if let Ok(g) = goal.as_ref() {
-                    if g.begin_ms > 0 {
-                        match semester::derived_count(&client, g.begin_ms, g.end_ms) {
-                            Ok((runs, days)) => println!(
-                                "  · 本地按记录反算：{runs} 次计分跑分布在 {days} 天（仅供参考）"
-                            ),
-                            Err(e) => println!("  · 本地反算失败：{e}"),
-                        }
+                if let Ok(g) = goal.as_ref()
+                    && g.begin_ms > 0
+                {
+                    match semester::derived_count(&client, g.begin_ms, g.end_ms) {
+                        Ok((runs, days)) => println!(
+                            "  · 本地按记录反算：{runs} 次计分跑分布在 {days} 天（仅供参考）"
+                        ),
+                        Err(e) => println!("  · 本地反算失败：{e}"),
                     }
                 }
             }
@@ -1355,7 +1368,7 @@ fn run_with_start(
 
 fn stadium_probe(laps: f64, lane: u8) {
     use pace_forge::track::{
-        arc_and_curvature, lap_length, path_length, stadium_track, StadiumSpec,
+        StadiumSpec, arc_and_curvature, lap_length, path_length, stadium_track,
     };
 
     let spec = StadiumSpec::new(30.5, 104.0).with_lane(lane);
@@ -1448,7 +1461,7 @@ fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
     use rand::Rng;
     let now = pace_forge::crypto::envelope::now_ms() as i64;
     let dur_s = (dur_min * 60.0).round() as i64;
-    let r: f64 = rand::thread_rng().gen();
+    let r: f64 = rand::rng().random();
     let st = match st_mod::random_in_day(now, days, dur_s, r) {
         Ok(v) => v,
         Err(e) => {
@@ -1499,7 +1512,9 @@ fn do_ai_list() {
 fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
     use pace_forge::api::ai::{self, AiMode};
     if sport <= 0 || score <= 0 {
-        eprintln!("用法: pace-forge ai <项目id> <成绩> [--minutes] [--days N] [-y]\n先用 ai-list 查项目 id");
+        eprintln!(
+            "用法: pace-forge ai <项目id> <成绩> [--minutes] [--days N] [-y]\n先用 ai-list 查项目 id"
+        );
         std::process::exit(2);
     }
     let client = ai_client();
@@ -1536,7 +1551,7 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
                 ((score as f64 / 90.0) * 60.0) as i64
             }
             .max(30);
-            let r: f64 = rand::thread_rng().gen();
+            let r: f64 = rand::rng().random();
             match st_mod::random_in_day(now, d, dur_s, r) {
                 Ok(st) => Some(st.ms),
                 Err(e) => {

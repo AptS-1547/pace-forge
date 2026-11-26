@@ -10,9 +10,9 @@
 //! score=用时毫秒、speed=个/分、消耗=秒×0.2；坐位体前屈(id=16)消耗为 0。
 //! `scoreDate` 填过去时刻即可补签（neko GUI 支持前 60 天批量）。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, uuid_v4, Client};
+use super::client::{Client, expect_ok, uuid_v4};
 use crate::crypto::consts::hosts;
 
 pub const AI_LIST_PATH: &str = "/api/v1/sport/ai/list";
@@ -158,7 +158,7 @@ pub fn upload(
     use rand::Rng;
     let info = fetch_info(client, sport_id);
     let now = crate::crypto::envelope::now_ms() as i64;
-    let jitter = 0.9 + rand::thread_rng().gen::<f64>() * 0.2;
+    let jitter = 0.9 + rand::rng().random::<f64>() * 0.2;
     let body = record_fields(info.sport_type, mode, sport_id, jitter, now, at, &uuid_v4());
     let raw = client.request(
         "POST",

@@ -11,9 +11,9 @@
 //! 列表接口不含轨迹；详情接口是否含轨迹取决于服务端配置。
 //! 前端对原始 JSON 做自动探测，遇到坐标数组就画地图，所以这里原样透传 `raw`。
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use super::client::{expect_ok, Client};
+use super::client::{Client, expect_ok};
 
 /// 服务端字段名 → 统一字段名的别名表。
 ///
@@ -48,10 +48,10 @@ fn pick_num(obj: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
             Value::String(s) => s.trim().parse::<f64>().ok(),
             _ => None,
         };
-        if let Some(n) = n {
-            if n > 0.0 {
-                return Some(n);
-            }
+        if let Some(n) = n
+            && n > 0.0
+        {
+            return Some(n);
         }
     }
     None
@@ -68,11 +68,7 @@ fn has_num(obj: &Map<String, Value>, k: &str) -> bool {
 /// 服务端有的版本给米、有的接口给公里（2 还是 2000），单看数字分不清。
 /// 判据取 200：跑步记录最短 0.5 km = 500 m，任何小于 200 的正数都不可能是米。
 fn to_meters(n: f64) -> f64 {
-    if n > 0.0 && n < 200.0 {
-        n * 1000.0
-    } else {
-        n
-    }
+    if n > 0.0 && n < 200.0 { n * 1000.0 } else { n }
 }
 
 /// 给一条记录补上统一字段，原始字段原样保留。
@@ -80,44 +76,44 @@ pub fn normalize_record(r: &mut Value) {
     let Some(obj) = r.as_object() else { return };
     let mut add: Vec<(String, Value)> = Vec::new();
 
-    if !has_num(obj, "totalDistance") {
-        if let Some(d) = pick_num(obj, DIST_ALIASES) {
-            let m = to_meters(d);
-            add.push(("totalDistance".into(), json!(m.round() as i64)));
-            add.push((
-                "distanceKm".into(),
-                json!((m / 1000.0 * 100.0).round() / 100.0),
-            ));
-        }
+    if !has_num(obj, "totalDistance")
+        && let Some(d) = pick_num(obj, DIST_ALIASES)
+    {
+        let m = to_meters(d);
+        add.push(("totalDistance".into(), json!(m.round() as i64)));
+        add.push((
+            "distanceKm".into(),
+            json!((m / 1000.0 * 100.0).round() / 100.0),
+        ));
     }
-    if !has_num(obj, "validDistance") {
-        if let Some(d) = pick_num(obj, VALID_DIST_ALIASES) {
-            add.push(("validDistance".into(), json!(to_meters(d).round() as i64)));
-        }
+    if !has_num(obj, "validDistance")
+        && let Some(d) = pick_num(obj, VALID_DIST_ALIASES)
+    {
+        add.push(("validDistance".into(), json!(to_meters(d).round() as i64)));
     }
-    if !has_num(obj, "totalTime") {
-        if let Some(t) = pick_num(obj, TIME_ALIASES) {
-            add.push(("totalTime".into(), json!(t.round() as i64)));
-        }
+    if !has_num(obj, "totalTime")
+        && let Some(t) = pick_num(obj, TIME_ALIASES)
+    {
+        add.push(("totalTime".into(), json!(t.round() as i64)));
     }
-    if !has_num(obj, "validTime") {
-        if let Some(t) = pick_num(obj, VALID_TIME_ALIASES) {
-            add.push(("validTime".into(), json!(t.round() as i64)));
-        }
+    if !has_num(obj, "validTime")
+        && let Some(t) = pick_num(obj, VALID_TIME_ALIASES)
+    {
+        add.push(("validTime".into(), json!(t.round() as i64)));
     }
-    if !has_num(obj, "avgStepFreq") {
-        if let Some(f) = pick_num(obj, &["avgStepFreq", "avg_step_freq", "stepFreq"]) {
-            add.push(("avgStepFreq".into(), json!(f.round() as i64)));
-        }
+    if !has_num(obj, "avgStepFreq")
+        && let Some(f) = pick_num(obj, &["avgStepFreq", "avg_step_freq", "stepFreq"])
+    {
+        add.push(("avgStepFreq".into(), json!(f.round() as i64)));
     }
 
     // 列表里的「是否达标」是 complete（bool）。前端曾经读 isValid/status，
     // 两个字段服务端都不给，于是每条都显示「未达标」。
     // 这里额外补一个 completed，任何视图只读它就不会再猜错。
-    if obj.get("completed").is_none() {
-        if let Some(c) = obj.get("complete").and_then(|v| v.as_bool()) {
-            add.push(("completed".into(), json!(c)));
-        }
+    if obj.get("completed").is_none()
+        && let Some(c) = obj.get("complete").and_then(|v| v.as_bool())
+    {
+        add.push(("completed".into(), json!(c)));
     }
 
     if let Some(obj) = r.as_object_mut() {

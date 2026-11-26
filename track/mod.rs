@@ -16,19 +16,19 @@ pub mod stadium;
 pub mod tileroad;
 
 pub use biomech::{
-    cadence_for, fatigue_from_km, gait, ou_cadence_series, speed_from, stride_for, Gait,
+    Gait, cadence_for, fatigue_from_km, gait, ou_cadence_series, speed_from, stride_for,
 };
-pub use buckets::{make_jitter, speed_buckets, step_buckets, SpeedBucket, StepBucket};
+pub use buckets::{SpeedBucket, StepBucket, make_jitter, speed_buckets, step_buckets};
 pub use geo::{distance, path_length, sample_along, scale_to_length};
 pub use kinematics::{
-    arc_and_curvature, pace_profile, speed_limit_ahead, turn_speed_limit, KinParams,
+    KinParams, arc_and_curvature, pace_profile, speed_limit_ahead, turn_speed_limit,
 };
-pub use planner::{assign_times, plan, Checkpoint, PlanRequest, PlanResult, TrackPoint};
-pub use preflight::{inspect, inspect_at, Check, Issue, Level, Report};
-pub use simulate::{retime, simulate, validate, SimParams, SimResult};
+pub use planner::{Checkpoint, PlanRequest, PlanResult, TrackPoint, assign_times, plan};
+pub use preflight::{Check, Issue, Level, Report, inspect, inspect_at};
+pub use simulate::{SimParams, SimResult, retime, simulate, validate};
 pub use stadium::{
-    campus_oval_track, lane_radius, lap_length, looks_like_stadium, random_oval, stadium_track,
-    OvalSpec, StadiumSpec,
+    OvalSpec, StadiumSpec, campus_oval_track, lane_radius, lap_length, looks_like_stadium,
+    random_oval, stadium_track,
 };
 
 /// 起步漂移段占全程的比例。
@@ -1709,8 +1709,8 @@ mod checkpoint_hit_tests {
     //! （docs/audit/AUDIT-round.md A1）用同一组数据，改前改后的数字可以直接对。
 
     use super::*;
-    use crate::api::submit::{build, verify_view, SubmitParams};
-    use crate::track::preflight::{inspect, Check};
+    use crate::api::submit::{SubmitParams, build, verify_view};
+    use crate::track::preflight::{Check, inspect};
     use rand::SeedableRng;
 
     const START_MS: i64 = 1_790_913_882_164;

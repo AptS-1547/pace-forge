@@ -8,12 +8,12 @@
 //!
 //! 还有限流：**5 分钟 3 次**（错误码 10603）。所以必须有缓存，不能每次跑都拉。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, Client};
+use super::client::{Client, expect_ok};
 use super::policy::point_xy;
-use crate::crypto::consts::{hosts, SIGN_SALT};
-use crate::crypto::envelope::{now_ms, seal_with_order, OuterOrder};
+use crate::crypto::consts::{SIGN_SALT, hosts};
+use crate::crypto::envelope::{OuterOrder, now_ms, seal_with_order};
 
 /// 点位接口路径（默认形态：`distance/1`）。
 pub const POINTS_PATH: &str = "/api/v560/get/1/distance/1";
@@ -185,10 +185,10 @@ fn extract_points_depth(payload: &Value, depth: usize) -> Result<Vec<Value>, Str
     }
     // 再试一层嵌套
     for wrapper in ["result", "data"] {
-        if let Some(inner) = payload.get(wrapper) {
-            if inner.get("pointsResModels").is_some() {
-                return extract_points_depth(inner, depth + 1);
-            }
+        if let Some(inner) = payload.get(wrapper)
+            && inner.get("pointsResModels").is_some()
+        {
+            return extract_points_depth(inner, depth + 1);
         }
     }
     Ok(Vec::new())
@@ -260,15 +260,14 @@ impl Cache {
             // 先丢过期的；还有满的才动刀丢最早过期的那个，绝不整表清空
             self.map
                 .retain(|_, (at, _)| at.elapsed().as_secs() < CACHE_TTL_SECS);
-            if self.map.len() >= CACHE_MAX_ENTRIES {
-                if let Some(oldest) = self
+            if self.map.len() >= CACHE_MAX_ENTRIES
+                && let Some(oldest) = self
                     .map
                     .iter()
                     .min_by_key(|(_, (at, _))| *at)
                     .map(|(k, _)| k.clone())
-                {
-                    self.map.remove(&oldest);
-                }
+            {
+                self.map.remove(&oldest);
             }
         }
         self.map
@@ -338,10 +337,10 @@ pub fn fetch_points_cached_at(
 
 /// 手动清缓存（换围栏时用，或者排查「点位怎么和上次不一样」）。
 pub fn clear_cache() {
-    if let Ok(mut g) = CACHE.lock() {
-        if let Some(c) = g.as_mut() {
-            c.map.clear();
-        }
+    if let Ok(mut g) = CACHE.lock()
+        && let Some(c) = g.as_mut()
+    {
+        c.map.clear();
     }
 }
 

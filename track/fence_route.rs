@@ -268,11 +268,7 @@ fn detour_around(
             .copied()
             .filter(|p| {
                 let sd = side(*p);
-                if want_left {
-                    sd > 0.0
-                } else {
-                    sd < 0.0
-                }
+                if want_left { sd > 0.0 } else { sd < 0.0 }
             })
             .collect();
         if vs.is_empty() {
@@ -356,15 +352,16 @@ pub fn avoid_blockers(
             dp.partial_cmp(&dq).unwrap_or(std::cmp::Ordering::Equal)
         });
         for poly in hits {
-            if !point_in_poly(poly, cur) && seg_crosses_poly(cur, b, poly) {
-                if let Some(path) = detour_around(cur, b, poly, margin_m) {
-                    for p in path.into_iter().skip(1) {
-                        if p != b {
-                            out.push(p);
-                        }
+            if !point_in_poly(poly, cur)
+                && seg_crosses_poly(cur, b, poly)
+                && let Some(path) = detour_around(cur, b, poly, margin_m)
+            {
+                for p in path.into_iter().skip(1) {
+                    if p != b {
+                        out.push(p);
                     }
-                    cur = *out.last().unwrap();
                 }
+                cur = *out.last().unwrap();
             }
         }
         out.push(b);

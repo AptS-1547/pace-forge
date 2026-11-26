@@ -15,12 +15,12 @@
 //! **验签默认强制**（fail-closed）：验不过就报错，不返回可能被篡改的数据。
 //! 这与上游实现一致——宁可失败，也不要静默接受一个来路不明的响应。
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use md5::{Digest, Md5};
+use rsa::RsaPublicKey;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::traits::PublicKeyParts;
-use rsa::RsaPublicKey;
 
 use super::consts::RESP_VERIFY_SPKI_B64;
 use super::envelope::SessionKeys;

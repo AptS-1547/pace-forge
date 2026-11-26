@@ -47,7 +47,7 @@
 
 use aes::Aes256;
 use base64::Engine;
-use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use sha2::{Digest, Sha256};
 
 /// AES-256 固定密钥。
@@ -110,7 +110,7 @@ pub const SCENE_RUN: u32 = 7;
 pub fn random4() -> [u8; 4] {
     use rand::RngCore;
     let mut b = [0u8; 4];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng().fill_bytes(&mut b);
     b
 }
 

@@ -14,8 +14,8 @@ pub mod geetoken;
 pub mod kdf;
 pub mod sign;
 
-pub use consts::{hosts, CODE_OK, CODE_SERVER_FAULT, SIGN_SALT};
-pub use decrypt::{open, DecryptedResponse};
-pub use envelope::{seal, Envelope, SessionKeys};
+pub use consts::{CODE_OK, CODE_SERVER_FAULT, SIGN_SALT, hosts};
+pub use decrypt::{DecryptedResponse, open};
+pub use envelope::{Envelope, SessionKeys, seal};
 pub use kdf::response_kdf;
-pub use sign::{sport_signature, token_sign, SignFields};
+pub use sign::{SignFields, sport_signature, token_sign};

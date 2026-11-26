@@ -18,7 +18,7 @@
 //! 注意显示侧（web/index.html）拿到的 `ip` 字符串来自外部接口，渲染必须
 //! 走 `textContent`，不许拼 `innerHTML`。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -36,16 +36,14 @@ fn config_path() -> std::path::PathBuf {
 /// 读磁盘上的出口配置（首次调用时加载进运行时）。
 fn load_config_once() -> Option<String> {
     let mut g = runtime_slot().lock().unwrap_or_else(|p| p.into_inner());
-    if g.is_none() {
-        if let Ok(raw) = std::fs::read_to_string(config_path()) {
-            if let Ok(v) = serde_json::from_str::<Value>(&raw) {
-                if let Some(p) = v.get("proxy").and_then(|x| x.as_str()) {
-                    let t = p.trim();
-                    if !t.is_empty() {
-                        *g = Some(t.to_string());
-                    }
-                }
-            }
+    if g.is_none()
+        && let Ok(raw) = std::fs::read_to_string(config_path())
+        && let Ok(v) = serde_json::from_str::<Value>(&raw)
+        && let Some(p) = v.get("proxy").and_then(|x| x.as_str())
+    {
+        let t = p.trim();
+        if !t.is_empty() {
+            *g = Some(t.to_string());
         }
     }
     g.clone()

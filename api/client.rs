@@ -13,8 +13,8 @@
 
 use serde_json::Value;
 
-use crate::crypto::envelope::{seal, SessionKeys};
-use crate::crypto::{decrypt, sign::token_sign, SignFields};
+use crate::crypto::envelope::{SessionKeys, seal};
+use crate::crypto::{SignFields, decrypt, sign::token_sign};
 use sha2::{Digest, Sha256};
 
 /// 可选硬件标识头的开关。
@@ -231,14 +231,29 @@ impl Default for DeviceProfile {
 /// 早先误用 32 位裸 hex，导致 `checkGeeUse` 返回 HTTP 200 + 空 body。
 pub fn uuid_v4() -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut b = [0u8; 16];
     rng.fill(&mut b);
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        b[4],
+        b[5],
+        b[6],
+        b[7],
+        b[8],
+        b[9],
+        b[10],
+        b[11],
+        b[12],
+        b[13],
+        b[14],
+        b[15]
     )
 }
 
@@ -266,11 +281,7 @@ pub(crate) fn device_model_path_in(base: &std::path::Path, scope: &str) -> std::
 pub(crate) fn device_model_in(base: &std::path::Path, scope: &str) -> Option<String> {
     let raw = std::fs::read_to_string(device_model_path_in(base, scope)).ok()?;
     let t = raw.trim().to_string();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t)
-    }
+    if t.is_empty() { None } else { Some(t) }
 }
 
 /// 写账号级机型。`None` 或空串表示清掉（回到 ABI）。
@@ -355,9 +366,9 @@ fn short_hash(s: &str) -> String {
 
 fn random_hex32() -> String {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..32)
-        .map(|_| format!("{:x}", rng.gen_range(0..16u8)))
+        .map(|_| format!("{:x}", rng.random_range(0..16u8)))
         .collect()
 }
 
@@ -641,20 +652,23 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{assert_isolated, TestDir};
+    use crate::test_support::{TestDir, assert_isolated};
 
     /// 硬件头开关：**默认空串**（7.4.21 硬编码 `""`），设 `derived` 才发假值。
     #[test]
     fn hw_headers_default_empty_derived_on_demand() {
-        std::env::remove_var("PACE_DEVICE_HW_HEADERS");
-        assert_eq!(
-            hw_id("abc"),
-            "",
-            "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）"
-        );
-        std::env::set_var("PACE_DEVICE_HW_HEADERS", "derived");
-        assert_eq!(hw_id("abc"), "abc", "derived 时应发派生假值");
-        std::env::remove_var("PACE_DEVICE_HW_HEADERS");
+        // edition 2024 要求 env 写操作显式 unsafe（多线程下改 env 不安全）；本测试只在这一个用例里读写这个变量。
+        unsafe {
+            std::env::remove_var("PACE_DEVICE_HW_HEADERS");
+            assert_eq!(
+                hw_id("abc"),
+                "",
+                "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）"
+            );
+            std::env::set_var("PACE_DEVICE_HW_HEADERS", "derived");
+            assert_eq!(hw_id("abc"), "abc", "derived 时应发派生假值");
+            std::env::remove_var("PACE_DEVICE_HW_HEADERS");
+        }
         assert_eq!(hw_id("abc"), "");
     }
 

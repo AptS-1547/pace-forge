@@ -11,9 +11,9 @@
 //! - `POST /api/v55/runnings/recordssummary/semester`  学期汇总
 //! - `POST /api/v41/running/getPersonalSemesterInfo`   个人目标（含起止日期）
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, Client};
+use super::client::{Client, expect_ok};
 use crate::crypto::consts::hosts;
 
 /// 学期汇总路径。

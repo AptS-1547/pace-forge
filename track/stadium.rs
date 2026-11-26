@@ -18,7 +18,7 @@
 //! 真实跑者还会**换道**：外道内道距不同，第 n 道半径 = 36.5 + 1.22×(n−1)。
 //! 这里支持指定道次，并按道次换算圈长。
 
-use super::geo::{m_per_deg_lng, M_PER_DEG_LAT};
+use super::geo::{M_PER_DEG_LAT, m_per_deg_lng};
 
 /// 标准 400m 跑道的几何常数（米）。
 pub mod spec {
@@ -167,14 +167,14 @@ pub struct OvalSpec {
 pub fn random_oval(distance_m: f64, seed: u64) -> OvalSpec {
     use rand::{Rng, SeedableRng};
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let big = rng.gen_bool(0.15);
+    let big = rng.random_bool(0.15);
     let (straight, radius) = if big {
-        (rng.gen_range(115.0..130.0), rng.gen_range(30.0..34.0))
+        (rng.random_range(115.0..130.0), rng.random_range(30.0..34.0))
     } else {
-        (rng.gen_range(50.0..70.0), rng.gen_range(24.0..28.0))
+        (rng.random_range(50.0..70.0), rng.random_range(24.0..28.0))
     };
     // 朝向：主轴 ~90°（东西向），±8° 抖动
-    let heading = (90.0_f64 + rng.gen_range(-8.0_f64..8.0)).to_radians();
+    let heading = (90.0_f64 + rng.random_range(-8.0_f64..8.0)).to_radians();
     let lap = 2.0 * straight + 2.0 * std::f64::consts::PI * radius;
     let laps = (distance_m / lap).max(1.0);
     OvalSpec {
@@ -221,8 +221,8 @@ pub fn campus_oval_track(
     let theta = 0.15 * (sample_step_m / 14.9);
     let sigma = 1.1 * (sample_step_m / 14.9).sqrt();
     let gauss = |rng: &mut rand::rngs::StdRng| {
-        let u1: f64 = rng.gen::<f64>().max(1e-12);
-        let u2: f64 = rng.gen();
+        let u1: f64 = rng.random::<f64>().max(1e-12);
+        let u2: f64 = rng.random();
         (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
     };
 
@@ -230,8 +230,8 @@ pub fn campus_oval_track(
 
     // 入场尾巴：从跑道起点往场外偏 15~35m 的一点走进来。
     let start = point_at_dim(0.0, straight, radius, heading);
-    let tail_len: f64 = rng.gen_range(15.0..35.0);
-    let tail_ang: f64 = rng.gen_range(0.0..std::f64::consts::TAU);
+    let tail_len: f64 = rng.random_range(15.0..35.0);
+    let tail_ang: f64 = rng.random_range(0.0..std::f64::consts::TAU);
     let entry = (
         start.0 + tail_len * tail_ang.cos(),
         start.1 + tail_len * tail_ang.sin(),

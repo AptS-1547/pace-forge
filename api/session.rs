@@ -128,10 +128,10 @@ pub(crate) fn ensure_dir(dir: &Path) -> Result<(), String> {
 /// 早先 `data_dir()` 带 `create_dir_all` 副作用把它掩盖了；副作用去掉之后，
 /// 这个责任必须显式落在每个写盘路径上。
 pub(crate) fn write_file_private(path: &Path, data: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            ensure_dir(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        ensure_dir(parent)?;
     }
     // 先写同目录临时文件、fsync、再 rename 覆盖目标 —— 这样断电/崩溃时
     // 要么是旧内容，要么是新内容，不会留下「截断到一半」的文件。

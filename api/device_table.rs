@@ -369,10 +369,10 @@ pub fn table() -> &'static Table {
 /// `src` 留空不影响结果：出处是给复核用的，不是准入门槛。
 pub fn soc_for_model(model: &str) -> Option<String> {
     let model = model.trim();
-    if let Some(platform) = user_models().get(model) {
-        if let Some(soc) = soc_for_platform(platform) {
-            return Some(soc.to_string());
-        }
+    if let Some(platform) = user_models().get(model)
+        && let Some(soc) = soc_for_platform(platform)
+    {
+        return Some(soc.to_string());
     }
     let t = table();
     let m = t.models.get(model)?;
@@ -461,21 +461,21 @@ pub fn report() -> String {
     let cur = cpu_model_from_env();
     // 已经按平台代号命中 SoC 时不必再说「目录未命中」——平台代号本来就不在
     // 官方 model code 目录里，那句话只会变成噪音。
-    if cur == ABI_FALLBACK {
-        if let Ok(model) = std::env::var("PACE_DEVICE_MODEL") {
-            let model = model.trim();
-            if model.is_empty() {
-                // 没设，不必提示
-            } else {
-                match catalog_lookup(model) {
-                    Some(e) => out.push_str(&format!(
-                        "  目录命中：{model} → {} {}（codename {}）\n",
-                        e.brand, e.name, e.codename
-                    )),
-                    None => out.push_str(&format!(
-                        "  目录未命中：{model}（不是已知官方 model code，可能是笔误或平台代号）\n"
-                    )),
-                }
+    if cur == ABI_FALLBACK
+        && let Ok(model) = std::env::var("PACE_DEVICE_MODEL")
+    {
+        let model = model.trim();
+        if model.is_empty() {
+            // 没设，不必提示
+        } else {
+            match catalog_lookup(model) {
+                Some(e) => out.push_str(&format!(
+                    "  目录命中：{model} → {} {}（codename {}）\n",
+                    e.brand, e.name, e.codename
+                )),
+                None => out.push_str(&format!(
+                    "  目录未命中：{model}（不是已知官方 model code，可能是笔误或平台代号）\n"
+                )),
             }
         }
     }
@@ -648,9 +648,10 @@ mod tests {
             "排序不对: {names:?}"
         );
         assert!(!list.is_empty());
-        assert!(list
-            .iter()
-            .all(|(_, e)| e.brand.eq_ignore_ascii_case("xiaomi")));
+        assert!(
+            list.iter()
+                .all(|(_, e)| e.brand.eq_ignore_ascii_case("xiaomi"))
+        );
         // 名字去重
         let mut names: Vec<&str> = list.iter().map(|(_, e)| e.name.as_str()).collect();
         let n = names.len();

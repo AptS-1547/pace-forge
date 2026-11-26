@@ -305,10 +305,9 @@ fn cache_get_in(base: &std::path::Path, bbox: (f64, f64, f64, f64)) -> Option<Ro
     if let Ok(age) = meta
         .modified()
         .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+        && age.as_secs() > 7 * 86400
     {
-        if age.as_secs() > 7 * 86400 {
-            return None;
-        }
+        return None;
     }
     let text = std::fs::read_to_string(&path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
@@ -524,10 +523,9 @@ fn poly_cache_get_in(
     if let Ok(age) = meta
         .modified()
         .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+        && age.as_secs() > 30 * 86400
     {
-        if age.as_secs() > 30 * 86400 {
-            return None;
-        }
+        return None;
     }
     let text = std::fs::read_to_string(&path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
@@ -588,10 +586,9 @@ fn water_cache_get_in(
     if let Ok(age) = meta
         .modified()
         .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+        && age.as_secs() > 30 * 86400
     {
-        if age.as_secs() > 30 * 86400 {
-            return None;
-        }
+        return None;
     }
     let text = std::fs::read_to_string(&path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
@@ -1074,7 +1071,7 @@ mod tests {
 
     // ------------------------------------------------------------- 缓存隔离
 
-    use crate::test_support::{assert_isolated, TestDir};
+    use crate::test_support::{TestDir, assert_isolated};
 
     const BBOX: (f64, f64, f64, f64) = (31.230, 101.473, 31.240, 101.484);
 

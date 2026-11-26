@@ -9,9 +9,9 @@
 //!
 //! 正确做法：先判断锚点落在哪个围栏里，只用命中的围栏。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, Client};
+use super::client::{Client, expect_ok};
 use super::coord::bd09_to_gcj02;
 use super::policy::point_xy;
 use crate::crypto::consts::hosts;
@@ -301,10 +301,10 @@ fn fence_diag(v: &Value) -> String {
     if items.is_empty() {
         // 空数组是「配了围栏接口、这个校区没配围栏」，和「形状没见过」
         // 是两种处境，老消息保留
-        if let Value::Array(a) = raw {
-            if a.is_empty() {
-                return "geoFences 是空数组".into();
-            }
+        if let Value::Array(a) = raw
+            && a.is_empty()
+        {
+            return "geoFences 是空数组".into();
         }
         // 什么条目都抠不出来：把实际形状报出来，别让人对着
         // 「既不是数组也不是 JSON 字符串」猜谜。原始内容截一段，
@@ -590,8 +590,8 @@ fn ring_min_distance(ring: &[(f64, f64)], p: (f64, f64)) -> f64 {
     let pt = [p.1 * lng_m, p.0 * LAT_M];
     let mut best = f64::INFINITY;
     for pair in ring.iter().zip(ring.iter().cycle().skip(1)) {
-        let a = [pair.0 .1 * lng_m, pair.0 .0 * LAT_M];
-        let b = [pair.1 .1 * lng_m, pair.1 .0 * LAT_M];
+        let a = [pair.0.1 * lng_m, pair.0.0 * LAT_M];
+        let b = [pair.1.1 * lng_m, pair.1.0 * LAT_M];
         // 点到线段距离
         let ab = [b[0] - a[0], b[1] - a[1]];
         let ap = [pt[0] - a[0], pt[1] - a[1]];
@@ -997,10 +997,12 @@ mod tests {
     fn pass_points_empty_and_garbage() {
         assert!(parse_pass_points(&serde_json::json!({})).is_empty());
         assert!(parse_pass_points(&serde_json::json!({"passPoints": []})).is_empty());
-        assert!(parse_pass_points(&serde_json::json!({
-            "passPoints": [{"lat": 0, "lon": 0}, {"pointName": "无坐标"}]
-        }))
-        .is_empty());
+        assert!(
+            parse_pass_points(&serde_json::json!({
+                "passPoints": [{"lat": 0, "lon": 0}, {"pointName": "无坐标"}]
+            }))
+            .is_empty()
+        );
     }
 
     #[test]

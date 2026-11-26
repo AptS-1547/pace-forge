@@ -396,10 +396,11 @@ mod tests {
         let bs = vec![bucket(0.0), bucket(10.0), bucket(0.0)];
         let r = inspect(&pts, &bs, PointRule::default(), 0);
         assert!(r.blocked());
-        assert!(r
-            .risks
-            .iter()
-            .any(|x| matches!(x, Risk::ZeroBuckets { count: 2 })));
+        assert!(
+            r.risks
+                .iter()
+                .any(|x| matches!(x, Risk::ZeroBuckets { count: 2 }))
+        );
     }
 
     /// 起步窗口里的零桶 / 静止桶不算异常（真机自己就有三个零桶）。
@@ -415,10 +416,11 @@ mod tests {
         // 起步窗口 20 秒 → 只有第一个零桶被豁免，第二个照拦
         let r = inspect(&pts, &bs, PointRule::default(), 20_000);
         assert!(r.blocked(), "窗口后的零桶必须拦");
-        assert!(r
-            .risks
-            .iter()
-            .any(|x| matches!(x, Risk::ZeroBuckets { count: 1 })));
+        assert!(
+            r.risks
+                .iter()
+                .any(|x| matches!(x, Risk::ZeroBuckets { count: 1 }))
+        );
         // 窗口覆盖全部零桶 → 不拦
         let r = inspect(&pts, &bs, PointRule::default(), 60_000);
         assert!(!r.blocked(), "窗口内零桶不该拦：{:?}", r.lines());

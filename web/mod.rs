@@ -12,11 +12,11 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tiny_http::{Header, Method, Response, Server};
 
 use crate::api::client::{Client, DeviceProfile};
-use crate::api::login::{login, LoginOutcome, UserProfile};
+use crate::api::login::{LoginOutcome, UserProfile, login};
 use crate::api::{accounts, records, session};
 
 type Shared = Arc<Mutex<State>>;
@@ -293,10 +293,10 @@ fn make_client(uid: &str, token: &str, unid: &str) -> Client {
 fn device_scope(id_or_username: &str) -> String {
     let book = crate::api::accounts::load();
     // id 命中就直接用 username，保证和登录时一致
-    if let Some(a) = book.accounts.iter().find(|a| a.id == id_or_username) {
-        if !a.username.is_empty() {
-            return a.username.clone();
-        }
+    if let Some(a) = book.accounts.iter().find(|a| a.id == id_or_username)
+        && !a.username.is_empty()
+    {
+        return a.username.clone();
     }
     // 传进来本来就是手机号
     id_or_username.to_string()
@@ -1724,7 +1724,7 @@ fn handle_starttimes(request: tiny_http::Request) -> Result<(), String> {
         }
         "rand" => {
             use rand::Rng;
-            let r: f64 = rand::thread_rng().gen();
+            let r: f64 = rand::rng().random();
             st::random_in_day(now, days, dur_s, r)
         }
         // 现在跑就是现在跑，不参与钳制（前端也不会拿它去弹确认框）
@@ -1794,12 +1794,10 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
             crate::api::semester::SUMMARY_PATH
         ),
         Some(&raw_body),
-    ) {
-        if let Ok(v) = serde_json::from_str::<Value>(&raw) {
-            if let Some(d) = v.get("data") {
-                out.insert("summaryRaw".into(), d.clone());
-            }
-        }
+    ) && let Ok(v) = serde_json::from_str::<Value>(&raw)
+        && let Some(d) = v.get("data")
+    {
+        out.insert("summaryRaw".into(), d.clone());
     }
 
     match crate::api::semester::fetch_summary(&client) {
@@ -1829,12 +1827,10 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
             crate::api::semester::PERSONAL_PATH
         ),
         Some(&json!({"runMode": 1})),
-    ) {
-        if let Ok(v) = serde_json::from_str::<Value>(&raw) {
-            if let Some(d) = v.get("data") {
-                out.insert("goalRaw".into(), d.clone());
-            }
-        }
+    ) && let Ok(v) = serde_json::from_str::<Value>(&raw)
+        && let Some(d) = v.get("data")
+    {
+        out.insert("goalRaw".into(), d.clone());
     }
 
     match crate::api::semester::fetch_goal(&client, 1) {
@@ -2303,10 +2299,12 @@ fn handle_device_get(
             .collect();
         out["brands"] = json!(brands);
         out["platforms"] = json!(platforms);
-        out["suggested"] = json!(device_table::suggested(9)
-            .into_iter()
-            .map(|(code, e)| json!({"model": code, "name": e.name, "brand": e.brand}))
-            .collect::<Vec<_>>());
+        out["suggested"] = json!(
+            device_table::suggested(9)
+                .into_iter()
+                .map(|(code, e)| json!({"model": code, "name": e.name, "brand": e.brand}))
+                .collect::<Vec<_>>()
+        );
     }
     json_ok(request, out)
 }
@@ -2329,10 +2327,10 @@ fn handle_device_put(
         .as_str()
         .map(str::trim)
         .filter(|m| !m.is_empty());
-    if let Some(m) = model {
-        if m.len() > 64 || m.chars().any(|c| c.is_control()) {
-            return json_err(request, "机型 code 不合法（最长 64，不能含控制字符）");
-        }
+    if let Some(m) = model
+        && (m.len() > 64 || m.chars().any(|c| c.is_control()))
+    {
+        return json_err(request, "机型 code 不合法（最长 64，不能含控制字符）");
     }
     // 给了平台代号就顺手记一条用户级映射（内置表查不到 SoC 时用得上）
     if let (Some(m), Some(plat)) = (
@@ -2341,10 +2339,9 @@ fn handle_device_put(
             .as_str()
             .map(str::trim)
             .filter(|p| !p.is_empty()),
-    ) {
-        if let Err(e) = crate::api::device_table::set_user_model(m, plat) {
-            return json_err(request, &e);
-        }
+    ) && let Err(e) = crate::api::device_table::set_user_model(m, plat)
+    {
+        return json_err(request, &e);
     }
     if let Err(e) = client::save_account_model(&scope, model) {
         return json_err(request, &e);
@@ -2804,7 +2801,7 @@ const INDEX_HTML: &str = include_str!("index.html");
 #[cfg(test)]
 mod account_session_tests {
     use super::*;
-    use crate::test_support::{assert_isolated, TestDir};
+    use crate::test_support::{TestDir, assert_isolated};
 
     fn saved_account(id: &str, uid: &str, username: &str) -> accounts::Account {
         accounts::Account {
@@ -2853,9 +2850,11 @@ mod account_session_tests {
         // 模拟旧版 Web 只在会话文件里保存了 UID 和令牌。
         cache_session(&dir, "uid-a", "");
 
-        assert!(state
-            .end_account_session(&dir, "first", AccountSessionAction::Logout)
-            .unwrap());
+        assert!(
+            state
+                .end_account_session(&dir, "first", AccountSessionAction::Logout)
+                .unwrap()
+        );
         assert!(state.current.is_none());
         assert!(!dir.join("session.json").exists());
 
@@ -2873,9 +2872,11 @@ mod account_session_tests {
         let dir = temp.data();
         cache_session(&dir, "uid-b", "user-b");
 
-        assert!(!state
-            .end_account_session(&dir, "second", AccountSessionAction::Delete)
-            .unwrap());
+        assert!(
+            !state
+                .end_account_session(&dir, "second", AccountSessionAction::Delete)
+                .unwrap()
+        );
         assert_eq!(state.current.as_deref(), Some("first"));
         assert!(!dir.join("session.json").exists());
 
@@ -2907,10 +2908,12 @@ mod account_session_tests {
             .end_account_session(&dir, "second", AccountSessionAction::Logout)
             .unwrap();
         assert!(!dir.join("session.json").exists());
-        assert!(!restore_account_book(&dir)
-            .get("second")
-            .unwrap()
-            .logged_in());
+        assert!(
+            !restore_account_book(&dir)
+                .get("second")
+                .unwrap()
+                .logged_in()
+        );
     }
 
     #[test]
@@ -2934,14 +2937,18 @@ mod account_session_tests {
         let dir = temp.data();
         std::fs::create_dir(dir.join("session.json")).unwrap();
 
-        assert!(state
-            .end_account_session(&dir, "first", AccountSessionAction::Logout)
-            .is_err());
+        assert!(
+            state
+                .end_account_session(&dir, "first", AccountSessionAction::Logout)
+                .is_err()
+        );
         assert!(state.book.get("first").unwrap().logged_in());
-        assert!(accounts::load_in_dir(&dir)
-            .get("first")
-            .unwrap()
-            .logged_in());
+        assert!(
+            accounts::load_in_dir(&dir)
+                .get("first")
+                .unwrap()
+                .logged_in()
+        );
     }
 }
 
@@ -3360,7 +3367,7 @@ mod token_tests {
 
 #[cfg(test)]
 mod inflight_tests {
-    use super::{try_admit, INFLIGHT, MAX_INFLIGHT};
+    use super::{INFLIGHT, MAX_INFLIGHT, try_admit};
     use std::sync::atomic::Ordering;
 
     /// 名额发满后新请求立刻被拒；处理完归还后名额恢复。

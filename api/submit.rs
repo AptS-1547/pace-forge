@@ -11,7 +11,7 @@
 //! （双重序列化），不是嵌套对象。服务端按字符串取出来再解析一层。
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::client::Client;
 use crate::api::obs::{civil_from_days, tz_offset_sec};
@@ -41,7 +41,7 @@ pub(crate) fn fmt_run_time(ms: i64) -> String {
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}")
 }
 
-use crate::crypto::sign::{sport_signature, SignFields};
+use crate::crypto::sign::{SignFields, sport_signature};
 use crate::track::TrackPoint;
 
 /// 默认体重（kg）。
@@ -2379,9 +2379,10 @@ mod tests {
             sub.object_key
         );
         assert!(sub.object_key.ends_with(".json"), "{}", sub.object_key);
-        assert!(sub
-            .object_key
-            .contains("00000000-0000-4000-8000-000000000001"));
+        assert!(
+            sub.object_key
+                .contains("00000000-0000-4000-8000-000000000001")
+        );
     }
 
     #[test]
@@ -4400,9 +4401,9 @@ mod parity_regression_tests {
                 // 变成了几何精度检查；`av` 与真机的贴合由 ③ 管。
                 let cross = real_sp * real_av;
                 assert!(
-                (16.4..=16.9).contains(&cross),
-                "第 {i} 点 真机 speed({real_sp}) × 我们的 avgSpeed({av}) = {cross:.4}，不在 16.5~16.8：speed 被当成 km/h 发了（A2 的那个错）"
-            );
+                    (16.4..=16.9).contains(&cross),
+                    "第 {i} 点 真机 speed({real_sp}) × 我们的 avgSpeed({av}) = {cross:.4}，不在 16.5~16.8：speed 被当成 km/h 发了（A2 的那个错）"
+                );
                 // ③ 逐点相对误差
                 let rs = (sp - real_sp).abs() / real_sp;
                 let ra = (av - real_av).abs() / real_av;
@@ -4419,9 +4420,9 @@ mod parity_regression_tests {
                 // ④ bdS：同一个量纲（m/s），且与真机滤波值的差在实测残差范围内
                 let db = (bd - real_bd).abs();
                 assert!(
-                db <= 1.15,
-                "第 {i} 点 bdS={bd} vs 真机 {real_bd}，差 {db:.3} m/s > 1.15（bdS 是 m/s 低通值；若发成 speed/3.6 会差 60% 以上）"
-            );
+                    db <= 1.15,
+                    "第 {i} 点 bdS={bd} vs 真机 {real_bd}，差 {db:.3} m/s > 1.15（bdS 是 m/s 低通值；若发成 speed/3.6 会差 60% 以上）"
+                );
                 rel_speed.push(rs);
                 rel_avg.push(ra);
                 checked += 1;
@@ -4580,8 +4581,8 @@ mod parity_regression_tests {
     #[test]
     fn startup_window_and_segment_distance_sum() {
         use crate::track::{
-            compress_startup, path_length, plan, retime, simulate, KinParams, PlanRequest,
-            SimParams,
+            KinParams, PlanRequest, SimParams, compress_startup, path_length, plan, retime,
+            simulate,
         };
         use rand::SeedableRng;
 

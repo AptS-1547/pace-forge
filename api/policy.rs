@@ -8,9 +8,9 @@
 //!
 //! `runMode` 区分项目：1=校园跑（有 11016 时段限制），2=户外跑，3=室外锻炼。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, Client};
+use super::client::{Client, expect_ok};
 use super::coord::gcj02_to_bd09;
 use crate::crypto::consts::hosts;
 
@@ -57,10 +57,10 @@ pub struct PolicyInfo {
 
 /// 从 policy 响应里取字段，兼容 `data` 包一层和直接平铺两种情况。
 fn get_field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
-    if let Some(inner) = v.get("data") {
-        if inner.get(key).is_some() {
-            return inner.get(key);
-        }
+    if let Some(inner) = v.get("data")
+        && inner.get(key).is_some()
+    {
+        return inner.get(key);
     }
     v.get(key)
 }
@@ -114,10 +114,10 @@ pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
 /// 超过 3km 的部分服务端根本不计有效里程，程序却放行，白跑还以为在攒进度。
 fn parse_daily_cap(rule: &Value) -> i64 {
     for key in ["dayGoal", "maleDayUpper", "femaleDayUpper"] {
-        if let Some(v) = rule.get(key).and_then(num_of) {
-            if v > 0.0 {
-                return v.round() as i64;
-            }
+        if let Some(v) = rule.get(key).and_then(num_of)
+            && v > 0.0
+        {
+            return v.round() as i64;
         }
     }
     0
@@ -136,10 +136,10 @@ pub fn daily_cap_m(client: &Client, run_mode: i64) -> (i64, String) {
         modes.push(2);
     }
     for mode in modes {
-        if let Ok(p) = fetch_policy_for(client, mode) {
-            if p.daily_cap_m > 0 {
-                return (p.daily_cap_m, format!("runMode={mode} dayGoal"));
-            }
+        if let Ok(p) = fetch_policy_for(client, mode)
+            && p.daily_cap_m > 0
+        {
+            return (p.daily_cap_m, format!("runMode={mode} dayGoal"));
         }
     }
     (
@@ -511,7 +511,7 @@ mod tests {
     /// 这个前提——谁哪天给 `dump_dir()` 加了个 `$HOME/...` 兜底，测试立刻炸。
     #[test]
     fn policy_dump_path_is_isolated_from_real_home() {
-        use crate::test_support::{assert_isolated, TestDir};
+        use crate::test_support::{TestDir, assert_isolated};
 
         let t = TestDir::new("policy-dump");
         let injected = dump_policy_path_in(&t.data(), 1);

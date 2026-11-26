@@ -9,10 +9,10 @@
 //!
 //! 密码不单独加密，走 HTTP `Authorization: Basic base64(user:pass)`。
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use serde_json::{json, Value};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, Client, Credentials};
+use super::client::{Client, Credentials, expect_ok};
 
 /// 极验滑块在登录场景下的固定 captcha_id。
 pub const LOGIN_CAPTCHA_ID: &str = "3b02ad39bd099fd3a8336d9347a189ab";
@@ -94,7 +94,7 @@ pub fn login(client: &mut Client, username: &str, password: &str) -> Result<Logi
                 return Ok(LoginOutcome::NeedCaptcha {
                     uuid,
                     message: format!("极验求解失败: {e}"),
-                })
+                });
             }
         };
         let payload = json!({

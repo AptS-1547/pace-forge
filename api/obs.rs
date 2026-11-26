@@ -7,9 +7,9 @@
 //! - 签名响应里的 `signedUrl` 可能在 `data` 里，也可能 `data` 是字符串化的 JSON
 //! - 换签名的 `method` 是 `"Put"`（首字母大写），不是 `"PUT"`
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::client::{expect_ok, Client};
+use super::client::{Client, expect_ok};
 use crate::crypto::consts::hosts;
 
 /// OBS 签名接口路径。

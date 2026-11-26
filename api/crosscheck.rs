@@ -304,7 +304,7 @@ pub fn start_hour_concentration(records: &[RunRecord], tz_offset_sec: i64) -> (u
     let (idx, &max) = bins
         .iter()
         .enumerate()
-        .max_by_key(|(_, &c)| c)
+        .max_by_key(|&(_, c)| c)
         .unwrap_or((0, &0));
     (idx as u32, max as f64 / records.len() as f64)
 }

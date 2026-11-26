@@ -13,8 +13,8 @@
 ///
 /// 不引 `rand_distr`：它要额外拉依赖，而这里只需要一个标准正态。
 fn normal_sample(rng: &mut impl rand::Rng) -> f64 {
-    let u1 = rng.gen::<f64>().max(1e-12);
-    let u2 = rng.gen::<f64>();
+    let u1 = rng.random::<f64>().max(1e-12);
+    let u2 = rng.random::<f64>();
     (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
 }
 
@@ -137,8 +137,8 @@ pub fn ou_cadence_series(
     floor: f64,
     ceil: f64,
 ) -> Vec<f64> {
-    use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     let mut rng = StdRng::seed_from_u64(seed);
     let mut out = Vec::with_capacity(targets.len());

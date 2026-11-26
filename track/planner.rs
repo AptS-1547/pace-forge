@@ -221,10 +221,10 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
     let mut flat: Vec<(f64, f64)> = sample_along(&route, n);
     // 等距采样不会正好落在 route 末尾，末点因此可能离终点几十米。
     // 显式钉住，后面缩放时也把它锁死（见 scale_to_length 的锚点）。
-    if let Some(e) = req.end {
-        if let Some(last) = flat.last_mut() {
-            *last = e;
-        }
+    if let Some(e) = req.end
+        && let Some(last) = flat.last_mut()
+    {
+        *last = e;
     }
 
     // 4. 时间戳：等间隔 + 末点精确对齐
@@ -308,10 +308,10 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
     // 上面第 6 步的 `avoid_blockers` 会**插点**（绕楼），插完末点就不再是
     // 我们 push 进去的终点了——实测偏出去 565m，App 里看就是「没跑到终点」。
     // 放在这里（所有后处理之后、转 TrackPoint 之前）才真正锁得住。
-    if let Some(e) = req.end {
-        if let Some(last) = flat.last_mut() {
-            *last = e;
-        }
+    if let Some(e) = req.end
+        && let Some(last) = flat.last_mut()
+    {
+        *last = e;
     }
 
     let points: Vec<TrackPoint> = flat

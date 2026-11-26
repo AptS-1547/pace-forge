@@ -10,10 +10,10 @@
 //! - `Warn`：可能被驳回，需要人工确认（配速过快、步频异常）
 //! - `Info`：仅提示（数据看起来不太自然，但合规）
 
+use super::TrackPoint;
 use super::biomech::gait;
 use super::geo::distance;
 use super::simulate::{SimParams, SimResult};
-use super::TrackPoint;
 
 /// 问题等级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -191,16 +191,16 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
             ));
         }
         // 与服务器当前时刻比：留 2 秒容差吸收网络往返与毫秒抖动。
-        if let Some(now) = now_ms {
-            if c.stop_time_ms > now + 2_000 {
-                issues.push(Issue::fatal(
-                    "TIME_FUTURE",
-                    format!(
-                        "stopTime 比服务器现在晚 {}s：记录结束时间落在未来，服务端会驳回",
-                        (c.stop_time_ms - now) / 1000
-                    ),
-                ));
-            }
+        if let Some(now) = now_ms
+            && c.stop_time_ms > now + 2_000
+        {
+            issues.push(Issue::fatal(
+                "TIME_FUTURE",
+                format!(
+                    "stopTime 比服务器现在晚 {}s：记录结束时间落在未来，服务端会驳回",
+                    (c.stop_time_ms - now) / 1000
+                ),
+            ));
         }
     }
 
@@ -398,17 +398,14 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
         // 真机的 ΔtotalTime 只出现 0/3/4/5 秒，1~2 秒一次都没有。
         // 期望间隔本身 ≥4 秒时还冒出 <3 秒的间隔，就是采样轴出了问题
         // （典型来源：拐角补点按弧长切时切出 1 秒）。
-        if expect >= 4.0 {
-            if let Some(min) = dts.first().copied() {
-                if min < 3.0 {
-                    issues.push(Issue::fatal(
-                        "SAMPLE_RATE_SHORT",
-                        format!(
-                            "出现 {min:.1}s 的上报间隔，真机最短非零间隔是 3s（→ 采样轴插点过密）"
-                        ),
-                    ));
-                }
-            }
+        if expect >= 4.0
+            && let Some(min) = dts.first().copied()
+            && min < 3.0
+        {
+            issues.push(Issue::fatal(
+                "SAMPLE_RATE_SHORT",
+                format!("出现 {min:.1}s 的上报间隔，真机最短非零间隔是 3s（→ 采样轴插点过密）"),
+            ));
         }
         if !(4.0..=6.0).contains(&expect) {
             issues.push(Issue::warn(
@@ -622,7 +619,7 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::track::{plan, simulate, Checkpoint, PlanRequest};
+    use crate::track::{Checkpoint, PlanRequest, plan, simulate};
 
     fn sample() -> (Vec<TrackPoint>, SimResult, SimParams) {
         let req = PlanRequest {

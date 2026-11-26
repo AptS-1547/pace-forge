@@ -1297,10 +1297,10 @@ pub fn build_graph(net: &RoadNet, hop_m: f64) -> RoadGraph {
                                 // 距离够了还得这条路真的能走：两条路各自贴着
                                 // 楼的两侧、节点相距 12m 内也会被连上，A* 就
                                 // 从楼中间直插过去（用户截图里那一刀）。
-                                if let Some(m) = &net.mask {
-                                    if !m.line_follows_road(*p, nodes[j]) {
-                                        continue;
-                                    }
+                                if let Some(m) = &net.mask
+                                    && !m.line_follows_road(*p, nodes[j])
+                                {
+                                    continue;
                                 }
                                 links.push((i, j));
                             }
@@ -1476,7 +1476,7 @@ pub fn walk_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{assert_isolated, TestDir};
+    use crate::test_support::{TestDir, assert_isolated};
 
     /// 瓦片冷却窗口：四个域名全挂后 10 分钟内直接快速失败。
     #[test]
