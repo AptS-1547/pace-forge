@@ -107,7 +107,7 @@ jobs:
           python tools/verify_release.py $archives[0].FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload verified package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pace-forge-${{ matrix.platform }}-${{ github.sha }}
           path: dist/*
