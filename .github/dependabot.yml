@@ -1,0 +1,19 @@
+# 轻量依赖巡检（#38）。只提 PR，不自动合并：报文逐字节敏感，依赖升级
+# 必须人工过一遍 `cargo test --locked` 再合。
+version: 2
+updates:
+  # Rust 依赖走 Cargo.lock
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # 补丁级升级打包成一个 PR，减少噪音；次版本仍单独提，便于逐个核对。
+      patch:
+        update-types: ["patch"]
+  # GitHub Actions 版本
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
