@@ -54,13 +54,21 @@ pub fn fetch_list(client: &Client) -> Result<Vec<AiSport>, String> {
     )?;
     let v = expect_ok(&raw)?;
     let data = data_field(&v);
-    let arr = data.get("list").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let arr = data
+        .get("list")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
     Ok(arr
         .iter()
         .filter_map(|it| {
             Some(AiSport {
                 id: it.get("id")?.as_i64()?,
-                name: it.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                name: it
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             })
         })
         .collect())
@@ -68,7 +76,11 @@ pub fn fetch_list(client: &Client) -> Result<Vec<AiSport>, String> {
 
 /// 查项目详情；失败按计次类处理（与 neko 一致）。
 pub fn fetch_info(client: &Client, sport_id: i64) -> SportInfo {
-    let path = format!("{}{}?sportId={sport_id}", hosts::RUN, "/api/v1/sport/ai/info");
+    let path = format!(
+        "{}{}?sportId={sport_id}",
+        hosts::RUN,
+        "/api/v1/sport/ai/info"
+    );
     let sport_type = client
         .request("GET", &path, Some(&json!({})))
         .ok()
@@ -160,7 +172,8 @@ pub fn upload(
 pub fn fetch_records(client: &Client, sport_id: i64, page_size: i64) -> Result<Value, String> {
     let path = format!(
         "{}{}?sportId={sport_id}&pageSize={page_size}&pageNum=1",
-        hosts::RUN, AI_RECORDS_PATH
+        hosts::RUN,
+        AI_RECORDS_PATH
     );
     let raw = client.request("GET", &path, Some(&json!({})))?;
     let v = expect_ok(&raw)?;
@@ -222,7 +235,15 @@ mod tests {
 
     #[test]
     fn explicit_at_overrides_score_date() {
-        let v = record_fields(1, AiMode::Count(50), 2, 1.0, NOW, Some(NOW - 86_400_000), "u");
+        let v = record_fields(
+            1,
+            AiMode::Count(50),
+            2,
+            1.0,
+            NOW,
+            Some(NOW - 86_400_000),
+            "u",
+        );
         assert_eq!(v["scoreDate"], json!(NOW - 86_400_000));
     }
 }

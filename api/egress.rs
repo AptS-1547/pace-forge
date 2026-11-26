@@ -119,7 +119,10 @@ pub fn parse_proxy(spec: &str) -> Result<String, String> {
 /// 加到公共 CA 根之上（沙箱/企业出口网关自签 CA 的场景）。没设这个变量时
 /// 与原来逐字节等价，不动 TLS。
 pub fn with_extra_ca(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
-    let Some(path) = std::env::var("PACE_EXTRA_CA").ok().filter(|s| !s.is_empty()) else {
+    let Some(path) = std::env::var("PACE_EXTRA_CA")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
         return builder;
     };
     let pem = match std::fs::read(&path) {
@@ -133,7 +136,9 @@ pub fn with_extra_ca(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
     let text = String::from_utf8_lossy(&pem);
     let mut ders: Vec<Vec<u8>> = Vec::new();
     for chunk in text.split("-----BEGIN CERTIFICATE-----").skip(1) {
-        let Some(body) = chunk.split("-----END CERTIFICATE-----").next() else { continue };
+        let Some(body) = chunk.split("-----END CERTIFICATE-----").next() else {
+            continue;
+        };
         let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         if let Ok(der) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64) {
             ders.push(der);
@@ -144,8 +149,10 @@ pub fn with_extra_ca(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
         return builder;
     }
     let mut roots = ureq::rustls::RootCertStore::empty();
-    let certs: Vec<ureq::rustls::pki_types::CertificateDer<'static>> =
-        ders.into_iter().map(ureq::rustls::pki_types::CertificateDer::from).collect();
+    let certs: Vec<ureq::rustls::pki_types::CertificateDer<'static>> = ders
+        .into_iter()
+        .map(ureq::rustls::pki_types::CertificateDer::from)
+        .collect();
     roots.add_parsable_certificates(certs);
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let cfg = ureq::rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
@@ -169,7 +176,9 @@ pub fn agent(timeout: Duration) -> ureq::Agent {
             Ok(clean) => match ureq::Proxy::new(&clean) {
                 Ok(p) => builder.proxy(p).build(),
                 Err(e) => {
-                    report_once(&format!("PACE_EGRESS_PROXY 无法使用（{e}），本次按直连提交"));
+                    report_once(&format!(
+                        "PACE_EGRESS_PROXY 无法使用（{e}），本次按直连提交"
+                    ));
                     builder.build()
                 }
             },
@@ -240,10 +249,16 @@ fn fetch_json_ip(url: &str, field: &str) -> Option<String> {
 
 fn probe_once() -> Option<Probe> {
     if let Some(ip) = fetch_json_ip("https://api.ipify.org?format=json", "ip") {
-        return Some(Probe { ip, source: "ipify" });
+        return Some(Probe {
+            ip,
+            source: "ipify",
+        });
     }
     if let Some(ip) = fetch_json_ip("https://httpbin.org/ip", "origin") {
-        return Some(Probe { ip, source: "httpbin" });
+        return Some(Probe {
+            ip,
+            source: "httpbin",
+        });
     }
     None
 }
@@ -277,7 +292,10 @@ mod tests {
     /// 只认 http:// 且必须带端口；账号密码不能出现在脱敏描述里。
     #[test]
     fn proxy_spec_is_validated_and_redacted() {
-        assert_eq!(parse_proxy("http://10.0.0.2:7890").unwrap(), "http://10.0.0.2:7890");
+        assert_eq!(
+            parse_proxy("http://10.0.0.2:7890").unwrap(),
+            "http://10.0.0.2:7890"
+        );
         // 账号密码要脱掉
         assert_eq!(
             parse_proxy("http://user:pass@10.0.0.2:7890").unwrap(),
@@ -309,7 +327,10 @@ mod tests {
     #[test]
     fn cache_reports_proxy_shape() {
         let v = cached_json();
-        assert!(v.get("proxy").is_some(), "proxy 字段必须在（未设为 null）: {v}");
+        assert!(
+            v.get("proxy").is_some(),
+            "proxy 字段必须在（未设为 null）: {v}"
+        );
         if let Some(p) = v["proxy"].as_str() {
             assert!(!p.is_empty());
         }

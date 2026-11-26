@@ -22,10 +22,19 @@ use super::client::{expect_ok, Client};
 /// `undefined / 1000 = 0.00 km`。前后端各猜一套字段名必然会再错一次，
 /// 所以统一在出口处补一份标准字段，前端只读标准字段。
 const DIST_ALIASES: &[&str] = &[
-    "totalDis", "totalDistance", "total_distance", "distance", "runDistance", "mileage", "dis",
+    "totalDis",
+    "totalDistance",
+    "total_distance",
+    "distance",
+    "runDistance",
+    "mileage",
+    "dis",
 ];
 const VALID_DIST_ALIASES: &[&str] = &[
-    "validDis", "validDistance", "valid_distance", "validMileage",
+    "validDis",
+    "validDistance",
+    "valid_distance",
+    "validMileage",
 ];
 const TIME_ALIASES: &[&str] = &["totalTime", "total_time", "runTime", "duration", "useTime"];
 const VALID_TIME_ALIASES: &[&str] = &["validTime", "valid_time", "validDuration"];
@@ -75,7 +84,10 @@ pub fn normalize_record(r: &mut Value) {
         if let Some(d) = pick_num(obj, DIST_ALIASES) {
             let m = to_meters(d);
             add.push(("totalDistance".into(), json!(m.round() as i64)));
-            add.push(("distanceKm".into(), json!((m / 1000.0 * 100.0).round() / 100.0)));
+            add.push((
+                "distanceKm".into(),
+                json!((m / 1000.0 * 100.0).round() / 100.0),
+            ));
         }
     }
     if !has_num(obj, "validDistance") {
@@ -168,7 +180,10 @@ pub fn list_records(
 pub fn get_record(client: &Client, rrid: i64) -> Result<Value, String> {
     let raw = client.request(
         "POST",
-        &format!("{}/api/v70320/runnings/get_one_record", crate::crypto::hosts::RUN),
+        &format!(
+            "{}/api/v70320/runnings/get_one_record",
+            crate::crypto::hosts::RUN
+        ),
         Some(&json!({"rrid": rrid})),
     )?;
     let v = expect_ok(&raw)?;
@@ -182,7 +197,10 @@ pub fn get_record(client: &Client, rrid: i64) -> Result<Value, String> {
 pub fn calendar(client: &Client, year: i32, month: i32) -> Result<Value, String> {
     let raw = client.request(
         "POST",
-        &format!("{}/api/v70100/run/calendar/list", crate::crypto::hosts::DISCOVERY),
+        &format!(
+            "{}/api/v70100/run/calendar/list",
+            crate::crypto::hosts::DISCOVERY
+        ),
         Some(&json!({"year": year, "month": month})),
     )?;
     let v = expect_ok(&raw)?;
@@ -222,7 +240,11 @@ mod tests {
     fn accepts_string_numbers() {
         let mut r = json!({"totalDis": "3200.50", "totalTime": "960"});
         normalize_record(&mut r);
-        assert_eq!(r["totalDistance"], json!(3201), "字符串数字要能解析并四舍五入");
+        assert_eq!(
+            r["totalDistance"],
+            json!(3201),
+            "字符串数字要能解析并四舍五入"
+        );
         assert_eq!(r["totalTime"], json!(960));
     }
 

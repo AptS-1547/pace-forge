@@ -121,10 +121,7 @@ fn catmull_point(
             + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2
             + (-a + 3.0 * b - 3.0 * c + d) * t3)
     };
-    (
-        f(p0.0, p1.0, p2.0, p3.0),
-        f(p0.1, p1.1, p2.1, p3.1),
-    )
+    (f(p0.0, p1.0, p2.0, p3.0), f(p0.1, p1.1, p2.1, p3.1))
 }
 
 pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String> {
@@ -230,7 +227,6 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
         }
     }
 
-
     // 4. 时间戳：等间隔 + 末点精确对齐
     let times = assign_times(n, req.start_ms, req.total_sec);
 
@@ -321,7 +317,11 @@ pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, String>
     let points: Vec<TrackPoint> = flat
         .iter()
         .zip(times.iter())
-        .map(|((lat, lon), &t)| TrackPoint { lat: *lat, lon: *lon, time_ms: t })
+        .map(|((lat, lon), &t)| TrackPoint {
+            lat: *lat,
+            lon: *lon,
+            time_ms: t,
+        })
         .collect();
 
     // 自由跑不返回打卡点（服务端不校验，硬塞反而会拦短距离）
@@ -431,14 +431,22 @@ fn loop_waypoints(start: (f64, f64), cps: &[(f64, f64)], in_order: bool) -> Vec<
 }
 
 /// 以 `center` 为圆心、`radius_m` 为半径的正多边形环（首尾闭合）。
-fn circle_ring(center_lat: f64, center_lng: f64, radius_m: f64, segments: usize) -> Vec<(f64, f64)> {
+fn circle_ring(
+    center_lat: f64,
+    center_lng: f64,
+    radius_m: f64,
+    segments: usize,
+) -> Vec<(f64, f64)> {
     let d_lat = radius_m / super::geo::M_PER_DEG_LAT;
     let d_lng = radius_m / super::geo::m_per_deg_lng(center_lat);
     let n = segments.max(3);
     let mut out = Vec::with_capacity(n + 1);
     for i in 0..n {
         let a = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
-        out.push((center_lat + d_lat * a.sin(), center_lng + d_lng * (1.0 - a.cos())));
+        out.push((
+            center_lat + d_lat * a.sin(),
+            center_lng + d_lng * (1.0 - a.cos()),
+        ));
     }
     out.push(out[0]);
     out
@@ -465,7 +473,13 @@ pub fn assign_times(n: usize, start_ms: i64, total_sec: i64) -> Vec<i64> {
     }
     let step = (end - start_ms) / (n as i64 - 1);
     (0..n)
-        .map(|i| if i == n - 1 { end } else { start_ms + i as i64 * step })
+        .map(|i| {
+            if i == n - 1 {
+                end
+            } else {
+                start_ms + i as i64 * step
+            }
+        })
         .collect()
 }
 
@@ -541,7 +555,11 @@ mod tests {
         let first = res.points.first().unwrap();
         let last = res.points.last().unwrap();
         assert_eq!(first.time_ms, req.start_ms, "首点时间必须等于 startTime");
-        assert_eq!(last.time_ms, req.start_ms + req.total_sec * 1000, "末点必须等于 stopTime");
+        assert_eq!(
+            last.time_ms,
+            req.start_ms + req.total_sec * 1000,
+            "末点必须等于 stopTime"
+        );
     }
 
     #[test]
@@ -569,17 +587,39 @@ mod tests {
         };
         // 约 123×86m 的外框，几种服务端可能给出的数组次序
         let layouts: Vec<Vec<(f64, f64)>> = vec![
-            vec![(43.0, 61.5), (0.0, 0.0), (86.0, 0.0), (86.0, 123.0), (0.0, 123.0)],
-            vec![(0.0, 0.0), (0.0, 123.0), (86.0, 123.0), (86.0, 0.0), (43.0, 61.5)],
-            vec![(0.0, 0.0), (86.0, 30.0), (0.0, 61.0), (86.0, 92.0), (0.0, 123.0)],
+            vec![
+                (43.0, 61.5),
+                (0.0, 0.0),
+                (86.0, 0.0),
+                (86.0, 123.0),
+                (0.0, 123.0),
+            ],
+            vec![
+                (0.0, 0.0),
+                (0.0, 123.0),
+                (86.0, 123.0),
+                (86.0, 0.0),
+                (43.0, 61.5),
+            ],
+            vec![
+                (0.0, 0.0),
+                (86.0, 30.0),
+                (0.0, 61.0),
+                (86.0, 92.0),
+                (0.0, 123.0),
+            ],
         ];
         for (li, layout) in layouts.iter().enumerate() {
             // 锚点落在靠后的点位上时，起点本身就先经过了那个点，这不是排序能解决的
-        // （别把锚点设在打卡点上），这组不测。
-        for anchor in [(43.0, 61.5), layout[0]] {
-            if layout.iter().skip(1).any(|&(dy, dx)| (dy - anchor.0).hypot(dx - anchor.1) < 15.0) {
-                continue;
-            }
+            // （别把锚点设在打卡点上），这组不测。
+            for anchor in [(43.0, 61.5), layout[0]] {
+                if layout
+                    .iter()
+                    .skip(1)
+                    .any(|&(dy, dx)| (dy - anchor.0).hypot(dx - anchor.1) < 15.0)
+                {
+                    continue;
+                }
                 for seed in [42u64, 2026] {
                     let mut req = base_req();
                     req.total_distance_m = 2000.0;
@@ -591,8 +631,7 @@ mod tests {
                         .map(|(i, &(dy, dx))| mk(i, dy, dx))
                         .collect();
                     let res = plan(&req, &mut rand::rngs::StdRng::seed_from_u64(seed)).unwrap();
-                    let pts: Vec<(f64, f64)> =
-                        res.points.iter().map(|p| (p.lat, p.lon)).collect();
+                    let pts: Vec<(f64, f64)> = res.points.iter().map(|p| (p.lat, p.lon)).collect();
                     let mut last = -1i64;
                     for (i, cp) in res.checkpoints.iter().enumerate() {
                         let first = pts
@@ -616,9 +655,27 @@ mod tests {
         let mut req = base_req();
         req.total_distance_m = 2400.0;
         req.checkpoints = vec![
-            Checkpoint { lat: 30.5008, lng: 104.0008, glat: 30.5008, glon: 104.0008, name: "A".into() },
-            Checkpoint { lat: 30.5008, lng: 104.0024, glat: 30.5008, glon: 104.0024, name: "B".into() },
-            Checkpoint { lat: 30.4992, lng: 104.0024, glat: 30.4992, glon: 104.0024, name: "C".into() },
+            Checkpoint {
+                lat: 30.5008,
+                lng: 104.0008,
+                glat: 30.5008,
+                glon: 104.0008,
+                name: "A".into(),
+            },
+            Checkpoint {
+                lat: 30.5008,
+                lng: 104.0024,
+                glat: 30.5008,
+                glon: 104.0024,
+                name: "B".into(),
+            },
+            Checkpoint {
+                lat: 30.4992,
+                lng: 104.0024,
+                glat: 30.4992,
+                glon: 104.0024,
+                name: "C".into(),
+            },
         ];
         let res = plan(&req, &mut r).unwrap();
         for cp in &res.checkpoints {
@@ -664,8 +721,11 @@ mod tests {
         let mut r = rng();
         let res = plan(&base_req(), &mut r).unwrap();
         // 2000m / 5m = 400 点，允许上下浮动
-        assert!(res.points.len() >= 300 && res.points.len() <= 500,
-                "点数 {} 不合理", res.points.len());
+        assert!(
+            res.points.len() >= 300 && res.points.len() <= 500,
+            "点数 {} 不合理",
+            res.points.len()
+        );
     }
 }
 
@@ -707,7 +767,6 @@ mod corner_smooth_tests {
         dy.atan2(dx).to_degrees()
     }
 
-
     /// 拐角必须被磨圆。
     ///
     /// 未做平滑时，采样点沿着直角折线走，拐点处的方向突变接近 90°；平滑
@@ -738,8 +797,12 @@ mod corner_smooth_tests {
         let mut turns: Vec<f64> = (1..pts.len() - 1)
             .map(|i| {
                 let mut d = bearing(pts[i], pts[i + 1]) - bearing(pts[i - 1], pts[i]);
-                while d > 180.0 { d -= 360.0; }
-                while d < -180.0 { d += 360.0; }
+                while d > 180.0 {
+                    d -= 360.0;
+                }
+                while d < -180.0 {
+                    d += 360.0;
+                }
                 d.abs()
             })
             .collect();
@@ -784,4 +847,3 @@ mod corner_smooth_tests {
         }
     }
 }
-

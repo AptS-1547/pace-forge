@@ -100,7 +100,6 @@ fn scan_intersections(poly: &[(f64, f64)], lat: f64) -> Vec<f64> {
     xs
 }
 
-
 // ============ 障碍避让（建筑、水体） ============
 //
 // 几何规划是把打卡点按顺序用弧线串起来，纯几何，不看地面有什么。校区里
@@ -152,7 +151,10 @@ fn closest_on_seg(a: (f64, f64), b: (f64, f64), p: (f64, f64)) -> ((f64, f64), f
     };
     let qy = ay + t * dy;
     let qx = ax + t * dx;
-    (((qy / mlat), (qx / mlng)), ((py - qy).powi(2) + (px - qx).powi(2)).sqrt())
+    (
+        ((qy / mlat), (qx / mlng)),
+        ((py - qy).powi(2) + (px - qx).powi(2)).sqrt(),
+    )
 }
 
 /// 把落在多边形内的点推到边界外 `margin_m`。
@@ -224,14 +226,21 @@ fn seg_intersect(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> 
 ///
 /// 只处理「两端都在多边形外」的情况。把顶点按在 a→b 的哪一侧分组，
 /// 各组沿 a→b 投影排序，得到左右两条候选，取不穿墙且较短的那条。
-fn detour_around(a: (f64, f64), b: (f64, f64), poly: &[(f64, f64)], margin_m: f64) -> Option<Vec<(f64, f64)>> {
+fn detour_around(
+    a: (f64, f64),
+    b: (f64, f64),
+    poly: &[(f64, f64)],
+    margin_m: f64,
+) -> Option<Vec<(f64, f64)>> {
     if poly.len() < 3 {
         return None;
     }
     let mlat = m_per_deg_lat(a.0).max(1.0);
     let mlng = m_per_deg_lng(a.0).max(1.0);
     // 外扩：顶点沿质心方向外推 margin
-    let (cy, cx) = poly.iter().fold((0.0, 0.0), |acc, p| (acc.0 + p.0, acc.1 + p.1));
+    let (cy, cx) = poly
+        .iter()
+        .fold((0.0, 0.0), |acc, p| (acc.0 + p.0, acc.1 + p.1));
     let cy = cy / poly.len() as f64;
     let cx = cx / poly.len() as f64;
     let grown: Vec<(f64, f64)> = poly
@@ -240,7 +249,10 @@ fn detour_around(a: (f64, f64), b: (f64, f64), poly: &[(f64, f64)], margin_m: f6
             let dy = (p.0 - cy) * mlat;
             let dx = (p.1 - cx) * mlng;
             let dl = (dy * dy + dx * dx).sqrt().max(1e-9);
-            (p.0 + dy / dl * margin_m / mlat, p.1 + dx / dl * margin_m / mlng)
+            (
+                p.0 + dy / dl * margin_m / mlat,
+                p.1 + dx / dl * margin_m / mlng,
+            )
         })
         .collect();
 
@@ -256,31 +268,47 @@ fn detour_around(a: (f64, f64), b: (f64, f64), poly: &[(f64, f64)], margin_m: f6
             .copied()
             .filter(|p| {
                 let sd = side(*p);
-                if want_left { sd > 0.0 } else { sd < 0.0 }
+                if want_left {
+                    sd > 0.0
+                } else {
+                    sd < 0.0
+                }
             })
             .collect();
         if vs.is_empty() {
             continue;
         }
-        vs.sort_by(|p, q| proj(*p).partial_cmp(&proj(*q)).unwrap_or(std::cmp::Ordering::Equal));
+        vs.sort_by(|p, q| {
+            proj(*p)
+                .partial_cmp(&proj(*q))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let mut path = vec![a];
         path.extend(vs);
         path.push(b);
         // 每一段都不能再穿墙
-        let clean = path.windows(2).all(|w| !seg_crosses_poly(w[0], w[1], &grown));
+        let clean = path
+            .windows(2)
+            .all(|w| !seg_crosses_poly(w[0], w[1], &grown));
         if clean {
             cands.push(path);
         }
     }
     cands.into_iter().min_by(|p, q| {
-        path_len(p).partial_cmp(&path_len(q)).unwrap_or(std::cmp::Ordering::Equal)
+        path_len(p)
+            .partial_cmp(&path_len(q))
+            .unwrap_or(std::cmp::Ordering::Equal)
     })
 }
 
 /// 整条折线避让障碍：逐点推出 + 逐段绕行。
 ///
 /// 返回新点列。避不开的部分保持原样（宁可穿一次也不要整条轨迹断掉）。
-pub fn avoid_blockers(points: &[(f64, f64)], blockers: &[Vec<(f64, f64)>], margin_m: f64) -> Vec<(f64, f64)> {
+pub fn avoid_blockers(
+    points: &[(f64, f64)],
+    blockers: &[Vec<(f64, f64)>],
+    margin_m: f64,
+) -> Vec<(f64, f64)> {
     if points.len() < 2 || blockers.is_empty() {
         return points.to_vec();
     }
@@ -316,7 +344,11 @@ pub fn avoid_blockers(points: &[(f64, f64)], blockers: &[Vec<(f64, f64)>], margi
         let mut hits: Vec<&Vec<(f64, f64)>> = polys
             .iter()
             .copied()
-            .filter(|poly| !point_in_poly(poly, cur) && !point_in_poly(poly, b) && seg_crosses_poly(cur, b, poly))
+            .filter(|poly| {
+                !point_in_poly(poly, cur)
+                    && !point_in_poly(poly, b)
+                    && seg_crosses_poly(cur, b, poly)
+            })
             .collect();
         hits.sort_by(|p, q| {
             let dp = closest_on_seg(cur, b, p[0]).1;
@@ -653,7 +685,11 @@ pub fn route_in_fence_avoiding(
     };
     let length_m = path_len(&points);
 
-    Ok(FenceRoute { points, length_m, lines })
+    Ok(FenceRoute {
+        points,
+        length_m,
+        lines,
+    })
 }
 
 /// 转角倒圆：把折线的尖角换成圆弧。
@@ -704,7 +740,12 @@ pub fn round_corners(path: &[(f64, f64)], radius_m: f64, seg_per_corner: usize) 
 ///
 /// 人跑步不会精确贴线，会有横向漂移（避让行人、贴着路边）。用几段不同频率
 /// 的正弦叠加，平均值为零，不改变起终点和总长度太多。
-pub fn add_wander(path: &[(f64, f64)], amp_m: f64, wavelength_m: f64, seed: u64) -> Vec<(f64, f64)> {
+pub fn add_wander(
+    path: &[(f64, f64)],
+    amp_m: f64,
+    wavelength_m: f64,
+    seed: u64,
+) -> Vec<(f64, f64)> {
     if path.len() < 3 || amp_m <= 0.0 || wavelength_m <= 1.0 {
         return path.to_vec();
     }
@@ -930,10 +971,7 @@ pub fn route_through_in_order(
         let (ny, nx) = (-sx / slen * sign, sy / slen * sign);
 
         // 二次贝塞尔：控制点在弧顶
-        let ctrl = (
-            mid.0 + ny * bulge / mlat,
-            mid.1 + nx * bulge / mlng,
-        );
+        let ctrl = (mid.0 + ny * bulge / mlat, mid.1 + nx * bulge / mlng);
         // 避让：这一段弧不能从「还没轮到」的点位旁边擦过去。
         //
         // 真实打卡点里 P1 和 P4 只隔 106m，第一段弧鼓出来就会从 P4 边上过，
@@ -958,10 +996,7 @@ pub fn route_through_in_order(
         let mut ctrl = ctrl;
         if grazes(ctrl) {
             // 换到另一侧
-            let alt = (
-                mid.0 - ny * bulge / mlat,
-                mid.1 - nx * bulge / mlng,
-            );
+            let alt = (mid.0 - ny * bulge / mlat, mid.1 - nx * bulge / mlng);
             ctrl = if grazes(alt) {
                 // 两侧都蹭到，压平成直线
                 mid
@@ -1035,7 +1070,11 @@ pub fn route_through_in_order(
         let r = 45.0 + (next() % 400) as f64 / 10.0;
         let mlat = m_per_deg_lat(anchor.0).max(1.0);
         let mlng = m_per_deg_lng(anchor.0).max(1.0);
-        let (dy, dx) = if dl > 1e-9 { (dir.0 / dl, dir.1 / dl) } else { (1.0, 0.0) };
+        let (dy, dx) = if dl > 1e-9 {
+            (dir.0 / dl, dir.1 / dl)
+        } else {
+            (1.0, 0.0)
+        };
         let center = (anchor.0 + dy * r / mlat, anchor.1 + dx * r / mlng);
         let segments = 40;
         for k in 1..=segments {
@@ -1255,7 +1294,10 @@ mod tests {
             (gcj.0 + d, gcj.1 - d),
         ];
         let poly_bd: Vec<(f64, f64)> = poly_gcj.iter().map(|&(a, b)| gcj02_to_bd09(a, b)).collect();
-        assert!(!contains(&poly_gcj, bd.0, bd.1), "BD 点不该落在未转换的 GCJ 多边形里");
+        assert!(
+            !contains(&poly_gcj, bd.0, bd.1),
+            "BD 点不该落在未转换的 GCJ 多边形里"
+        );
         assert!(contains(&poly_bd, bd.0, bd.1), "转换之后才落进去");
     }
 
@@ -1375,8 +1417,12 @@ mod tests {
              开始考虑禁区了，flow 里那条警告可以改回「已绕行」"
         );
         // 而且被拖回去的必须包含打卡点本身
-        assert!(sampled.iter().any(|p| (p.0 - must[0].0).abs() < 1e-9 && (p.1 - must[0].1).abs() < 1e-9),
-            "打卡点必须真的在结果里，否则打卡会失败");
+        assert!(
+            sampled
+                .iter()
+                .any(|p| (p.0 - must[0].0).abs() < 1e-9 && (p.1 - must[0].1).abs() < 1e-9),
+            "打卡点必须真的在结果里，否则打卡会失败"
+        );
     }
 
     #[test]
@@ -1418,7 +1464,11 @@ mod tests {
         assert!(r.points.len() >= 2, "至少要有起终点");
 
         let dense = resample_with_checkpoints(&r.points, 5.0, &[], 15.0);
-        assert!(dense.len() > 300, "2000m / 5m 应有 400 点左右，实际 {}", dense.len());
+        assert!(
+            dense.len() > 300,
+            "2000m / 5m 应有 400 点左右，实际 {}",
+            dense.len()
+        );
 
         // 每个采样点都必须在围栏内
         for p in &dense {
@@ -1463,7 +1513,8 @@ mod tests {
             assert!(
                 same_row || same_col,
                 "相邻点既不在同一行也不在同一列，说明斜穿了: {:?} → {:?}",
-                w[0], w[1]
+                w[0],
+                w[1]
             );
         }
     }
@@ -1518,7 +1569,11 @@ mod tests {
             (lat0 + 300.0 / mlat, lon0 + 200.0 / mlng),
         ];
         let r = route_along_fence(&ring, 1000.0, 20.0, &cps).unwrap();
-        assert!(r.length_m > 800.0 && r.length_m < 1500.0, "长度 {:.0}m 不合理", r.length_m);
+        assert!(
+            r.length_m > 800.0 && r.length_m < 1500.0,
+            "长度 {:.0}m 不合理",
+            r.length_m
+        );
         let dense = resample_with_checkpoints(&r.points, 5.0, &cps, 15.0);
         for c in &cps {
             let near = dense
@@ -1574,7 +1629,10 @@ mod tests {
         let f = vec![
             (lat0, lng0),
             (lat0, lng0 + 100.0 / m_per_deg_lng(lat0)),
-            (lat0 + 5.0 / m_per_deg_lat(lat0), lng0 + 100.0 / m_per_deg_lng(lat0)),
+            (
+                lat0 + 5.0 / m_per_deg_lat(lat0),
+                lng0 + 100.0 / m_per_deg_lng(lat0),
+            ),
             (lat0 + 5.0 / m_per_deg_lat(lat0), lng0),
         ];
         assert!(route_in_fence(&f, 2000.0).is_err(), "太窄应该报错");
@@ -1603,9 +1661,18 @@ mod tests {
             .collect();
         // 三个偏离路径 5~20m 的点
         let cps = vec![
-            (31.23 + 5.0 / m_per_deg_lat(31.23), 121.47 + 200.0 / m_per_deg_lng(31.23)),
-            (31.23 - 20.0 / m_per_deg_lat(31.23), 121.47 + 600.0 / m_per_deg_lng(31.23)),
-            (31.23 + 12.0 / m_per_deg_lat(31.23), 121.47 + 900.0 / m_per_deg_lng(31.23)),
+            (
+                31.23 + 5.0 / m_per_deg_lat(31.23),
+                121.47 + 200.0 / m_per_deg_lng(31.23),
+            ),
+            (
+                31.23 - 20.0 / m_per_deg_lat(31.23),
+                121.47 + 600.0 / m_per_deg_lng(31.23),
+            ),
+            (
+                31.23 + 12.0 / m_per_deg_lat(31.23),
+                121.47 + 900.0 / m_per_deg_lng(31.23),
+            ),
         ];
         let pinned = pin_checkpoints(&path, &cps);
         for cp in &cps {
@@ -1622,7 +1689,10 @@ mod tests {
             .map(|i| (31.23, 121.47 + i as f64 * 10.0 / m_per_deg_lng(31.23)))
             .collect();
         // 故意放一个偏 8m 的点
-        let cp = (31.23 + 8.0 / m_per_deg_lat(31.23), 121.47 + 500.0 / m_per_deg_lng(31.23));
+        let cp = (
+            31.23 + 8.0 / m_per_deg_lat(31.23),
+            121.47 + 500.0 / m_per_deg_lng(31.23),
+        );
         let pts = resample_with_checkpoints(&path, 5.0, &[cp], 15.0);
         let hit = pts.iter().any(|p| distance(*p, cp) < 0.1);
         assert!(hit, "打卡点应该被吸附到路径上");
@@ -1670,12 +1740,7 @@ mod order_debug_tests {
 
     /// 一个 33m × 33m 的矩形，当作一栋楼（纬度 0 附近，1° ≈ 110574m）。
     fn building() -> Vec<(f64, f64)> {
-        vec![
-            (0.0, 0.0),
-            (0.0, 0.0003),
-            (0.0003, 0.0003),
-            (0.0003, 0.0),
-        ]
+        vec![(0.0, 0.0), (0.0, 0.0003), (0.0003, 0.0003), (0.0003, 0.0)]
     }
 
     #[test]
@@ -1700,18 +1765,30 @@ mod order_debug_tests {
         let b = building();
         let line = vec![(0.00015, -0.0005), (0.00015, 0.0008)];
         let out = avoid_blockers(&line, std::slice::from_ref(&b), 3.0);
-        assert!(out.len() > 2, "横穿楼体应插入绕行点，实际只有 {} 点", out.len());
+        assert!(
+            out.len() > 2,
+            "横穿楼体应插入绕行点，实际只有 {} 点",
+            out.len()
+        );
         // 绕行之后任何一段都不能再穿墙
         for w in out.windows(2) {
             assert!(
                 !seg_crosses_poly(w[0], w[1], &b),
                 "绕行后仍在穿楼: ({:.6},{:.6}) → ({:.6},{:.6})",
-                w[0].0, w[0].1, w[1].0, w[1].1
+                w[0].0,
+                w[0].1,
+                w[1].0,
+                w[1].1
             );
         }
         // 也不该把点留在楼里
         for p in &out {
-            assert!(!point_in_poly(&b, *p), "点 ({:.6},{:.6}) 仍在楼里", p.0, p.1);
+            assert!(
+                !point_in_poly(&b, *p),
+                "点 ({:.6},{:.6}) 仍在楼里",
+                p.0,
+                p.1
+            );
         }
         // 起点终点不能被挪走
         assert_eq!(out.first().unwrap(), line.first().unwrap());
@@ -1725,7 +1802,12 @@ mod order_debug_tests {
         assert!(point_in_poly(&b, inside[0]));
         let out = avoid_blockers(&inside, std::slice::from_ref(&b), 3.0);
         for p in &out {
-            assert!(!point_in_poly(&b, *p), "点 ({:.6},{:.6}) 没被推出去", p.0, p.1);
+            assert!(
+                !point_in_poly(&b, *p),
+                "点 ({:.6},{:.6}) 没被推出去",
+                p.0,
+                p.1
+            );
         }
         // 推出去的距离不应夸张
         for p in &out {
@@ -1749,7 +1831,6 @@ mod order_debug_tests {
         let out = avoid_blockers(&line, &degenerate, 3.0);
         assert_eq!(out, line, "退化多边形应被跳过");
     }
-
 
     #[test]
     fn detour_debug_real_coords() {
@@ -1778,5 +1859,4 @@ mod order_debug_tests {
         assert!(out.len() > 2, "avoid_blockers 没插点");
         assert_eq!(inside, 0, "仍有 {inside} 个点落在矩形内");
     }
-
 }

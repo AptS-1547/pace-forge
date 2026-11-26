@@ -91,7 +91,9 @@ impl CheatReport {
     pub fn status_at(&self, now: i64) -> Status {
         // `now < checked_at` 也要算过期：时钟回拨（或缓存来自"未来"）时
         // `saturating_sub` 会得到 0，正好落在新鲜区间里，被当成刚查过。
-        if self.checked_at_ms <= 0 || now < self.checked_at_ms || now - self.checked_at_ms >= FRESH_MS
+        if self.checked_at_ms <= 0
+            || now < self.checked_at_ms
+            || now - self.checked_at_ms >= FRESH_MS
         {
             return Status::Stale;
         }
@@ -239,7 +241,10 @@ mod clock_skew_tests {
     #[test]
     fn just_now_is_fresh() {
         assert_eq!(report(10_000).status_at(10_000), Status::NoRecord);
-        assert_eq!(report(10_000).status_at(10_000 + FRESH_MS - 1), Status::NoRecord);
+        assert_eq!(
+            report(10_000).status_at(10_000 + FRESH_MS - 1),
+            Status::NoRecord
+        );
         assert_eq!(report(10_000).status_at(10_000 + FRESH_MS), Status::Stale);
     }
 }

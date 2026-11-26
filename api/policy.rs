@@ -70,8 +70,12 @@ pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
     let timestamp = get_field(biz, "timestamp")
         .and_then(|t| t.as_i64())
         .ok_or("policy 响应缺 timestamp")?;
-    let policy = get_field(biz, "policy").and_then(|t| t.as_i64()).unwrap_or(0);
-    let rule = get_field(biz, "runRuleModel").cloned().unwrap_or(Value::Null);
+    let policy = get_field(biz, "policy")
+        .and_then(|t| t.as_i64())
+        .unwrap_or(0);
+    let rule = get_field(biz, "runRuleModel")
+        .cloned()
+        .unwrap_or(Value::Null);
 
     let min_distance = rule
         .get("minDistance")
@@ -524,7 +528,11 @@ mod tests {
 
         // 没有显式设置环境变量时，默认**不落盘**
         if std::env::var_os("PACE_DUMP_POLICY").is_none() {
-            assert_eq!(dump_dir(), None, "默认不该有转储目录，否则测试会写真实 HOME");
+            assert_eq!(
+                dump_dir(),
+                None,
+                "默认不该有转储目录，否则测试会写真实 HOME"
+            );
         }
     }
 
@@ -584,10 +592,7 @@ mod pace_range_tests {
 
     #[test]
     fn accepts_string_numbers() {
-        let r = parse_pace_range(&rule(
-            serde_json::json!("4.5"),
-            serde_json::json!("9.0"),
-        ));
+        let r = parse_pace_range(&rule(serde_json::json!("4.5"), serde_json::json!("9.0")));
         assert_eq!(r, Some((4.5, 9.0)));
     }
 
@@ -638,10 +643,7 @@ mod pace_range_tests {
             expected_interval_sec: None,
         };
         let r = crate::track::inspect(&c);
-        let has = r
-            .issues
-            .iter()
-            .any(|i| i.code == "PACE_OUT");
+        let has = r.issues.iter().any(|i| i.code == "PACE_OUT");
         assert!(has, "6.67 分/km 超出 3~5 区间，必须报 PACE_OUT");
 
         c.pace_range = Some((6.0, 8.0));

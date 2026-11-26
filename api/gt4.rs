@@ -99,9 +99,7 @@ fn get_pow_nonce(
         if attempts >= max_attempts {
             return Err(format!("PoW 超过 {max_attempts} 次仍未找到 nonce"));
         }
-        let nonce: String = (0..16)
-            .map(|_| HEX[rng.gen_range(0..16)] as char)
-            .collect();
+        let nonce: String = (0..16).map(|_| HEX[rng.gen_range(0..16)] as char).collect();
         let mut hasher = Sha256::new();
         hasher.update(pow_msg_base.as_bytes());
         hasher.update(nonce.as_bytes());
@@ -245,10 +243,19 @@ fn solve_once(captcha_id: &str, log: &mut dyn FnMut(&str)) -> Result<Value, Stri
         .ok_or("GT4 /load 缺 data")?
         .clone();
     let bg = data["bg"].as_str().ok_or("GT4 /load 缺 bg")?.to_string();
-    let slice = data["slice"].as_str().ok_or("GT4 /load 缺 slice")?.to_string();
-    let lot_number = data["lot_number"].as_str().ok_or("缺 lot_number")?.to_string();
+    let slice = data["slice"]
+        .as_str()
+        .ok_or("GT4 /load 缺 slice")?
+        .to_string();
+    let lot_number = data["lot_number"]
+        .as_str()
+        .ok_or("缺 lot_number")?
+        .to_string();
     let payload = data["payload"].as_str().ok_or("缺 payload")?.to_string();
-    let process_token = data["process_token"].as_str().ok_or("缺 process_token")?.to_string();
+    let process_token = data["process_token"]
+        .as_str()
+        .ok_or("缺 process_token")?
+        .to_string();
     let pow_detail = data["pow_detail"].clone();
 
     let bg_png = download(&agent, &format!("{STATIC_HOST}{bg}"))?;
@@ -364,8 +371,14 @@ mod tests {
     #[test]
     fn w_parameter_shape() {
         let lot = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
-        let w = get_w(123, lot, "pow|msg||nonce1234567890ab", "sign", "0123456789abcdef")
-            .unwrap();
+        let w = get_w(
+            123,
+            lot,
+            "pow|msg||nonce1234567890ab",
+            "sign",
+            "0123456789abcdef",
+        )
+        .unwrap();
         assert!(w.len() > 260, "w len={}", w.len());
         assert!(w.chars().all(|c| c.is_ascii_hexdigit()));
     }

@@ -916,12 +916,16 @@ pub fn route_through_ex(
                 .or_else(|| astar_penalized(g, a, b, &HashSet::new(), 1.0, &banned, false))
         };
 
-        let seg = clean.or(plain).ok_or_else(|| {
-            format!("点 {} 到点 {} 之间路网不连通", i + 1, i + 2)
-        })?;
+        let seg = clean
+            .or(plain)
+            .ok_or_else(|| format!("点 {} 到点 {} 之间路网不连通", i + 1, i + 2))?;
 
         for w in seg.windows(2) {
-            used.insert(if w[0] < w[1] { (w[0], w[1]) } else { (w[1], w[0]) });
+            used.insert(if w[0] < w[1] {
+                (w[0], w[1])
+            } else {
+                (w[1], w[0])
+            });
         }
 
         if path.is_empty() {
@@ -992,7 +996,11 @@ pub fn route_through_ex(
             break;
         };
         for w in tail.windows(2) {
-            used.insert(if w[0] < w[1] { (w[0], w[1]) } else { (w[1], w[0]) });
+            used.insert(if w[0] < w[1] {
+                (w[0], w[1])
+            } else {
+                (w[1], w[0])
+            });
         }
         path.extend(tail.into_iter().skip(1));
         total = path_len(g, &path);
@@ -1084,7 +1092,6 @@ fn astar_penalized(
 ) -> Option<Vec<usize>> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
-
 
     let n = g.nodes.len();
     let mut best = vec![f64::INFINITY; n];
@@ -1197,7 +1204,10 @@ pub fn build_graph(net: &RoadNet, hop_m: f64) -> RoadGraph {
     let mut edge_used: Vec<bool> = Vec::new();
     let mut edges: HashMap<(usize, usize), usize> = HashMap::new();
 
-    let mut intern = |p: (f64, f64), nodes: &mut Vec<(f64, f64)>, adj: &mut Vec<Vec<(usize, f64, usize)>>| -> usize {
+    let mut intern = |p: (f64, f64),
+                      nodes: &mut Vec<(f64, f64)>,
+                      adj: &mut Vec<Vec<(usize, f64, usize)>>|
+     -> usize {
         let k = node_key(p);
         if let Some(&i) = index.get(&k) {
             return i;
@@ -1210,11 +1220,11 @@ pub fn build_graph(net: &RoadNet, hop_m: f64) -> RoadGraph {
     };
 
     let add_edge = |a: usize,
-                        b: usize,
-                        nodes: &[(f64, f64)],
-                        adj: &mut Vec<Vec<(usize, f64, usize)>>,
-                        edge_used: &mut Vec<bool>,
-                        edges: &mut HashMap<(usize, usize), usize>| {
+                    b: usize,
+                    nodes: &[(f64, f64)],
+                    adj: &mut Vec<Vec<(usize, f64, usize)>>,
+                    edge_used: &mut Vec<bool>,
+                    edges: &mut HashMap<(usize, usize), usize>| {
         if a == b {
             return;
         }
@@ -1456,7 +1466,6 @@ pub fn walk_graph(
             }
         }
     }
-
 
     if path.len() < 3 {
         return Err("图上游走失败，没走出路径".into());
@@ -1732,8 +1741,7 @@ mod live_tests {
 
         let mut g = build_graph(&net, 25.0);
         println!("图：{} 节点 / {} 边", g.nodes.len(), g.edge_used.len());
-        let path = walk_graph(&mut g, cps[0], &cps, 2000.0, 20261112)
-            .expect("图游走失败");
+        let path = walk_graph(&mut g, cps[0], &cps, 2000.0, 20261112).expect("图游走失败");
         let len: f64 = path
             .windows(2)
             .map(|w| crate::track::geo::distance(w[0], w[1]))
@@ -1747,7 +1755,12 @@ mod live_tests {
                 .map(|p| crate::track::geo::distance(*p, *cp))
                 .fold(f64::INFINITY, f64::min);
             let ok = d < 15.0;
-            println!("  打卡点 #{} 最近 {:.1} m {}", i + 1, d, if ok { "✓" } else { "✗" });
+            println!(
+                "  打卡点 #{} 最近 {:.1} m {}",
+                i + 1,
+                d,
+                if ok { "✓" } else { "✗" }
+            );
             if ok {
                 hit += 1;
             }
@@ -1780,16 +1793,28 @@ mod live_tests {
                     ((c.0 - a.0) * ml).atan2((c.1 - a.1) * mlng).to_degrees()
                 };
                 let mut d = b(pts[i], pts[i + 1]) - b(pts[i - 1], pts[i]);
-                while d > 180.0 { d -= 360.0; }
-                while d < -180.0 { d += 360.0; }
+                while d > 180.0 {
+                    d -= 360.0;
+                }
+                while d < -180.0 {
+                    d += 360.0;
+                }
                 t.push(d.abs());
             }
             t.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let pct = |q: f64| t[((t.len() as f64 - 1.0) * q) as usize];
-            let len: f64 = pts.windows(2).map(|w| crate::track::geo::distance(w[0], w[1])).sum();
+            let len: f64 = pts
+                .windows(2)
+                .map(|w| crate::track::geo::distance(w[0], w[1]))
+                .sum();
             println!(
                 "{name}: {} 点 / {:.0}m | 中位 {:.1}° p90 {:.1}° p99 {:.1}° 最大 {:.1}°",
-                pts.len(), len, pct(0.5), pct(0.9), pct(0.99), t[t.len() - 1]
+                pts.len(),
+                len,
+                pct(0.5),
+                pct(0.9),
+                pct(0.99),
+                t[t.len() - 1]
             );
         };
         stat("原始骨架 ", &raw);
@@ -1798,17 +1823,22 @@ mod live_tests {
 
         // 打卡点必须还在附近
         for (i, cp) in cps.iter().enumerate() {
-            let d = soft.iter().map(|p| crate::track::geo::distance(*p, *cp)).fold(f64::INFINITY, f64::min);
+            let d = soft
+                .iter()
+                .map(|p| crate::track::geo::distance(*p, *cp))
+                .fold(f64::INFINITY, f64::min);
             println!("  打卡点 #{} 最近 {:.1} m", i + 1, d);
         }
 
         // 导出坐标给外部画图
         let dump = |pts: &[(f64, f64)]| -> String {
-            pts.iter().map(|p| format!("{:.7},{:.7}", p.0, p.1)).collect::<Vec<_>>().join(";")
+            pts.iter()
+                .map(|p| format!("{:.7},{:.7}", p.0, p.1))
+                .collect::<Vec<_>>()
+                .join(";")
         };
         let _ = std::fs::write("/tmp/shape_raw.txt", dump(&raw));
         let _ = std::fs::write("/tmp/shape_soft.txt", dump(&soft));
         println!("已导出 /tmp/shape_raw.txt 与 /tmp/shape_soft.txt");
     }
-
 }

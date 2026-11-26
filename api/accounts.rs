@@ -143,7 +143,7 @@ impl Book {
     }
 
     /// 已登录且启用的账号。
-        /// 把本地所有账号的 token 清空，保留用户名/学校等信息。
+    /// 把本地所有账号的 token 清空，保留用户名/学校等信息。
     ///
     /// 服务端注销成功后必须调，否则本地还留着已经作废的 token，
     /// 下次请求会拿着它去撞服务端，表现成一堆莫名其妙的鉴权失败。
@@ -160,7 +160,7 @@ impl Book {
         n
     }
 
-pub fn ready(&self) -> Vec<&Account> {
+    pub fn ready(&self) -> Vec<&Account> {
         self.accounts
             .iter()
             .filter(|a| a.enabled && a.logged_in())
@@ -212,10 +212,7 @@ fn pick_host(
     hostname: Option<String>,
     computer_name: Option<String>,
 ) -> String {
-    let nonempty = |s: Option<String>| {
-        s.map(|x| x.trim().to_string())
-            .filter(|x| !x.is_empty())
-    };
+    let nonempty = |s: Option<String>| s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
     nonempty(machine_id)
         .or(nonempty(hostname))
         .or(nonempty(computer_name))
@@ -290,8 +287,7 @@ pub fn seal_password(plain: &str) -> Result<String, String> {
     rng.fill(&mut salt);
     rng.fill(&mut iv);
     let key = derive_key_v2(&salt);
-    let ct = Enc::new(&key.into(), &iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(plain.as_bytes());
+    let ct = Enc::new(&key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(plain.as_bytes());
 
     let mut blob = Vec::with_capacity(32 + ct.len());
     blob.extend_from_slice(&salt);
@@ -547,7 +543,10 @@ mod tests {
     fn seal_password_is_randomized() {
         let a = seal_password("same-pass").unwrap();
         let b = seal_password("same-pass").unwrap();
-        assert_ne!(a, b, "同一密码不该产生相同密文，否则能从库里看出哪些账号同密码");
+        assert_ne!(
+            a, b,
+            "同一密码不该产生相同密文，否则能从库里看出哪些账号同密码"
+        );
         assert_eq!(open_password(&a).unwrap(), "same-pass");
         assert_eq!(open_password(&b).unwrap(), "same-pass");
     }
@@ -567,7 +566,10 @@ mod tests {
             "v2:{}",
             base64::engine::general_purpose::STANDARD.encode(&raw[..raw.len() - 1])
         );
-        assert!(open_password(&broken).is_err(), "长度不对的 v2 密文必须报错");
+        assert!(
+            open_password(&broken).is_err(),
+            "长度不对的 v2 密文必须报错"
+        );
     }
 
     /// 账号库落盘时写入密钥指纹；同一台机器读回不该判为不匹配。

@@ -26,9 +26,7 @@ use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs1v15::Pkcs1v15Encrypt;
 use rsa::RsaPublicKey;
 
-use super::consts::{
-    KEY_ALPHABET, KEYDATA_TAIL, PROTO_VERSION, REQ_RSA_PKCS1_B64,
-};
+use super::consts::{KEYDATA_TAIL, KEY_ALPHABET, PROTO_VERSION, REQ_RSA_PKCS1_B64};
 use super::kdf::response_kdf;
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
@@ -61,7 +59,13 @@ impl SessionKeys {
         let kd3 = candidate[20..30].to_string();
         let kd4 = candidate[30..40].to_string();
         let response_key = response_kdf(&kd1, &kd2, &kd3, &kd4);
-        Self { kd1, kd2, kd3, kd4, response_key }
+        Self {
+            kd1,
+            kd2,
+            kd3,
+            kd4,
+            response_key,
+        }
     }
 }
 
@@ -98,10 +102,7 @@ pub fn seal_with_order(plaintext: &str, order: OuterOrder) -> Result<Envelope, S
 }
 
 /// 用指定会话打信封（测试用；生产中每次新建会话）。
-pub fn seal_with_session(
-    plaintext: &str,
-    session: SessionKeys,
-) -> Result<Envelope, String> {
+pub fn seal_with_session(plaintext: &str, session: SessionKeys) -> Result<Envelope, String> {
     seal_full(plaintext, session, OuterOrder::Insert)
 }
 
@@ -147,8 +148,7 @@ pub fn seal_full(
     let der = B64
         .decode(REQ_RSA_PKCS1_B64)
         .map_err(|e| format!("公钥 base64 解码失败: {e}"))?;
-    let pubkey = RsaPublicKey::from_pkcs1_der(&der)
-        .map_err(|e| format!("公钥解析失败: {e}"))?;
+    let pubkey = RsaPublicKey::from_pkcs1_der(&der).map_err(|e| format!("公钥解析失败: {e}"))?;
     let enc_key = pubkey
         .encrypt(&mut rng, Pkcs1v15Encrypt, &req_key)
         .map_err(|e| format!("RSA 加密失败: {e}"))?;
@@ -166,7 +166,6 @@ pub fn seal_full(
     Ok(Envelope { wire, session })
 }
 
-
 /// 当前毫秒时间戳。
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -179,11 +178,7 @@ pub fn now_ms() -> u64 {
 ///
 /// 业务信封固定用全零 IV，但极验的 `w` 参数要求 IV 为 ASCII `"0000000000000000"`，
 /// 所以单独暴露一个通用入口，别把两种用途混在一起。
-pub fn aes128_cbc_encrypt_iv(
-    key: &[u8],
-    iv: &[u8],
-    plaintext: &[u8],
-) -> Result<Vec<u8>, String> {
+pub fn aes128_cbc_encrypt_iv(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Aes128CbcEnc::new_from_slices(key, iv)
         .map_err(|e| format!("AES 初始化失败: {e}"))
         .map(|c| c.encrypt_padded_vec_mut::<Pkcs7>(plaintext))

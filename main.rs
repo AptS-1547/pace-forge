@@ -6,7 +6,6 @@
 //! - `stadium <圈数>`   生成操场轨迹并打印参数
 //! - `version` / `help`
 
-
 /// 解析必填或可缺省的数字参数。
 ///
 /// 之前一律 `.and_then(parse().ok()).unwrap_or(默认值)`，于是
@@ -77,7 +76,10 @@ fn main() {
 
     match cmd {
         "web" => {
-            let addr = args.get(1).cloned().unwrap_or_else(|| "127.0.0.1:9999".into());
+            let addr = args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| "127.0.0.1:9999".into());
             if let Some(line) = pace_forge::config::non_default_line() {
                 println!("非默认开关: {line}");
             }
@@ -217,7 +219,10 @@ fn main() {
             println!("pace-forge {}", pace_forge::VERSION);
         }
         "help" | "-h" | "--help" => {
-            println!("pace-forge {} — 运动世界校园协议工具\n", pace_forge::VERSION);
+            println!(
+                "pace-forge {} — 运动世界校园协议工具\n",
+                pace_forge::VERSION
+            );
             println!("用法:");
             println!("  pace-forge web [addr]          启动 Web 控制台（默认 127.0.0.1:9999）");
             println!("  pace-forge semester            查学期进度（记分跑）");
@@ -234,16 +239,22 @@ fn main() {
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
             println!("  pace-forge config              列出全部 PACE_* 开关与当前取值");
             println!("  pace-forge devices             机型/SoC 表：内容、当前 cpuModel、怎么补表");
-            println!("  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合");
+            println!(
+                "  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合"
+            );
             println!("  pace-forge export-records [N] [out.json]  导出最近 N 条记录（含轨迹）给 crosscheck");
-            println!("  pace-forge audit <json>        账号体检：连续性/时段/离散/重合，命中只提示");
+            println!(
+                "  pace-forge audit <json>        账号体检：连续性/时段/离散/重合，命中只提示"
+            );
             println!("  pace-forge suggest <json>      同上，再加一段「下一条怎么跑」的动作建议");
             println!("  pace-forge review [N]        逐条查审核状态（status/isCheat/appeal），默认 10 条");
             println!("  pace-forge tracks <json> [--top N]  两两重合矩阵，区分同向与反向；--top 只看前 N 对");
             println!("  pace-forge version             版本号");
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
-            println!("run/dry/at/ago/rand 需要已保存的登录会话（$HOME/.pace-forge/session.json）。");
+            println!(
+                "run/dry/at/ago/rand 需要已保存的登录会话（$HOME/.pace-forge/session.json）。"
+            );
         }
         other => {
             eprintln!("未知命令: {other}\n用 `pace-forge help` 查看用法");
@@ -260,12 +271,13 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         eprintln!("未登录：先通过 Web 控制台登录一次（会话存在 $HOME/.pace-forge/session.json）");
         std::process::exit(1);
     }
-    let client = pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
-        .with_credentials(pace_forge::api::client::Credentials {
-            uid: Some(sess.uid.to_string()),
-            token: Some(sess.token.clone()),
-            unid: Some(sess.unid.clone()),
-        });
+    let client =
+        pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
+            .with_credentials(pace_forge::api::client::Credentials {
+                uid: Some(sess.uid.to_string()),
+                token: Some(sess.token.clone()),
+                unid: Some(sess.unid.clone()),
+            });
 
     // 中心点必须从真实围栏反推。
     //
@@ -305,7 +317,14 @@ fn dry_run(dist_km: f64, dur_min: f64) {
             println!("  总步数      {}", o.total_steps);
             println!("  平均步频    {:.1} 步/分", o.avg_cadence);
             println!("  自检        {}", o.report.summary());
-            println!("  已提交      {}", if o.submitted { "是" } else { "否（预演）" });
+            println!(
+                "  已提交      {}",
+                if o.submitted {
+                    "是"
+                } else {
+                    "否（预演）"
+                }
+            );
         }
         Err(e) => {
             eprintln!("\n预演失败: {e}");
@@ -347,19 +366,35 @@ fn local_check(dist_km: f64, dur_min: f64) {
         pace_forge::track::SAMPLE_INTERVAL_SEC,
     );
     let track_points = pace_forge::track::sample_by_time(
-        &xy, &times, start_ms as u64, &KinParams::default(), 1.0, 8.0, &[], &[],
+        &xy,
+        &times,
+        start_ms as u64,
+        &KinParams::default(),
+        1.0,
+        8.0,
+        &[],
+        &[],
     );
     let real_len = pace_forge::track::geo::path_length(
-        &track_points.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>(),
-    ).round() as i64;
+        &track_points
+            .iter()
+            .map(|q| (q.lat, q.lon))
+            .collect::<Vec<_>>(),
+    )
+    .round() as i64;
     let cad = pace_forge::track::cadence_stats(&track_points);
     println!(
         "  上报节奏    {} 点 / {:.2}s {:.1}m 一点（真机 {:.2}s {:.1}m）",
-        cad.points, cad.mean_dt_sec, cad.mean_dd_m,
-        pace_forge::track::REAL_MEAN_INTERVAL_SEC, 14.9,
+        cad.points,
+        cad.mean_dt_sec,
+        cad.mean_dd_m,
+        pace_forge::track::REAL_MEAN_INTERVAL_SEC,
+        14.9,
     );
-    let pts3: Vec<(f64, f64, i64)> = track_points.iter()
-        .map(|q| (q.lat, q.lon, q.time_ms)).collect();
+    let pts3: Vec<(f64, f64, i64)> = track_points
+        .iter()
+        .map(|q| (q.lat, q.lon, q.time_ms))
+        .collect();
 
     // 分桶
     let sb = speed_buckets(&pts3, start_ms, total_sec);
@@ -377,7 +412,10 @@ fn local_check(dist_km: f64, dur_min: f64) {
     };
     let sim = match simulate(&pts3, &sp) {
         Ok(s) => s,
-        Err(e) => { eprintln!("合成失败: {e}"); return; }
+        Err(e) => {
+            eprintln!("合成失败: {e}");
+            return;
+        }
     };
 
     println!("  实际里程    {:.1} m", real_len);
@@ -411,7 +449,13 @@ fn local_check(dist_km: f64, dur_min: f64) {
         let mx = caps.iter().cloned().fold(f64::MIN, f64::max);
         let mn = caps.iter().cloned().fold(f64::MAX, f64::min);
         let avg = caps.iter().sum::<f64>() / caps.len() as f64;
-        println!("  分桶        {} 个，{:.1}~{:.1} m（均值 {:.1}）", caps.len(), mn, mx, avg);
+        println!(
+            "  分桶        {} 个，{:.1}~{:.1} m（均值 {:.1}）",
+            caps.len(),
+            mn,
+            mx,
+            avg
+        );
     }
 }
 
@@ -439,7 +483,10 @@ fn do_login(username: &str, password: &str) {
                 eprintln!("session 写入失败: {e}");
                 std::process::exit(1);
             }
-            println!("✅ 登录成功：{}（{} / {}）", sess.name, sess.campus_name, username);
+            println!(
+                "✅ 登录成功：{}（{} / {}）",
+                sess.name, sess.campus_name, username
+            );
         }
         Ok(login_api::LoginOutcome::NeedCaptcha { message, .. }) => {
             eprintln!("需要过滑动验证码（{message}），请在网页里登录一次");
@@ -520,14 +567,24 @@ fn do_logout() {
     let book = pace_forge::api::accounts::load();
     // 账号簿没记录时退回无头登录存的 session（login 命令只写 session）。
     let (uid, token, unid, username) = match book.accounts.first() {
-        Some(a) => (a.uid.clone(), a.token.clone(), a.unid.clone(), a.username.clone()),
+        Some(a) => (
+            a.uid.clone(),
+            a.token.clone(),
+            a.unid.clone(),
+            a.username.clone(),
+        ),
         None => {
             let s = pace_forge::api::session::load_session();
             if !s.is_valid() {
                 eprintln!("本地没有登录态，无需注销");
                 return;
             }
-            (s.uid.clone(), s.token.clone(), s.unid.clone(), s.username.clone())
+            (
+                s.uid.clone(),
+                s.token.clone(),
+                s.unid.clone(),
+                s.username.clone(),
+            )
         }
     };
     let mut client =
@@ -626,12 +683,17 @@ fn do_review(n: u32) {
         .cloned()
         .unwrap_or_default();
     println!("审核状态（最近 {} 条，只读）\n", rows.len());
-    println!("{:>14} {:>7} {:>8} {:>6}  备注", "rrid", "状态", "里程(m)", "申诉");
+    println!(
+        "{:>14} {:>7} {:>8} {:>6}  备注",
+        "rrid", "状态", "里程(m)", "申诉"
+    );
     let mut flagged = 0;
     for r in &rows {
         let rrid = r.get("rrid").and_then(|v| v.as_i64()).unwrap_or(0);
         let dis = r.get("totalDis").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let Ok(d) = records::get_record(&c, rrid) else { continue };
+        let Ok(d) = records::get_record(&c, rrid) else {
+            continue;
+        };
         let status = d.get("status").and_then(|v| v.as_i64()).unwrap_or(-1);
         let cheat = d.get("isCheat").and_then(|v| v.as_i64()).unwrap_or(0);
         let appeal = d.get("appealStatus").and_then(|v| v.as_i64()).unwrap_or(-1);
@@ -673,13 +735,20 @@ fn do_audit(with_suggestions: bool, file: Option<&str>) {
 
     println!("[时区] {}", m.tz_desc);
     println!("[记录] {} 条，跨 {} 天", m.count, m.span_days);
-    println!("[连续] 最长 {} 天，当前一段 {} 天", m.streak_best, m.streak_cur);
+    println!(
+        "[连续] 最长 {} 天，当前一段 {} 天",
+        m.streak_best, m.streak_cur
+    );
     println!(
         "[起跑时刻] 最集中 {:02}:00，占 {:.0}%",
         m.hour,
         m.hour_share * 100.0
     );
-    println!("[里程] 均值 {:.0}m，离散 {:.1}%", m.dist_mean, m.dist_cv * 100.0);
+    println!(
+        "[里程] 均值 {:.0}m，离散 {:.1}%",
+        m.dist_mean,
+        m.dist_cv * 100.0
+    );
     println!(
         "[配速] 均值 {}/km，离散 {:.1}%",
         cc::format_pace(m.pace_mean),
@@ -774,9 +843,17 @@ fn do_tracks(file: Option<&str>, top: Option<usize>) {
     println!("  #a  #b    重合度  方向");
     for (i, j, ov, rev) in &shown {
         let flag = if *rev { "反向（正常）" } else { "同向" };
-        println!("  {:>2}  {:>2}   {:>6.1}%  {flag}", i + 1, j + 1, ov * 100.0);
+        println!(
+            "  {:>2}  {:>2}   {:>6.1}%  {flag}",
+            i + 1,
+            j + 1,
+            ov * 100.0
+        );
     }
-    let cloned = pairs.iter().filter(|(_, _, ov, rev)| *ov >= audit::OVERLAP_WARN && !*rev).count();
+    let cloned = pairs
+        .iter()
+        .filter(|(_, _, ov, rev)| *ov >= audit::OVERLAP_WARN && !*rev)
+        .count();
     println!();
     if cloned > 0 {
         println!(
@@ -830,7 +907,10 @@ fn do_crosscheck(file: Option<&str>) {
     let (y1, m1, d1) = cc::local_date(first, tz);
     let (y2, m2, d2) = cc::local_date(last, tz);
     let span = cc::calendar_span(first, last, tz);
-    println!("[记录] {} 条，{y1}-{m1:02}-{d1:02} ~ {y2}-{m2:02}-{d2:02}（跨 {span} 天）", records.len());
+    println!(
+        "[记录] {} 条，{y1}-{m1:02}-{d1:02} ~ {y2}-{m2:02}-{d2:02}（跨 {span} 天）",
+        records.len()
+    );
 
     let (best, cur) = cc::streak_days(records, tz);
     println!("[连续] 最长 {best} 天，当前一段 {cur} 天");
@@ -853,7 +933,11 @@ fn do_crosscheck(file: Option<&str>) {
         println!("[配速] 无可用记录");
     } else {
         let (pm, pcv) = cc::dispersion(&paces);
-        println!("[配速] 均值 {}/km，离散 {:.1}%", cc::format_pace(pm), pcv * 100.0);
+        println!(
+            "[配速] 均值 {}/km，离散 {:.1}%",
+            cc::format_pace(pm),
+            pcv * 100.0
+        );
     }
 
     match cc::max_pair_overlap(records, cc::OVERLAP_RADIUS_M) {
@@ -901,7 +985,10 @@ fn do_export_records(rest: &[String]) {
             }
         },
     };
-    let out_path = positional.get(1).map(|s| s.as_str()).unwrap_or("records.json");
+    let out_path = positional
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("records.json");
     if std::path::Path::new(out_path).exists() && !force {
         eprintln!("{out_path} 已存在，加 --force 覆盖，或换一个文件名");
         std::process::exit(2);
@@ -927,7 +1014,11 @@ fn do_export_records(rest: &[String]) {
             std::process::exit(1);
         }
     };
-    let rows = list.get("records").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let rows = list
+        .get("records")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if rows.is_empty() {
         eprintln!("列表是空的：确认账号有计分跑记录，或换用网页里的记录页。");
         std::process::exit(1);
@@ -969,7 +1060,10 @@ fn do_export_records(rest: &[String]) {
             .and_then(|v| v.as_f64())
             .or_else(|| detail.get("totalDis").and_then(|v| v.as_f64()))
             .unwrap_or(0.0);
-        let dur = detail.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0);
+        let dur = detail
+            .get("totalTime")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         let pts: Vec<serde_json::Value> = track
             .iter()
             .map(|(la, ln)| serde_json::json!([la, ln]))
@@ -1022,10 +1116,11 @@ fn write_record_export(path: &std::path::Path, bytes: &[u8], force: bool) -> std
     Ok(())
 }
 
-
-
 fn log_export(i: usize, total: usize, rrid: Option<i64>, pts: usize) {
-    println!("  [{i}/{total}] rrid={} 轨迹 {pts} 点", rrid.map(|r| r.to_string()).unwrap_or_else(|| "-".into()));
+    println!(
+        "  [{i}/{total}] rrid={} 轨迹 {pts} 点",
+        rrid.map(|r| r.to_string()).unwrap_or_else(|| "-".into())
+    );
 }
 
 fn now_ms() -> i64 {
@@ -1041,14 +1136,13 @@ fn do_cheat() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
         std::process::exit(1);
     }
-    let client = pace_forge::api::client::Client::new(
-        pace_forge::api::client::DeviceProfile::default(),
-    )
-    .with_credentials(pace_forge::api::client::Credentials {
-        uid: Some(sess.uid.to_string()),
-        token: Some(sess.token.clone()),
-        unid: Some(sess.unid.clone()),
-    });
+    let client =
+        pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
+            .with_credentials(pace_forge::api::client::Credentials {
+                uid: Some(sess.uid.to_string()),
+                token: Some(sess.token.clone()),
+                unid: Some(sess.unid.clone()),
+            });
     let mut last = String::new();
     match pace_forge::api::cheat::query(&client, 1, &mut |l| {
         last = l.to_string();
@@ -1078,12 +1172,13 @@ fn show_semester() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
         std::process::exit(1);
     }
-    let client = pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
-        .with_credentials(pace_forge::api::client::Credentials {
-            uid: Some(sess.uid.to_string()),
-            token: Some(sess.token.clone()),
-            unid: Some(sess.unid.clone()),
-        });
+    let client =
+        pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
+            .with_credentials(pace_forge::api::client::Credentials {
+                uid: Some(sess.uid.to_string()),
+                token: Some(sess.token.clone()),
+                unid: Some(sess.unid.clone()),
+            });
 
     let goal = semester::fetch_goal(&client, 1);
     match semester::fetch_summary(&client) {
@@ -1150,7 +1245,13 @@ fn do_run(dist_km: f64, dur_min: f64, yes: bool) {
 ///
 /// `free_sport`：`Some(4)` 户外跑（= 自由跑，App 同一类）——不拉围栏/打卡点、
 /// 报文省略 fivePointJson（neko 实测映射）；`None` 保持原来的刷跑行为。
-fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, free_sport: Option<i32>) {
+fn run_with_start(
+    dist_km: f64,
+    dur_min: f64,
+    start_at: Option<i64>,
+    yes: bool,
+    free_sport: Option<i32>,
+) {
     use pace_forge::api::{flow, session};
 
     let sess = session::load_session();
@@ -1158,12 +1259,13 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
         std::process::exit(1);
     }
-    let client = pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
-        .with_credentials(pace_forge::api::client::Credentials {
-            uid: Some(sess.uid.to_string()),
-            token: Some(sess.token.clone()),
-            unid: Some(sess.unid.clone()),
-        });
+    let client =
+        pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
+            .with_credentials(pace_forge::api::client::Credentials {
+                uid: Some(sess.uid.to_string()),
+                token: Some(sess.token.clone()),
+                unid: Some(sess.unid.clone()),
+            });
 
     // 中心点同样必须从真实围栏反推，不能用默认的 (0,0)。
     // PACE_CENTER_LAT / PACE_CENTER_LNG 显式给了锚点就优先用（自由跑换城市跑、
@@ -1172,7 +1274,9 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
         Ok(c) => c,
         Err(e) => {
             if free_sport.is_some() {
-                eprintln!("自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点");
+                eprintln!(
+                    "自由跑拿不到围栏中心（{e}）：请设 PACE_CENTER_LAT / PACE_CENTER_LNG 指定锚点"
+                );
             } else {
                 eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
             }
@@ -1250,7 +1354,9 @@ fn run_with_start(dist_km: f64, dur_min: f64, start_at: Option<i64>, yes: bool, 
 }
 
 fn stadium_probe(laps: f64, lane: u8) {
-    use pace_forge::track::{arc_and_curvature, lap_length, path_length, stadium_track, StadiumSpec};
+    use pace_forge::track::{
+        arc_and_curvature, lap_length, path_length, stadium_track, StadiumSpec,
+    };
 
     let spec = StadiumSpec::new(30.5, 104.0).with_lane(lane);
     let pts = stadium_track(&spec, laps, 5.0);
@@ -1262,11 +1368,18 @@ fn stadium_probe(laps: f64, lane: u8) {
     println!("  单圈      {:.2} m", lap_length(lane));
     println!("  {laps:.1} 圈      {:.1} m", len);
     println!("  采样点    {}", pts.len());
-    println!("  最大曲率  {max_k:.5} /m（理论 {:.5}）", 1.0 / (36.5 + 0.3 + 1.22 * (lane as f64 - 1.0)));
+    println!(
+        "  最大曲率  {max_k:.5} /m（理论 {:.5}）",
+        1.0 / (36.5 + 0.3 + 1.22 * (lane as f64 - 1.0))
+    );
     println!();
-    println!("建议：{:.0}m 跑 {:.0} 秒（配速 {:.2} 分/km）", len, (len / 2.78).round(), 1000.0 / 2.78 / 60.0);
+    println!(
+        "建议：{:.0}m 跑 {:.0} 秒（配速 {:.2} 分/km）",
+        len,
+        (len / 2.78).round(),
+        1000.0 / 2.78 / 60.0
+    );
 }
-
 
 // ---------------------------------------------------------------------------
 // 补跑：指定时间
@@ -1274,10 +1387,20 @@ fn stadium_probe(laps: f64, lane: u8) {
 
 fn show_plan(st: pace_forge::api::start_time::StartTime, dur_min: f64) {
     let dur_s = (dur_min * 60.0).round() as i64;
-    println!("开始 {}", pace_forge::api::start_time::format_ms(
-        st.ms, pace_forge::api::start_time::default_tz_offset_min()));
-    println!("结束 {}", pace_forge::api::start_time::format_ms(
-        st.stop_ms(dur_s), pace_forge::api::start_time::default_tz_offset_min()));
+    println!(
+        "开始 {}",
+        pace_forge::api::start_time::format_ms(
+            st.ms,
+            pace_forge::api::start_time::default_tz_offset_min()
+        )
+    );
+    println!(
+        "结束 {}",
+        pace_forge::api::start_time::format_ms(
+            st.stop_ms(dur_s),
+            pace_forge::api::start_time::default_tz_offset_min()
+        )
+    );
     if st.clamped {
         println!("注意：原时刻会让结束时间落在未来，已自动提前");
     }
@@ -1380,14 +1503,26 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
         std::process::exit(2);
     }
     let client = ai_client();
-    let mode = if minutes { AiMode::Minutes(score) } else { AiMode::Count(score) };
+    let mode = if minutes {
+        AiMode::Minutes(score)
+    } else {
+        AiMode::Count(score)
+    };
     let info = ai::fetch_info(&client, sport);
     let name = ai::fetch_list(&client)
         .ok()
         .and_then(|l| l.into_iter().find(|s| s.id == sport).map(|s| s.name))
         .unwrap_or_else(|| format!("项目{sport}"));
-    let kind = if info.sport_type == 2 { "计时类" } else { "计次类" };
-    let score_txt = if minutes { format!("{score} 分钟") } else { format!("{score} 个") };
+    let kind = if info.sport_type == 2 {
+        "计时类"
+    } else {
+        "计次类"
+    };
+    let score_txt = if minutes {
+        format!("{score} 分钟")
+    } else {
+        format!("{score} 个")
+    };
 
     // 补签：N 天前 7-20 点随机时刻（与 rand 补跑同一套时间合同）。
     let at = match days {
@@ -1395,7 +1530,12 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
             use pace_forge::api::start_time as st_mod;
             use rand::Rng;
             let now = pace_forge::crypto::envelope::now_ms() as i64;
-            let dur_s = if minutes { score * 60 } else { ((score as f64 / 90.0) * 60.0) as i64 }.max(30);
+            let dur_s = if minutes {
+                score * 60
+            } else {
+                ((score as f64 / 90.0) * 60.0) as i64
+            }
+            .max(30);
             let r: f64 = rand::thread_rng().gen();
             match st_mod::random_in_day(now, d, dur_s, r) {
                 Ok(st) => Some(st.ms),
@@ -1409,7 +1549,9 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
     };
     let when = match at {
         Some(ms) => pace_forge::api::start_time::format_ms(
-            ms, pace_forge::api::start_time::default_tz_offset_min()),
+            ms,
+            pace_forge::api::start_time::default_tz_offset_min(),
+        ),
         None => "现在（刚练完）".to_string(),
     };
     println!("AI 运动：{name}（{kind}）{score_txt}，时间 {when}");
@@ -1444,15 +1586,28 @@ fn do_ai_records(sport: i64, n: i64) {
         Ok(data) => {
             let tz = pace_forge::api::start_time::default_tz_offset_min();
             let fmt = |ms: i64| pace_forge::api::start_time::format_ms(ms, tz);
-            let groups = data.get("list").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+            let groups = data
+                .get("list")
+                .and_then(|x| x.as_array())
+                .cloned()
+                .unwrap_or_default();
             if groups.is_empty() {
                 println!("该项目暂无记录");
                 return;
             }
             for g in &groups {
                 let day = g.get("scoreDate").and_then(|x| x.as_i64()).unwrap_or(0);
-                println!("{}（{} 次）", fmt(day), g.get("frequency").and_then(|x| x.as_i64()).unwrap_or(0));
-                for r in g.get("recordInfos").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
+                println!(
+                    "{}（{} 次）",
+                    fmt(day),
+                    g.get("frequency").and_then(|x| x.as_i64()).unwrap_or(0)
+                );
+                for r in g
+                    .get("recordInfos")
+                    .and_then(|x| x.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     println!(
                         "  #{} {}  score={}  用时={}s  status={}",
                         r.get("id").and_then(|x| x.as_i64()).unwrap_or(0),

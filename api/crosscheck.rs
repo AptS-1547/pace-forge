@@ -132,7 +132,12 @@ pub fn extract_track(v: &Value) -> Vec<(f64, f64)> {
 fn record_rows(value: &Value) -> Option<&[Value]> {
     value
         .as_array()
-        .or_else(|| value.get("records").or_else(|| value.get("list"))?.as_array())
+        .or_else(|| {
+            value
+                .get("records")
+                .or_else(|| value.get("list"))?
+                .as_array()
+        })
         .map(Vec::as_slice)
 }
 
@@ -176,8 +181,7 @@ pub struct LocalRecordImport {
 fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, String> {
     let decoded;
     let value = if let Some(raw) = value.as_str() {
-        decoded = serde_json::from_str::<Value>(raw)
-            .map_err(|_| "轨迹字符串不是合法 JSON")?;
+        decoded = serde_json::from_str::<Value>(raw).map_err(|_| "轨迹字符串不是合法 JSON")?;
         &decoded
     } else {
         value
@@ -234,7 +238,10 @@ pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, &'static 
             .get("points")
             .or_else(|| row.get("allLocJson"))
             .or_else(|| row.get("track"));
-        let track = match track.filter(|track| !track.is_null()).map(checked_local_track) {
+        let track = match track
+            .filter(|track| !track.is_null())
+            .map(checked_local_track)
+        {
             Some(Ok(track)) => track,
             Some(Err(detail)) => {
                 issue(&format!("{detail}，此条轨迹不参加统计"));
@@ -263,7 +270,10 @@ pub fn streak_days(records: &[RunRecord], tz_offset_sec: i64) -> (usize, usize) 
     if records.is_empty() {
         return (0, 0);
     }
-    let mut days: Vec<i64> = records.iter().map(|r| local_day(r.start_ms, tz_offset_sec)).collect();
+    let mut days: Vec<i64> = records
+        .iter()
+        .map(|r| local_day(r.start_ms, tz_offset_sec))
+        .collect();
     days.sort_unstable();
     days.dedup();
     let mut best = 1usize;
@@ -291,7 +301,11 @@ pub fn start_hour_concentration(records: &[RunRecord], tz_offset_sec: i64) -> (u
             .rem_euclid(24) as usize;
         bins[hour] += 1;
     }
-    let (idx, &max) = bins.iter().enumerate().max_by_key(|(_, &c)| c).unwrap_or((0, &0));
+    let (idx, &max) = bins
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, &c)| c)
+        .unwrap_or((0, &0));
     (idx as u32, max as f64 / records.len() as f64)
 }
 
@@ -354,7 +368,10 @@ pub fn track_overlap(a: &[(f64, f64)], b: &[(f64, f64)], radius_m: f64) -> f64 {
 }
 
 /// 两两重合度里最高的那一对：`(记录下标 a, 下标 b, 重合度, 参与比较的对数)`
-pub fn max_pair_overlap(records: &[RunRecord], radius_m: f64) -> Option<(usize, usize, f64, usize)> {
+pub fn max_pair_overlap(
+    records: &[RunRecord],
+    radius_m: f64,
+) -> Option<(usize, usize, f64, usize)> {
     let idx: Vec<usize> = (0..records.len())
         .filter(|i| records[*i].track.len() >= 2)
         .collect();
@@ -390,7 +407,12 @@ mod pace_fmt_tests {
     /// 跨零点前后一小时都算「贴近零点」。
     #[test]
     fn near_midnight_window() {
-        let r = |ms: i64| RunRecord { start_ms: ms, distance_m: 0.0, duration_sec: 0, track: vec![] };
+        let r = |ms: i64| RunRecord {
+            start_ms: ms,
+            distance_m: 0.0,
+            duration_sec: 0,
+            track: vec![],
+        };
         // 2026-09-21 23:40 +08:00 = 15:40Z
         let late = 1_790_005_200_000_i64;
         let recs = vec![r(late), r(late - 86_400_000), r(late + 3 * 3_600_000)];
@@ -415,12 +437,7 @@ mod tests {
     /// 沿纬线造一条直线轨迹，`offset_m` 是两条线之间的纬度偏移。
     fn line(offset_m: f64, n: usize) -> Vec<(f64, f64)> {
         (0..n)
-            .map(|i| {
-                (
-                    offset_m / 110_000.0,
-                    i as f64 * 30.0 / 110_000.0,
-                )
-            })
+            .map(|i| (offset_m / 110_000.0, i as f64 * 30.0 / 110_000.0))
             .collect()
     }
 
@@ -497,7 +514,12 @@ mod tests {
         assert!(ov > 0.95);
         assert_eq!(pairs, 3);
         // 只有一条带轨迹时算不了
-        let one = vec![RunRecord { start_ms: 0, distance_m: 1.0, duration_sec: 1, track: line(0.0, 5) }];
+        let one = vec![RunRecord {
+            start_ms: 0,
+            distance_m: 1.0,
+            duration_sec: 1,
+            track: line(0.0, 5),
+        }];
         assert!(max_pair_overlap(&one, OVERLAP_RADIUS_M).is_none());
     }
 
@@ -508,7 +530,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(extract_track(&v).len(), 2);
-        let p: Value = serde_json::from_str(r#"{"points":[[47.38,103.95],[47.381,103.951]]}"#).unwrap();
+        let p: Value =
+            serde_json::from_str(r#"{"points":[[47.38,103.95],[47.381,103.951]]}"#).unwrap();
         assert_eq!(extract_track(&p).len(), 2);
         let none: Value = serde_json::from_str(r#"{"summary":"no track"}"#).unwrap();
         assert!(extract_track(&none).is_empty());

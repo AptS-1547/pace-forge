@@ -206,7 +206,10 @@ pub fn match_checkpoints(
     strict: bool,
 ) -> Vec<MarkMatch> {
     if track.is_empty() {
-        return coords.iter().map(|_| MarkMatch::Missing(MissReason::EmptyTrack)).collect();
+        return coords
+            .iter()
+            .map(|_| MarkMatch::Missing(MissReason::EmptyTrack))
+            .collect();
     }
     coords
         .iter()
@@ -310,11 +313,9 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
     let hits: Vec<Option<usize>> = fixed
         .iter()
         .map(|f| {
-            track
-                .iter()
-                .position(|t| {
-                    crate::track::geo::distance((t.lat, t.lon), (f.lat, f.lon)) < FIXED_POINT_HIT_M
-                })
+            track.iter().position(|t| {
+                crate::track::geo::distance((t.lat, t.lon), (f.lat, f.lon)) < FIXED_POINT_HIT_M
+            })
         })
         .collect();
 
@@ -817,9 +818,7 @@ pub fn point_json_full(
     // 三项加起来正好等于半宽，理论极值就是区间边界，所以 clamp 几乎不触发
     // ——clamp 一旦触发会在边界压出一排平点，那才是明显的假。
     let (base, half, lo, hi) = match alt_range {
-        Some((lo, hi)) if hi > lo + 1.0 => {
-            ((lo + hi) / 2.0, (hi - lo) / 2.0, lo, hi)
-        }
+        Some((lo, hi)) if hi > lo + 1.0 => ((lo + hi) / 2.0, (hi - lo) / 2.0, lo, hi),
         // 默认：真机 `bdA` 实测 142.4~158.5，取 150 ± 8
         _ => (150.0, 8.0, 142.0, 158.0),
     };
@@ -856,7 +855,11 @@ pub fn point_json_full(
     };
 
     // 收尾段起点：真机第 83 个点（totalTime 408s，占全程 73%）起 state 变成 3
-    let tail = if n >= 20 { ((n as f64) * 0.73) as usize } else { n };
+    let tail = if n >= 20 {
+        ((n as f64) * 0.73) as usize
+    } else {
+        n
+    };
     // 自动暂停点：真机是收尾转折点前连着的几个点（第 75~78、82 个点）
     let paused = n >= 20 && idx + 4 >= tail && idx < tail;
 
@@ -1283,9 +1286,8 @@ pub fn build_laps_from_points(pts: &[Value], start_ms: i64, total_steps: i64) ->
     let r2 = |x: f64| (x * 100.0).round() / 100.0;
     let r4 = |x: f64| (x * 10000.0).round() / 10000.0;
     // 截至里程 d 的累计步数（按里程比例分配，全程末值正好等于 total_steps）
-    let steps_at = |d: f64| -> i64 {
-        ((total_steps as f64) * (d / last_dis).clamp(0.0, 1.0)).round() as i64
-    };
+    let steps_at =
+        |d: f64| -> i64 { ((total_steps as f64) * (d / last_dis).clamp(0.0, 1.0)).round() as i64 };
 
     let (mut prev_d, mut prev_t, mut prev_steps, mut prev_gain) = (0.0f64, 0i64, 0i64, 0.0f64);
     // 上限防止异常数据把循环卡死（每圈至少 1m 才继续）
@@ -1301,7 +1303,8 @@ pub fn build_laps_from_points(pts: &[Value], start_ms: i64, total_steps: i64) ->
             let (da, db) = (num(a, "totalDis"), num(b, "totalDis"));
             if d_now < last_dis && db >= d_now && db > da {
                 let k = (d_now - da) / (db - da);
-                t_now = (num(a, "totalTime") + (num(b, "totalTime") - num(a, "totalTime")) * k).round() as i64;
+                t_now = (num(a, "totalTime") + (num(b, "totalTime") - num(a, "totalTime")) * k)
+                    .round() as i64;
                 altitude = num(a, "bdA") + (num(b, "bdA") - num(a, "bdA")) * k;
                 gain += climb * k;
                 break;
@@ -1431,7 +1434,11 @@ pub fn build_segments_from_points(pts: &[Value], start_ms: i64, total_steps: i64
         .map(|&(ws, we)| (dis_at(we) - dis_at(ws)).max(0.0))
         .collect();
     let raw_sum: f64 = raw.iter().sum();
-    let scale = if raw_sum > 1e-6 { total_dis / raw_sum } else { 1.0 };
+    let scale = if raw_sum > 1e-6 {
+        total_dis / raw_sum
+    } else {
+        1.0
+    };
 
     // 累计步数：按「到这一秒为止的累计里程占末点累计里程的比例」分配。
     // 分母取段表最后一个窗口的右端（而不是末点 totalDis），这样
@@ -1490,7 +1497,10 @@ fn cumulative_dis_at(pts: &[Value], sec: i64) -> f64 {
         return prev.1;
     }
     for q in &pts[1..] {
-        let cur = (q.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0), num(q, "totalDis"));
+        let cur = (
+            q.get("totalTime").and_then(|v| v.as_i64()).unwrap_or(0),
+            num(q, "totalDis"),
+        );
         if cur.0 >= sec {
             if cur.0 == prev.0 {
                 return cur.1;
@@ -1535,7 +1545,10 @@ pub fn audit_derived(body: &Value, pts: &[Value]) -> Vec<String> {
 
     // 2) 卡路里必须走 MET 折算，不能是固定 kcal/km
     let expect_cal = calorie_for(dis as f64, time_sec, DEFAULT_WEIGHT_KG);
-    let declared_cal = body.get("calorie").and_then(|v| v.as_i64()).unwrap_or(i64::MIN);
+    let declared_cal = body
+        .get("calorie")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(i64::MIN);
     if (declared_cal - expect_cal).abs() > 2 {
         probs.push(format!(
             "calorie 声明 {declared_cal} 与 MET 折算 {expect_cal} 不符"
@@ -1544,7 +1557,10 @@ pub fn audit_derived(body: &Value, pts: &[Value]) -> Vec<String> {
 
     // 3) 平均功率非零且与速度成比例（整数瓦特，服务端 avgPower 是整型）
     let expect_pow = avg_power_for(dis as f64, time_sec, DEFAULT_WEIGHT_KG);
-    let declared_pow = body.get("avgPower").and_then(|v| v.as_i64()).unwrap_or(i64::MIN);
+    let declared_pow = body
+        .get("avgPower")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(i64::MIN);
     if declared_pow != expect_pow {
         probs.push(format!(
             "avgPower 声明 {declared_pow} 与折算 {expect_pow} 不符（必须是整数）"
@@ -1553,7 +1569,10 @@ pub fn audit_derived(body: &Value, pts: &[Value]) -> Vec<String> {
 
     // 4) speed 是配速×1000，不是速度×1000
     let expect_speed = speed_field(dis as f64, time_sec);
-    let declared_speed = body.get("speed").and_then(|v| v.as_i64()).unwrap_or(i64::MIN);
+    let declared_speed = body
+        .get("speed")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(i64::MIN);
     if declared_speed != expect_speed {
         probs.push(format!(
             "speed 声明 {declared_speed} 与配速换算 {expect_speed} 不符"
@@ -1575,8 +1594,9 @@ pub fn audit_derived(body: &Value, pts: &[Value]) -> Vec<String> {
         if (sum_t - time_sec).abs() > laps.len() as i64 {
             probs.push(format!("圈时长和 {sum_t}s 与 totalTime {time_sec}s 不符"));
         }
-        let last_ok = laps.last().map(|l| l["isFullLap"].as_bool() == Some(false)
-            || (dis % 1000 == 0));
+        let last_ok = laps
+            .last()
+            .map(|l| l["isFullLap"].as_bool() == Some(false) || (dis % 1000 == 0));
         if last_ok == Some(false) {
             probs.push("末圈标注为整圈，但总里程不是 1000m 的整数倍".into());
         }
@@ -1678,7 +1698,11 @@ pub fn build_points(
     // 下标就会被 `contains` 合并成一次标记，App 详情页于是少画一个点。
     if scheme == PointTypeScheme::WithCheckpointMarks {
         let mut seen = std::collections::HashSet::new();
-        let dup: Vec<usize> = cp_idxs.iter().copied().filter(|i| !seen.insert(*i)).collect();
+        let dup: Vec<usize> = cp_idxs
+            .iter()
+            .copied()
+            .filter(|i| !seen.insert(*i))
+            .collect();
         if !dup.is_empty() {
             eprintln!(
                 "! [points] {} 个必到点只命中 {} 个不同采样点，重复下标 {dup:?}（App 会少画点）",
@@ -1708,7 +1732,10 @@ pub fn build_points(
                     );
                 }
                 MarkMatch::Missing(_) => {
-                    eprintln!("! [points] 必到点「{}」没有任何可用采样点", fixed[i].point_name);
+                    eprintln!(
+                        "! [points] 必到点「{}」没有任何可用采样点",
+                        fixed[i].point_name
+                    );
                 }
                 _ => {}
             }
@@ -1733,8 +1760,21 @@ pub fn build_points(
             // `total_steps` 是 `point_json_full` 的历史入参，函数体内已不使用
             // （点位里没有 steps 字段），这里传 0 以免让调用方以为它影响点位。
             point_json_full(
-                p, i, track.len(), startup, start_ms, start_pt, &mut prev, &mut cum,
-                &mut prev_time, &mut prev_v, 0, seed, scheme, &cp_idxs, alt_range,
+                p,
+                i,
+                track.len(),
+                startup,
+                start_ms,
+                start_pt,
+                &mut prev,
+                &mut cum,
+                &mut prev_time,
+                &mut prev_v,
+                0,
+                seed,
+                scheme,
+                &cp_idxs,
+                alt_range,
                 alt_scale,
             )
         })
@@ -1870,8 +1910,14 @@ pub fn build_from_points(
         // 签名侧固定字符串 "null"，body 侧才是 JSON null
         ("goalId".into(), Some("null".into())),
         ("policy".into(), Some(params.policy.clone())),
-        ("selDistance".into(), Some(params.sel_distance_m.to_string())),
-        ("selRunTime".into(), Some(params.sel_run_time_sec.to_string())),
+        (
+            "selDistance".into(),
+            Some(params.sel_distance_m.to_string()),
+        ),
+        (
+            "selRunTime".into(),
+            Some(params.sel_run_time_sec.to_string()),
+        ),
         ("selectedUnid".into(), Some(params.unid.clone())),
         ("speed".into(), Some(speed_val.to_string())),
         ("sportType".into(), Some(params.sport_type.to_string())),
@@ -1884,7 +1930,10 @@ pub fn build_from_points(
         ("totalSteps".into(), Some(params.total_steps.to_string())),
         ("totalTime".into(), Some(params.total_time_sec.to_string())),
         ("uid".into(), Some(params.uid.clone())),
-        ("unCompleteReason".into(), Some(un_complete_reason.to_string())),
+        (
+            "unCompleteReason".into(),
+            Some(un_complete_reason.to_string()),
+        ),
         ("unauthorized".into(), Some("0".into())),
         ("useMobilityTools".into(), Some("0".into())),
         ("uuid".into(), Some(params.uuid.clone())),
@@ -1975,7 +2024,12 @@ pub fn build_from_points(
     // 真正的 objectKey 要等提交返回 rrid 才能算，这里先给出 detail key 的雏形
     let object_key = crate::api::obs::detail_key(params.start_time_ms, &params.uuid);
 
-    Ok(Submission { save_record, object_key, canonical, points: loc_items })
+    Ok(Submission {
+        save_record,
+        object_key,
+        canonical,
+        points: loc_items,
+    })
 }
 
 #[cfg(test)]
@@ -2085,7 +2139,10 @@ mod tests {
         // 2000m / 720s → 配速 6.0 分/km → 6000
         assert_eq!(speed_field(2000.0, 720), 6000);
         // 若误按 m/s×1000 会得到 2777，明显不同
-        assert_ne!(speed_field(2000.0, 720), (2000.0f64 / 720.0 * 1000.0).round() as i64);
+        assert_ne!(
+            speed_field(2000.0, 720),
+            (2000.0f64 / 720.0 * 1000.0).round() as i64
+        );
         assert_eq!(speed_field(0.0, 720), 0);
         assert_eq!(speed_field(2000.0, 0), 0);
     }
@@ -2096,9 +2153,21 @@ mod tests {
         let sub = build(&params(), &points(), &[], &sim).unwrap();
         let v = &sub.save_record;
         for k in [
-            "allLocJson", "fivePointJson", "speedPerTenSec", "stepsPerTenSec",
-            "signature", "speed", "avgStepFreq", "complete", "unCompleteReason",
-            "totalDis", "totalTime", "totalSteps", "uid", "uuid", "sportType",
+            "allLocJson",
+            "fivePointJson",
+            "speedPerTenSec",
+            "stepsPerTenSec",
+            "signature",
+            "speed",
+            "avgStepFreq",
+            "complete",
+            "unCompleteReason",
+            "totalDis",
+            "totalTime",
+            "totalSteps",
+            "uid",
+            "uuid",
+            "sportType",
         ] {
             assert!(v.get(k).is_some(), "缺字段 {k}");
         }
@@ -2113,7 +2182,10 @@ mod tests {
         // 注意：这不是「画不出线」的原因——详情接口对这类提交固定回
         // allLocJson=null、jsonFromObs=1，塞点也一样（实测 50/50）。
         assert_eq!(v["allLocJson"], json!(""), "allLocJson 应发空串");
-        assert!(!sub.points.is_empty(), "点集要在 Submission.points 里备着给 OBS/自检用");
+        assert!(
+            !sub.points.is_empty(),
+            "点集要在 Submission.points 里备着给 OBS/自检用"
+        );
 
         // speedPerTenSec / stepsPerTenSec 是**数组**，不要套成字符串。
         // 早先按 allLocJson 的模式一起套了，提交回来 -10000。
@@ -2185,9 +2257,15 @@ mod tests {
         let sim = test_sim(&params(), &points());
         let sub = build(&params(), &points(), &[], &sim).unwrap();
         // 详情页 key：run_data/{YYYYMMDDHH}/{uuid}.json
-        assert!(sub.object_key.starts_with("run_data/"), "{}", sub.object_key);
+        assert!(
+            sub.object_key.starts_with("run_data/"),
+            "{}",
+            sub.object_key
+        );
         assert!(sub.object_key.ends_with(".json"), "{}", sub.object_key);
-        assert!(sub.object_key.contains("00000000-0000-4000-8000-000000000001"));
+        assert!(sub
+            .object_key
+            .contains("00000000-0000-4000-8000-000000000001"));
     }
 
     #[test]
@@ -2221,14 +2299,20 @@ mod tests {
         assert!(arr.iter().all(|b| b["queueNum"].as_i64().unwrap() <= 24));
 
         // stepsPerTenSec 用同样的 id / queueNum 规则
-        let sa = sub.save_record["stepsPerTenSec"].as_array().expect("应为数组");
+        let sa = sub.save_record["stepsPerTenSec"]
+            .as_array()
+            .expect("应为数组");
         assert_eq!(sa[0]["id"], 60000);
         for (i, b) in sa.iter().enumerate() {
             let want = crate::track::queue_num(i, n, su);
             assert_eq!(b["queueNum"], want, "第 {i} 个步频桶 queueNum 错");
         }
         // 全场量纲必须是 0..24，不是桶序号 0..71（旧实现就是这么错的）
-        let max = arr.iter().map(|b| b["queueNum"].as_i64().unwrap()).max().unwrap();
+        let max = arr
+            .iter()
+            .map(|b| b["queueNum"].as_i64().unwrap())
+            .max()
+            .unwrap();
         assert!(max <= 24, "queueNum 上限 24，实际 {max}");
         assert!(max < n as i64 - 1, "不能退化成桶序号");
     }
@@ -2300,7 +2384,10 @@ pub fn save_record_detailed(
     let raw = client
         .request_with_headers(
             "POST",
-            &format!("{}/api/v70260/runnings/save/record", crate::crypto::consts::hosts::RUN),
+            &format!(
+                "{}/api/v70260/runnings/save/record",
+                crate::crypto::consts::hosts::RUN
+            ),
             Some(body),
             &[("runes", runes), ("runef", runef)],
         )
@@ -2323,7 +2410,11 @@ pub fn save_record_detailed(
                 None => "",
             };
             return Err(SubmitFailure {
-                message: if hint.is_empty() { e } else { format!("{e}{hint}") },
+                message: if hint.is_empty() {
+                    e
+                } else {
+                    format!("{e}{hint}")
+                },
                 // 正数业务码 = 服务端明确驳回，可以释放时间段；
                 // -10000 集群故障、解析不出码 = 结果未知，台账留 pending
                 rejected: matches!(code, Some(c) if c > 0),
@@ -2372,7 +2463,11 @@ mod point_shape_tests {
     }
 
     fn tp(lat: f64, lon: f64, t: i64) -> TrackPoint {
-        TrackPoint { lat, lon, time_ms: t }
+        TrackPoint {
+            lat,
+            lon,
+            time_ms: t,
+        }
     }
 
     /// 所有采样点的 `flag` 必须是**同一个**整场起始毫秒戳。
@@ -2385,7 +2480,13 @@ mod point_shape_tests {
     #[test]
     fn flag_is_constant_across_points() {
         let pts: Vec<TrackPoint> = (0..10)
-            .map(|i| tp(31.2304 + i as f64 * 2e-4, 101.4737, 1_790_000_000_000 + i * 5000))
+            .map(|i| {
+                tp(
+                    31.2304 + i as f64 * 2e-4,
+                    101.4737,
+                    1_790_000_000_000 + i * 5000,
+                )
+            })
             .collect();
         let params = params();
         let sim = test_sim(&params, &pts);
@@ -2400,7 +2501,10 @@ mod point_shape_tests {
             "flag 必须等于整场起始毫秒戳"
         );
         // 时间维度改由 totalTime 承担，它必须逐点递增
-        let tt: Vec<i64> = arr.iter().map(|p| p["totalTime"].as_i64().unwrap()).collect();
+        let tt: Vec<i64> = arr
+            .iter()
+            .map(|p| p["totalTime"].as_i64().unwrap())
+            .collect();
         assert!(
             tt.windows(2).all(|w| w[1] >= w[0]),
             "totalTime 必须单调不减，实际 {tt:?}"
@@ -2441,7 +2545,11 @@ mod point_shape_tests {
             assert!((40..=53).contains(&c), "count={c} 超出真机 40~53");
         }
         let uniq: std::collections::HashSet<i64> = counts.iter().copied().collect();
-        assert!(uniq.len() >= 8, "count 只有 {} 种取值，等于常量", uniq.len());
+        assert!(
+            uniq.len() >= 8,
+            "count 只有 {} 种取值，等于常量",
+            uniq.len()
+        );
 
         // ② 海拔：真机 142.4~158.5（东北某平原校区），相邻点不许跳变
         let alts: Vec<f64> = arr.iter().map(|p| p["bdA"].as_f64().unwrap()).collect();
@@ -2456,7 +2564,10 @@ mod point_shape_tests {
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0, f64::max);
         // 真机相邻点 |ΔbdA|: 均值 1.13 / p90 2.9 / max 4.7，所以上限放到 4.0
-        assert!(max_step < 4.0, "相邻点海拔跳变 {max_step:.2}m，比真机噪声大");
+        assert!(
+            max_step < 4.0,
+            "相邻点海拔跳变 {max_step:.2}m，比真机噪声大"
+        );
 
         // ③ 航向角：首点 0，其余在 [0,360) 且有变化
         let bearings: Vec<f64> = arr.iter().map(|p| p["bdD"].as_f64().unwrap()).collect();
@@ -2466,7 +2577,11 @@ mod point_shape_tests {
         }
         let buniq: std::collections::HashSet<String> =
             bearings.iter().map(|b| format!("{b:.1}")).collect();
-        assert!(buniq.len() > 5, "bdD 只有 {} 种取值，恒 0 是老问题", buniq.len());
+        assert!(
+            buniq.len() > 5,
+            "bdD 只有 {} 种取值，恒 0 是老问题",
+            buniq.len()
+        );
 
         // ④ gainTime：非空且是可读时间串
         for p in &arr {
@@ -2514,7 +2629,13 @@ mod point_shape_tests {
     #[test]
     fn altitude_varies() {
         let pts: Vec<TrackPoint> = (0..40)
-            .map(|i| tp(31.2304 + i as f64 * 2e-4, 101.4737, 1_790_000_000_000 + i * 5000))
+            .map(|i| {
+                tp(
+                    31.2304 + i as f64 * 2e-4,
+                    101.4737,
+                    1_790_000_000_000 + i * 5000,
+                )
+            })
             .collect();
         let params = params();
         let sim = test_sim(&params, &pts);
@@ -2523,22 +2644,39 @@ mod point_shape_tests {
 
         let alts: Vec<f64> = arr.iter().map(|p| p["bdA"].as_f64().unwrap()).collect();
         // 恒 1.0 是「这个点没有海拔数据」的特征，服务端据此算累计爬升
-        assert!(alts.iter().any(|&a| a > 1.5), "海拔应脱离 1.0，实际均值约 {}", alts.iter().sum::<f64>() / alts.len() as f64);
+        assert!(
+            alts.iter().any(|&a| a > 1.5),
+            "海拔应脱离 1.0，实际均值约 {}",
+            alts.iter().sum::<f64>() / alts.len() as f64
+        );
 
         // 相邻两点变化要小，真实 GPS 高程是连续量
-        let max_step = alts.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f64::max);
+        let max_step = alts
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f64::max);
         assert!(max_step < 3.0, "相邻点海拔跳变 {max_step:.2}m，太假");
 
         // 整条轨迹要有起伏
         let mean = alts.iter().sum::<f64>() / alts.len() as f64;
         let var = alts.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / alts.len() as f64;
-        assert!(var.sqrt() > 0.05, "海拔标准差 {} 太小，等于一条直线", var.sqrt());
+        assert!(
+            var.sqrt() > 0.05,
+            "海拔标准差 {} 太小，等于一条直线",
+            var.sqrt()
+        );
     }
 
     #[test]
     fn altitude_respects_requested_range() {
         let pts: Vec<TrackPoint> = (0..200)
-            .map(|i| tp(31.2304 + i as f64 * 2e-4, 101.4737, 1_790_000_000_000 + i * 5000))
+            .map(|i| {
+                tp(
+                    31.2304 + i as f64 * 2e-4,
+                    101.4737,
+                    1_790_000_000_000 + i * 5000,
+                )
+            })
             .collect();
         let mut params = params();
         // 高原校区：200~260m
@@ -2564,23 +2702,42 @@ mod point_shape_tests {
             "均值 {mean:.1} 偏离区间中点 230 太多"
         );
         // 区间拉高后相邻点仍然只能动几十厘米，不能因为基准变大就抖起来
-        let max_step = alts.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f64::max);
-        assert!(max_step < 4.0, "相邻点海拔跳变 {max_step:.2}m（真机 max 4.7）");
+        let max_step = alts
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f64::max);
+        assert!(
+            max_step < 4.0,
+            "相邻点海拔跳变 {max_step:.2}m（真机 max 4.7）"
+        );
     }
 
     #[test]
     fn altitude_range_rejects_bad_input() {
         let pts: Vec<TrackPoint> = (0..30)
-            .map(|i| tp(31.2304 + i as f64 * 2e-4, 101.4737, 1_790_000_000_000 + i * 5000))
+            .map(|i| {
+                tp(
+                    31.2304 + i as f64 * 2e-4,
+                    101.4737,
+                    1_790_000_000_000 + i * 5000,
+                )
+            })
             .collect();
         let mut params = params();
         // 给反了：应当忽略，退回默认 150±8（真机 bdA 实测 142.4~158.5）
         params.alt_range = Some((300.0, 100.0));
         let sim = test_sim(&params, &pts);
         let sub = build(&params, &pts, &[], &sim).unwrap();
-        let mean = sub.points.iter().map(|p| p["bdA"].as_f64().unwrap()).sum::<f64>()
+        let mean = sub
+            .points
+            .iter()
+            .map(|p| p["bdA"].as_f64().unwrap())
+            .sum::<f64>()
             / sub.points.len() as f64;
-        assert!((mean - 150.0).abs() < 12.0, "反向区间应退回默认基准 150，实际均值 {mean:.1}");
+        assert!(
+            (mean - 150.0).abs() < 12.0,
+            "反向区间应退回默认基准 150，实际均值 {mean:.1}"
+        );
     }
 
     #[test]
@@ -2605,8 +2762,16 @@ mod point_shape_tests {
         // 都是 -1.0，所以按真机对齐只能填 -1.0；判点位取 gLat/gLng
         // （verify_view 也是从 gLat/gLng 反解轨迹的）。
         for (i, q) in arr.iter().enumerate() {
-            assert_eq!(q["lat"].as_f64().unwrap(), -1.0, "第 {i} 个点 lat 不是 -1.0");
-            assert_eq!(q["lng"].as_f64().unwrap(), -1.0, "第 {i} 个点 lng 不是 -1.0");
+            assert_eq!(
+                q["lat"].as_f64().unwrap(),
+                -1.0,
+                "第 {i} 个点 lat 不是 -1.0"
+            );
+            assert_eq!(
+                q["lng"].as_f64().unwrap(),
+                -1.0,
+                "第 {i} 个点 lng 不是 -1.0"
+            );
         }
         // 另一套坐标在 gLat/gLng，已转到 gcj02
         assert!(p0["gLat"].as_f64().unwrap() > 31.0);
@@ -2616,8 +2781,19 @@ mod point_shape_tests {
 
         // 关键字段齐全
         for k in [
-            "avgSpeed", "flag", "id", "locType", "queueNum", "radius", "speed",
-            "state", "totalDis", "totalTime", "type", "validDis", "validTime",
+            "avgSpeed",
+            "flag",
+            "id",
+            "locType",
+            "queueNum",
+            "radius",
+            "speed",
+            "state",
+            "totalDis",
+            "totalTime",
+            "type",
+            "validDis",
+            "validTime",
         ] {
             assert!(p0.get(k).is_some(), "缺字段 {k}");
         }
@@ -2680,19 +2856,22 @@ mod point_shape_tests {
         );
     }
 
-
-
     #[test]
     fn point_types_cover_realistic_mix() {
         let n = 200;
         let pts: Vec<TrackPoint> = (0..n)
-            .map(|i| tp(31.2304 + i as f64 * 1e-5, 101.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .map(|i| {
+                tp(
+                    31.2304 + i as f64 * 1e-5,
+                    101.4737,
+                    1_790_000_000_000 + i as i64 * 5000,
+                )
+            })
             .collect();
         let p0 = params();
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &[], &sim).unwrap();
-        let arr: Vec<serde_json::Value> =
-            sub.points.clone();
+        let arr: Vec<serde_json::Value> = sub.points.clone();
 
         let mut types = std::collections::HashSet::new();
         for p in &arr {
@@ -2708,7 +2887,10 @@ mod point_shape_tests {
         }
         // 老样本那套必须彻底不出现
         for gone in [-1, 1, 2, 7] {
-            assert!(!types.contains(&gone), "type={gone} 是老样本口径，新版真机不发");
+            assert!(
+                !types.contains(&gone),
+                "type={gone} 是老样本口径，新版真机不发"
+            );
         }
     }
 
@@ -2723,7 +2905,13 @@ mod point_shape_tests {
         let lat0 = 31.2304;
         // 一条南北向直线，每点约 6.7m
         let pts: Vec<TrackPoint> = (0..n)
-            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 101.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .map(|i| {
+                tp(
+                    lat0 + i as f64 * 6.0e-5,
+                    101.4737,
+                    1_790_000_000_000 + i as i64 * 5000,
+                )
+            })
             .collect();
         // 5 个必到点直接落在第 40/80/120/160/200 个采样点上
         let marks = [40usize, 80, 120, 160, 200];
@@ -2744,8 +2932,15 @@ mod point_shape_tests {
         let sub = build(&p0, &pts, &fixed, &sim).unwrap();
 
         // type=2 恰好 5 个：一点一个，不多不少
-        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
-        assert_eq!(n2, 5, "计分跑 5 个必到点全命中，type=2 必须正好 5 个，实际 {n2} 个");
+        let n2 = sub
+            .points
+            .iter()
+            .filter(|q| q["type"].as_i64() == Some(2))
+            .count();
+        assert_eq!(
+            n2, 5,
+            "计分跑 5 个必到点全命中，type=2 必须正好 5 个，实际 {n2} 个"
+        );
         // 老口径的其余特征也在：起点 7、第二个点 5、终点 6、起步灰段 -1
         assert_eq!(sub.points[0]["type"], 7, "计分跑起点 type=7");
         assert_eq!(sub.points[1]["type"], 5, "计分跑第二个点 type=5");
@@ -2768,7 +2963,13 @@ mod point_shape_tests {
         let n = 200usize;
         let lat0 = 31.2304;
         let pts: Vec<TrackPoint> = (0..n)
-            .map(|i| tp(lat0 + i as f64 * 6.0e-5, 101.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .map(|i| {
+                tp(
+                    lat0 + i as f64 * 6.0e-5,
+                    101.4737,
+                    1_790_000_000_000 + i as i64 * 5000,
+                )
+            })
             .collect();
         // 第一个必到点**正好落在起点**（idx=0），其余散布在后面
         let marks = [0usize, 50, 90, 130, 170];
@@ -2787,7 +2988,11 @@ mod point_shape_tests {
         let p0 = params();
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &fixed, &sim).unwrap();
-        let n2 = sub.points.iter().filter(|q| q["type"].as_i64() == Some(2)).count();
+        let n2 = sub
+            .points
+            .iter()
+            .filter(|q| q["type"].as_i64() == Some(2))
+            .count();
         assert_eq!(
             n2, 5,
             "起点上的打卡点也得标 type=2（绕开 idx=0），实际只有 {n2} 个"
@@ -2804,7 +3009,13 @@ mod point_shape_tests {
     #[test]
     fn five_point_key_order_is_fixed() {
         let pts: Vec<TrackPoint> = (0..300)
-            .map(|i| tp(31.2304 + i as f64 * 6.0e-5, 101.4737, 1_790_000_000_000 + i as i64 * 5000))
+            .map(|i| {
+                tp(
+                    31.2304 + i as f64 * 6.0e-5,
+                    101.4737,
+                    1_790_000_000_000 + i as i64 * 5000,
+                )
+            })
             .collect();
         let marks = [30usize, 90, 150, 220, 290];
         let fixed: Vec<FixedPoint> = marks
@@ -2823,12 +3034,18 @@ mod point_shape_tests {
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &fixed, &sim).unwrap();
 
-        let env: Value = serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap())
-            .unwrap();
+        let env: Value =
+            serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap()).unwrap();
         let env_keys: Vec<&String> = env.as_object().unwrap().keys().collect();
         assert_eq!(
             env_keys,
-            vec!["fivePointJson", "freedomShowFence", "geoFencesJson", "runAreaId", "useZip"],
+            vec![
+                "fivePointJson",
+                "freedomShowFence",
+                "geoFencesJson",
+                "runAreaId",
+                "useZip"
+            ],
             "fivePointJson 外层键序变了"
         );
 
@@ -2839,8 +3056,17 @@ mod point_shape_tests {
         assert_eq!(
             keys,
             vec![
-                "lon", "lat", "isFixed", "pointName", "glon", "glat",
-                "position", "flag", "id", "isPass", "state"
+                "lon",
+                "lat",
+                "isFixed",
+                "pointName",
+                "glon",
+                "glat",
+                "position",
+                "flag",
+                "id",
+                "isPass",
+                "state"
             ],
             "内层点位键序变了（App 按位置解析时少画点）"
         );
@@ -3016,7 +3242,11 @@ mod verify_roundtrip_tests {
         assert_eq!(v.points.len(), t.len());
         for (got, want) in v.points.iter().zip(t.iter()) {
             let d = crate::track::geo::distance((got.lat, got.lon), (want.lat, want.lon));
-            assert!(d < 1.0, "第 {} 点偏移 {d:.2}m（BD→GCJ→BD 往返误差过大）", got.lat);
+            assert!(
+                d < 1.0,
+                "第 {} 点偏移 {d:.2}m（BD→GCJ→BD 往返误差过大）",
+                got.lat
+            );
             // 报文 totalTime 的单位是**秒**，毫秒精度在这里必然丢失。
             // 这也意味着采样间隔必须 ≥1 秒，否则反解后会出现时间戳重复的
             // 0 时长段（RunParams::validate 里有对应的下限检查）。
@@ -3060,25 +3290,36 @@ mod step_distance_tests {
     #[test]
     fn step_distance_is_run_constant() {
         let p = SubmitParams {
-            uid: "1".into(), unid: "1".into(),
+            uid: "1".into(),
+            unid: "1".into(),
             uuid: "00000000-0000-4000-8000-000000000000".into(),
-            sport_type: 1, total_distance_m: 2000, total_time_sec: 720,
-            total_steps: 1800, start_time_ms: 1_790_000_000_000,
-            stop_time_ms: 1_790_000_720_000, sel_distance_m: 2000,
-            sel_run_time_sec: 720, policy: "0".into(), run_area_id: 0,
-            geo_fences_json: "[]".into(), total_ascent: 0, alt_range: None,
+            sport_type: 1,
+            total_distance_m: 2000,
+            total_time_sec: 720,
+            total_steps: 1800,
+            start_time_ms: 1_790_000_000_000,
+            stop_time_ms: 1_790_000_720_000,
+            sel_distance_m: 2000,
+            sel_run_time_sec: 720,
+            policy: "0".into(),
+            run_area_id: 0,
+            geo_fences_json: "[]".into(),
+            total_ascent: 0,
+            alt_range: None,
         };
-        let t: Vec<TrackPoint> = (0..400).map(|i| TrackPoint {
-            lat: 31.2304 + i as f64 * 5.0 / 111_320.0,
-            lon: 101.4737,
-            time_ms: 1_790_000_000_000 + i as i64 * 1800,
-        }).collect();
+        let t: Vec<TrackPoint> = (0..400)
+            .map(|i| TrackPoint {
+                lat: 31.2304 + i as f64 * 5.0 / 111_320.0,
+                lon: 101.4737,
+                time_ms: 1_790_000_000_000 + i as i64 * 1800,
+            })
+            .collect();
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
-        let arr: Vec<serde_json::Value> =
-            sub.points.clone();
+        let arr: Vec<serde_json::Value> = sub.points.clone();
 
-        let vals: Vec<f64> = arr.iter()
+        let vals: Vec<f64> = arr
+            .iter()
             .filter_map(|q| q.get("stepDistance").and_then(|v| v.as_f64()))
             .collect();
         assert_eq!(vals.len(), arr.len(), "stepDistance 有缺失");
@@ -3088,7 +3329,8 @@ mod step_distance_tests {
         uniq.sort_by(|a, b| a.partial_cmp(b).unwrap());
         uniq.dedup();
         assert_eq!(
-            uniq.len(), 1,
+            uniq.len(),
+            1,
             "非 0 的 stepDistance 应该只有一个值（真机全点同值），实际 {} 种",
             uniq.len()
         );
@@ -3111,7 +3353,10 @@ mod step_distance_tests {
         // 整场同值：真机 114 点里这个字段的跨度是 0
         let span = vals[su..].iter().cloned().fold(f64::MIN, f64::max)
             - vals[su..].iter().cloned().fold(f64::MAX, f64::min);
-        assert_eq!(span, 0.0, "stepDistance 在窗口外必须是常量，实际跨度 {span}");
+        assert_eq!(
+            span, 0.0,
+            "stepDistance 在窗口外必须是常量，实际跨度 {span}"
+        );
     }
 
     // ---- 官方折算：卡路里 / 功率 ----
@@ -3122,7 +3367,10 @@ mod step_distance_tests {
         // 台阶（33/10+4.1=7.4 对 102/10−3.7=6.5）。这里固定住三段各自的
         // 取值与段内单调性，防止有人「顺手改成连续函数」。
         assert!((met_for_pace(6.0) - 9.6).abs() < 0.01, "p<10 段公式变了");
-        assert!((met_for_pace(10.0) - 6.5).abs() < 0.01, "10≤p<12 段公式变了");
+        assert!(
+            (met_for_pace(10.0) - 6.5).abs() < 0.01,
+            "10≤p<12 段公式变了"
+        );
         assert!((met_for_pace(12.0) - 3.8).abs() < 0.01, "p≥12 段公式变了");
         // 段内单调：配速越快（p 越小）MET 越高
         assert!(met_for_pace(5.0) > met_for_pace(9.0));
@@ -3156,8 +3404,11 @@ mod step_distance_tests {
         assert!(slow > 0, "慢跑功率不应为 0");
         assert!(fast > slow, "速度翻倍功率应更高");
         // 1.1 * 68 * 2.5 m/s = 187 W
-        assert_eq!(avg_power_for(2500.0, 1000, DEFAULT_WEIGHT_KG), 187,
-            "1.1*68*2.5=187W，且必须整数：服务端整型会截断，发小数就是 10501");
+        assert_eq!(
+            avg_power_for(2500.0, 1000, DEFAULT_WEIGHT_KG),
+            187,
+            "1.1*68*2.5=187W，且必须整数：服务端整型会截断，发小数就是 10501"
+        );
     }
 
     // ---- 圈与爬升 ----
@@ -3192,32 +3443,41 @@ mod step_distance_tests {
         );
     }
 
-
     fn rich_points(n: usize, total_m: f64, total_s: i64) -> Vec<TrackPoint> {
         let lat0 = 31.2304;
-        (0..n).map(|i| TrackPoint {
-            lat: lat0 + (i as f64) * (total_m / (n - 1) as f64) / 111_320.0,
-            lon: 101.4737,
-            time_ms: 1_790_000_000_000 + (i as i64) * (total_s * 1000 / (n - 1) as i64),
-        }).collect()
+        (0..n)
+            .map(|i| TrackPoint {
+                lat: lat0 + (i as f64) * (total_m / (n - 1) as f64) / 111_320.0,
+                lon: 101.4737,
+                time_ms: 1_790_000_000_000 + (i as i64) * (total_s * 1000 / (n - 1) as i64),
+            })
+            .collect()
     }
 
     #[test]
     fn laps_split_every_1000m() {
         let p = SubmitParams {
-            uid: "1".into(), unid: "1".into(),
+            uid: "1".into(),
+            unid: "1".into(),
             uuid: "00000000-0000-4000-8000-000000000002".into(),
-            sport_type: 1, total_distance_m: 2400, total_time_sec: 840,
-            total_steps: 2400, start_time_ms: 1_790_000_000_000,
-            stop_time_ms: 1_790_000_840_000, sel_distance_m: 2000,
-            sel_run_time_sec: 700, policy: "0".into(), run_area_id: 0,
-            geo_fences_json: "[]".into(), total_ascent: 0, alt_range: None,
+            sport_type: 1,
+            total_distance_m: 2400,
+            total_time_sec: 840,
+            total_steps: 2400,
+            start_time_ms: 1_790_000_000_000,
+            stop_time_ms: 1_790_000_840_000,
+            sel_distance_m: 2000,
+            sel_run_time_sec: 700,
+            policy: "0".into(),
+            run_area_id: 0,
+            geo_fences_json: "[]".into(),
+            total_ascent: 0,
+            alt_range: None,
         };
         let t = rich_points(400, 2400.0, 840);
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
-        let arr: Vec<serde_json::Value> =
-            sub.points.clone();
+        let arr: Vec<serde_json::Value> = sub.points.clone();
         // 真机点位里没有 steps 字段，圈步数由总步数按里程分配
         let laps = build_laps_from_points(&arr, p.start_time_ms, p.total_steps as i64);
 
@@ -3229,8 +3489,10 @@ mod step_distance_tests {
         assert_eq!(laps[2]["isFullLap"], false, "末圈必须标 isFullLap=false");
         // 圈时长累加必须等于总时长（切圈点按比例 round，允许每圈 1s 误差）
         let sum_t: i64 = laps.iter().map(|l| l["duration"].as_i64().unwrap()).sum();
-        assert!((sum_t - 840).abs() <= laps.len() as i64,
-            "圈时长和 {sum_t} 偏离总时长 840 超过切圈舍入误差");
+        assert!(
+            (sum_t - 840).abs() <= laps.len() as i64,
+            "圈时长和 {sum_t} 偏离总时长 840 超过切圈舍入误差"
+        );
         // 圈步数累加必须等于 totalSteps（末圈正好落在终点，没有余数）
         let sum_steps: i64 = laps.iter().map(|l| l["step"].as_i64().unwrap()).sum();
         assert_eq!(sum_steps, p.total_steps as i64, "圈步数和应等于总步数");
@@ -3241,37 +3503,55 @@ mod step_distance_tests {
     #[test]
     fn total_ascent_follows_bd_a_series() {
         let p = SubmitParams {
-            uid: "1".into(), unid: "1".into(),
+            uid: "1".into(),
+            unid: "1".into(),
             uuid: "00000000-0000-4000-8000-000000000003".into(),
-            sport_type: 1, total_distance_m: 2000, total_time_sec: 720,
-            total_steps: 2000, start_time_ms: 1_790_000_000_000,
-            stop_time_ms: 1_790_000_720_000, sel_distance_m: 2000,
-            sel_run_time_sec: 720, policy: "0".into(), run_area_id: 0,
-            geo_fences_json: "[]".into(), total_ascent: 0, alt_range: None,
+            sport_type: 1,
+            total_distance_m: 2000,
+            total_time_sec: 720,
+            total_steps: 2000,
+            start_time_ms: 1_790_000_000_000,
+            stop_time_ms: 1_790_000_720_000,
+            sel_distance_m: 2000,
+            sel_run_time_sec: 720,
+            policy: "0".into(),
+            run_area_id: 0,
+            geo_fences_json: "[]".into(),
+            total_ascent: 0,
+            alt_range: None,
         };
         let t = rich_points(300, 2000.0, 720);
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
-        let arr: Vec<serde_json::Value> =
-            sub.points.clone();
+        let arr: Vec<serde_json::Value> = sub.points.clone();
 
         let expect = total_ascent_from_points(&arr);
         let declared = sub.save_record["totalAscent"].as_i64().unwrap();
-        assert_eq!(declared, expect as i64, "报文的 totalAscent 与点位反算值不一致");
+        assert_eq!(
+            declared, expect as i64,
+            "报文的 totalAscent 与点位反算值不一致"
+        );
         // pace 的地点派生海拔自带缓坡，2000m 上必须有非零爬升
         assert!(expect > 0, "2000m 轨迹爬升为 0，海拔序列是平的");
         // 圈爬升是逐点累加（真机每公里 ~55m），总爬升是平滑后累加（真机
         // 17~22m）——这两个口径本来就不一致，App 那边也是分开算的。
         // 只要求前者不小于后者：平滑只会削掉噪声，不该凭空造出爬升。
         let laps = build_laps_from_points(&arr, p.start_time_ms, p.total_steps as i64);
-        let lap_sum: f64 = laps.iter().map(|l| l["elevationGain"].as_f64().unwrap()).sum();
-        assert!((expect as f64) <= lap_sum,
-            "平滑后的总爬升 {expect} 不应超过逐点累加的圈爬升和 {lap_sum}");
+        let lap_sum: f64 = laps
+            .iter()
+            .map(|l| l["elevationGain"].as_f64().unwrap())
+            .sum();
+        assert!(
+            (expect as f64) <= lap_sum,
+            "平滑后的总爬升 {expect} 不应超过逐点累加的圈爬升和 {lap_sum}"
+        );
         // 上报值也必须出现在签名参与字段里（否则服务端算签名会不一致）
-        assert!(sub.canonical.contains(&format!("totalAscent={expect}")),
-            "签名串里的 totalAscent 不是点位反算值: {}", sub.canonical);
-        assert!(sub.canonical.contains("avgPower="),
-            "签名串缺 avgPower");
+        assert!(
+            sub.canonical.contains(&format!("totalAscent={expect}")),
+            "签名串里的 totalAscent 不是点位反算值: {}",
+            sub.canonical
+        );
+        assert!(sub.canonical.contains("avgPower="), "签名串缺 avgPower");
     }
 }
 
@@ -3407,8 +3687,13 @@ mod audit_tests {
 
         // 这些是字符串/标识字段，允许非数字
         let text_keys = [
-            "address", "geeToken", "goalId", "policy", "uuid",
-            "selectedUnid", "uid",
+            "address",
+            "geeToken",
+            "goalId",
+            "policy",
+            "uuid",
+            "selectedUnid",
+            "uid",
         ];
         for kv in sub.canonical.split('&') {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
@@ -3429,7 +3714,10 @@ mod audit_tests {
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let v = &sub.save_record["avgPower"];
-        assert!(v.is_i64() || v.is_u64(), "avgPower 必须是 JSON 整数，实际 {v}");
+        assert!(
+            v.is_i64() || v.is_u64(),
+            "avgPower 必须是 JSON 整数，实际 {v}"
+        );
         assert!(v.as_i64().unwrap() > 0, "avgPower 不应为 0");
     }
 
@@ -3465,13 +3753,27 @@ mod audit_tests {
 
         let env: Value = serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap())
             .expect("fivePointJson 应是字符串化 JSON");
-        assert!(env.get("fivePointJson").is_some(), "外层 envelope 要带 fivePointJson");
+        assert!(
+            env.get("fivePointJson").is_some(),
+            "外层 envelope 要带 fivePointJson"
+        );
         let inner: Vec<Value> =
             serde_json::from_str(env["fivePointJson"].as_str().unwrap()).unwrap();
         assert!(!inner.is_empty(), "点位数组不能为空");
         for (i, f) in inner.iter().enumerate() {
-            for k in ["lon", "lat", "glon", "glat", "isFixed", "pointName",
-                      "position", "flag", "id", "isPass", "state"] {
+            for k in [
+                "lon",
+                "lat",
+                "glon",
+                "glat",
+                "isFixed",
+                "pointName",
+                "position",
+                "flag",
+                "id",
+                "isPass",
+                "state",
+            ] {
                 assert!(f.get(k).is_some(), "第 {i} 个点缺字段 {k}");
             }
             assert!(f["isPass"].is_boolean(), "isPass 必须是 bool");
@@ -3532,8 +3834,8 @@ mod audit_tests {
             .collect();
 
         let sub = build(&p, &t, &fixed, &sim).unwrap();
-        let env: Value = serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap())
-            .unwrap();
+        let env: Value =
+            serde_json::from_str(sub.save_record["fivePointJson"].as_str().unwrap()).unwrap();
         let inner: Vec<Value> =
             serde_json::from_str(env["fivePointJson"].as_str().unwrap()).unwrap();
         assert_eq!(inner.len(), 5, "五个必到点一个都不能少");
@@ -3545,7 +3847,10 @@ mod audit_tests {
         // 0 / 30 / 46 / 106 / 189 —— 就是轨迹下标；改成 0..4 之后 App 只剩 4 个。
         // 夹具的必到点打乱传在 220/30/290/90/150，按途经顺序排完是
         // 30/90/150/220/290，所以 position 应等于这五个轨迹下标本身。
-        let positions: Vec<i64> = inner.iter().map(|f| f["position"].as_i64().unwrap()).collect();
+        let positions: Vec<i64> = inner
+            .iter()
+            .map(|f| f["position"].as_i64().unwrap())
+            .collect();
         assert_eq!(
             positions,
             vec![29, 89, 149, 219, 289],
@@ -3553,7 +3858,10 @@ mod audit_tests {
         );
 
         // ② 数组顺序 = 途经顺序（按首次经过下标升序）
-        let got: Vec<&str> = inner.iter().map(|f| f["pointName"].as_str().unwrap()).collect();
+        let got: Vec<&str> = inner
+            .iter()
+            .map(|f| f["pointName"].as_str().unwrap())
+            .collect();
         assert_eq!(
             got,
             vec!["P30", "P90", "P150", "P220", "P290"],
@@ -3571,7 +3879,10 @@ mod audit_tests {
         // （实测 complete=true、semesterValidDis 全额）。
         // 想验证「原样跟随服务端标记」时先设 PACE_FORCE_NORMAL_POINT=0。
         let forced = crate::api::submit::force_normal_point();
-        let fixed_flags: Vec<i64> = inner.iter().map(|f| f["isFixed"].as_i64().unwrap()).collect();
+        let fixed_flags: Vec<i64> = inner
+            .iter()
+            .map(|f| f["isFixed"].as_i64().unwrap())
+            .collect();
         let expect: Vec<i64> = if forced {
             vec![0, 0, 0, 0, 0]
         } else {
@@ -3588,7 +3899,11 @@ mod audit_tests {
         // 实测 11-11 那版（id 从 1 起）跑出来的记录 App 能画全 5 个点，
         // 81 起只剩 4 个。见 FIXED_POINT_ID_BASE 的注释。
         let ids: Vec<i64> = inner.iter().map(|f| f["id"].as_i64().unwrap()).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5], "id 必须从 {FIXED_POINT_ID_BASE} 起连续");
+        assert_eq!(
+            ids,
+            vec![1, 2, 3, 4, 5],
+            "id 必须从 {FIXED_POINT_ID_BASE} 起连续"
+        );
         let flags: Vec<i64> = inner.iter().map(|f| f["flag"].as_i64().unwrap()).collect();
         assert!(
             flags.iter().all(|&f| f == p.start_time_ms),
@@ -3602,10 +3917,20 @@ mod audit_tests {
             let lon = f["lon"].as_f64().unwrap();
             let glat = f["glat"].as_f64().unwrap();
             let glon = f["glon"].as_f64().unwrap();
-            assert!(lat != 0.0 && lon != 0.0, "BD-09 坐标不能是 0：{}", f["pointName"]);
-            assert!(glat != 0.0 && glon != 0.0, "GCJ-02 坐标不能是 0：{}", f["pointName"]);
-            assert!((lat - glat).abs() > 1e-6 || (lon - glon).abs() > 1e-6,
-                "BD-09 与 GCJ-02 是两套坐标，不该相等");
+            assert!(
+                lat != 0.0 && lon != 0.0,
+                "BD-09 坐标不能是 0：{}",
+                f["pointName"]
+            );
+            assert!(
+                glat != 0.0 && glon != 0.0,
+                "GCJ-02 坐标不能是 0：{}",
+                f["pointName"]
+            );
+            assert!(
+                (lat - glat).abs() > 1e-6 || (lon - glon).abs() > 1e-6,
+                "BD-09 与 GCJ-02 是两套坐标，不该相等"
+            );
         }
 
         // ⑥ isPass 按真实匹配填（这五个点轨迹都经过）
@@ -3849,7 +4174,11 @@ mod parity_regression_tests {
             .map(|&(la, lo, t, ..)| {
                 // 真机坐标是 GCJ-02，生成链路入口要 BD-09
                 let (bl, bo) = crate::api::coord::gcj02_to_bd09(la, lo);
-                TrackPoint { lat: bl, lon: bo, time_ms: REAL_FLAG + t * 1000 }
+                TrackPoint {
+                    lat: bl,
+                    lon: bo,
+                    time_ms: REAL_FLAG + t * 1000,
+                }
             })
             .collect();
         let p = params();
@@ -3872,16 +4201,29 @@ mod parity_regression_tests {
             use base64::Engine;
             use flate2::read::GzDecoder;
             use std::io::Read;
-            let five = sub.save_record["fivePointJson"].as_str().expect("fivePointJson");
+            let five = sub.save_record["fivePointJson"]
+                .as_str()
+                .expect("fivePointJson");
             let obj = crate::api::flow::detail_payload_rrid(
-                &sim, "123", 99, p.start_time_ms, "U", five, &sub.points,
+                &sim,
+                "123",
+                99,
+                p.start_time_ms,
+                "U",
+                five,
+                &sub.points,
             );
             let raw = obj["run_data"].as_str().expect("run_data 是 gzip+base64");
-            let bytes = base64::engine::general_purpose::STANDARD.decode(raw).expect("base64");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(raw)
+                .expect("base64");
             let mut text = String::new();
-            GzDecoder::new(&bytes[..]).read_to_string(&mut text).expect("gunzip");
+            GzDecoder::new(&bytes[..])
+                .read_to_string(&mut text)
+                .expect("gunzip");
             let run: serde_json::Value = serde_json::from_str(&text).expect("run_data JSON");
-            serde_json::from_str(run["allLocJson"].as_str().expect("allLocJson")).expect("allLocJson")
+            serde_json::from_str(run["allLocJson"].as_str().expect("allLocJson"))
+                .expect("allLocJson")
         };
         // 两条链必须是同一套口径（逐字段相同；`smooth_point_speed` 幂等）
         for (i, (a, b)) in obs_pts.iter().zip(ours.iter()).enumerate() {
@@ -3918,61 +4260,64 @@ mod parity_regression_tests {
         let mut rel_speed: Vec<f64> = Vec::new();
         let mut rel_avg: Vec<f64> = Vec::new();
         for chain in [&obs_pts, ours] {
-        for i in (su + 1)..REAL_POINTS.len() {
-            let (_, _, _, _, real_sp, real_av, real_bd) = REAL_POINTS[i];
-            if real_av <= 0.0 || is_filter_residual(i) {
-                continue;
-            }
-            let q = &chain[i];
-            let sp = q["speed"].as_f64().unwrap();
-            let av = q["avgSpeed"].as_f64().unwrap();
-            let bd = q["bdS"].as_f64().unwrap();
+            for i in (su + 1)..REAL_POINTS.len() {
+                let (_, _, _, _, real_sp, real_av, real_bd) = REAL_POINTS[i];
+                if real_av <= 0.0 || is_filter_residual(i) {
+                    continue;
+                }
+                let q = &chain[i];
+                let sp = q["speed"].as_f64().unwrap();
+                let av = q["avgSpeed"].as_f64().unwrap();
+                let bd = q["bdS"].as_f64().unwrap();
 
-            // ① 口径自洽：speed 就是 avgSpeed 的配速
-            let want = 1_000.0 / (60.0 * av);
-            assert!(
-                (sp - want).abs() <= want * 0.01 + 0.01,
-                "第 {i} 点 speed={sp} 应为配速 {want:.4}（换算按 v×3.6 的话是 {:.4}）",
-                av * 3.6
-            );
-            // ② 交叉判单位：真机配速 × 我们的点间速度
-            // 用真机自己的两个字段相乘：速度（m/s）× 配速（分/公里）恒等于
-            // 1000/60 ≈ 16.667，差得多就是单位被换了。早先拿我们的 `av`
-            // 当另一个乘子，坐标统一平移后 GCJ 换算会带 0.3% 漂移，检查就
-            // 变成了几何精度检查；`av` 与真机的贴合由 ③ 管。
-            let cross = real_sp * real_av;
-            assert!(
+                // ① 口径自洽：speed 就是 avgSpeed 的配速
+                let want = 1_000.0 / (60.0 * av);
+                assert!(
+                    (sp - want).abs() <= want * 0.01 + 0.01,
+                    "第 {i} 点 speed={sp} 应为配速 {want:.4}（换算按 v×3.6 的话是 {:.4}）",
+                    av * 3.6
+                );
+                // ② 交叉判单位：真机配速 × 我们的点间速度
+                // 用真机自己的两个字段相乘：速度（m/s）× 配速（分/公里）恒等于
+                // 1000/60 ≈ 16.667，差得多就是单位被换了。早先拿我们的 `av`
+                // 当另一个乘子，坐标统一平移后 GCJ 换算会带 0.3% 漂移，检查就
+                // 变成了几何精度检查；`av` 与真机的贴合由 ③ 管。
+                let cross = real_sp * real_av;
+                assert!(
                 (16.4..=16.9).contains(&cross),
                 "第 {i} 点 真机 speed({real_sp}) × 我们的 avgSpeed({av}) = {cross:.4}，不在 16.5~16.8：speed 被当成 km/h 发了（A2 的那个错）"
             );
-            // ③ 逐点相对误差
-            let rs = (sp - real_sp).abs() / real_sp;
-            let ra = (av - real_av).abs() / real_av;
-            assert!(
-                rs <= 0.03,
-                "第 {i} 点 speed={sp} vs 真机 {real_sp}，相对误差 {:.2}% > 3%",
-                rs * 100.0
-            );
-            assert!(
-                ra <= 0.03,
-                "第 {i} 点 avgSpeed={av} vs 真机 {real_av}，相对误差 {:.2}% > 3%",
-                ra * 100.0
-            );
-            // ④ bdS：同一个量纲（m/s），且与真机滤波值的差在实测残差范围内
-            let db = (bd - real_bd).abs();
-            assert!(
+                // ③ 逐点相对误差
+                let rs = (sp - real_sp).abs() / real_sp;
+                let ra = (av - real_av).abs() / real_av;
+                assert!(
+                    rs <= 0.03,
+                    "第 {i} 点 speed={sp} vs 真机 {real_sp}，相对误差 {:.2}% > 3%",
+                    rs * 100.0
+                );
+                assert!(
+                    ra <= 0.03,
+                    "第 {i} 点 avgSpeed={av} vs 真机 {real_av}，相对误差 {:.2}% > 3%",
+                    ra * 100.0
+                );
+                // ④ bdS：同一个量纲（m/s），且与真机滤波值的差在实测残差范围内
+                let db = (bd - real_bd).abs();
+                assert!(
                 db <= 1.15,
                 "第 {i} 点 bdS={bd} vs 真机 {real_bd}，差 {db:.3} m/s > 1.15（bdS 是 m/s 低通值；若发成 speed/3.6 会差 60% 以上）"
             );
-            rel_speed.push(rs);
-            rel_avg.push(ra);
-            checked += 1;
-        }
+                rel_speed.push(rs);
+                rel_avg.push(ra);
+                checked += 1;
+            }
         }
 
         // 对拍面必须够大：114 点里除去起步窗口（0..18）与 5 个滤波残差点，
         // 每条链剩 88 点，两条链合计 176。
-        assert!(checked >= 160, "只对拍了 {checked} 个点（两条链各 ~88），覆盖不足");
+        assert!(
+            checked >= 160,
+            "只对拍了 {checked} 个点（两条链各 ~88），覆盖不足"
+        );
         // 中位残差（逐点断言之外再看整体，防「个别点对上一片点偏」）
         let med = |v: &mut Vec<f64>| {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -3984,10 +4329,20 @@ mod parity_regression_tests {
         // GCJ-02 偏移量随经纬度缓变，平移后逐点距离会有 0.5% 量级的漂移。
         // 逐点误差仍有 3% 上限，这里只防「整体偏一片」。
         assert!(ms <= 0.007, "speed 中位相对误差 {:.3}% > 0.7%", ms * 100.0);
-        assert!(ma <= 0.007, "avgSpeed 中位相对误差 {:.3}% > 0.7%", ma * 100.0);
+        assert!(
+            ma <= 0.007,
+            "avgSpeed 中位相对误差 {:.3}% > 0.7%",
+            ma * 100.0
+        );
     }
 
-    fn build_all() -> (SubmitParams, Vec<TrackPoint>, Vec<Value>, Vec<Value>, Vec<Value>) {
+    fn build_all() -> (
+        SubmitParams,
+        Vec<TrackPoint>,
+        Vec<Value>,
+        Vec<Value>,
+        Vec<Value>,
+    ) {
         let p = params();
         let t = track_555();
         let sim = test_sim(&p, &t);
@@ -4025,9 +4380,8 @@ mod parity_regression_tests {
         // 会冒出一个 35 秒的段——「中间段严格 20 秒」当场自相矛盾。现在
         // 余数全给末段：555s → 首段 83s + 23×20s + 末段 12s = 25 段，
         // 与真机的 25 段同数（真机 86 + 23×20 + 9）。
-        let dur = |s: &Value| {
-            (s["endTime"].as_i64().unwrap() - s["startTime"].as_i64().unwrap()) / 1000
-        };
+        let dur =
+            |s: &Value| (s["endTime"].as_i64().unwrap() - s["startTime"].as_i64().unwrap()) / 1000;
         let rest = p.total_time_sec - crate::track::startup_sec(p.total_time_sec);
         let expect_last = if rest % 20 == 0 { 20 } else { rest % 20 };
         assert_eq!(dur(segs.last().unwrap()), expect_last, "末段应是余数");
@@ -4041,20 +4395,14 @@ mod parity_regression_tests {
 
         // ③ 首尾相接无空洞，时长和精确等于 totalTime
         for w in segs.windows(2) {
-            assert_eq!(
-                w[0]["endTime"], w[1]["startTime"],
-                "相邻段之间不能有空洞"
-            );
+            assert_eq!(w[0]["endTime"], w[1]["startTime"], "相邻段之间不能有空洞");
         }
         let sum_dur: i64 = segs.iter().map(dur).sum();
         assert_eq!(sum_dur, p.total_time_sec, "段时长和必须等于 totalTime");
 
         // ④ 段里程和 ≈ totalDis（±1%）
         let last_dis = pts.last().unwrap()["totalDis"].as_f64().unwrap();
-        let sum_d: f64 = segs
-            .iter()
-            .map(|s| s["distance"].as_f64().unwrap())
-            .sum();
+        let sum_d: f64 = segs.iter().map(|s| s["distance"].as_f64().unwrap()).sum();
         assert!(
             (sum_d - last_dis).abs() < last_dis * 0.01,
             "段里程和 {sum_d:.1}m 与 totalDis {last_dis:.1}m 差超过 1%"
@@ -4116,7 +4464,8 @@ mod parity_regression_tests {
     #[test]
     fn startup_window_and_segment_distance_sum() {
         use crate::track::{
-            compress_startup, path_length, plan, retime, simulate, KinParams, PlanRequest, SimParams,
+            compress_startup, path_length, plan, retime, simulate, KinParams, PlanRequest,
+            SimParams,
         };
         use rand::SeedableRng;
 
@@ -4141,19 +4490,29 @@ mod parity_regression_tests {
         let xy: Vec<(f64, f64)> = planned.points.iter().map(|p| (p.lat, p.lon)).collect();
 
         // ② 时间轴：按压平前的几何分配（压平只动坐标，不动时间戳）
-        let (times, _, _) = retime(&xy, dur, start, start as u64, &KinParams::default(), 1.0, 8.0);
+        let (times, _, _) = retime(
+            &xy,
+            dur,
+            start,
+            start as u64,
+            &KinParams::default(),
+            1.0,
+            8.0,
+        );
         let mut track: Vec<TrackPoint> = xy
             .iter()
             .zip(&times)
-            .map(|((a, b), t)| TrackPoint { lat: *a, lon: *b, time_ms: *t })
+            .map(|((a, b), t)| TrackPoint {
+                lat: *a,
+                lon: *b,
+                time_ms: *t,
+            })
             .collect();
 
         // ③ 起步窗口压平
         compress_startup(&mut track, start, dur, None);
-        let real_len = path_length(
-            &track.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>(),
-        )
-        .round() as i64;
+        let real_len =
+            path_length(&track.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>()).round() as i64;
 
         // ④ 步态合成 + 报文
         let timed: Vec<(f64, f64, i64)> = track.iter().map(|q| (q.lat, q.lon, q.time_ms)).collect();
@@ -4175,9 +4534,8 @@ mod parity_regression_tests {
         let pts = sub.points.clone();
         let segs = build_segments_from_points(&pts, start, sim.total_steps as i64);
 
-        let dur_of = |s: &Value| {
-            (s["endTime"].as_i64().unwrap() - s["startTime"].as_i64().unwrap()) / 1000
-        };
+        let dur_of =
+            |s: &Value| (s["endTime"].as_i64().unwrap() - s["startTime"].as_i64().unwrap()) / 1000;
         let last_dis = pts.last().unwrap()["totalDis"].as_f64().unwrap();
         let sum_d: f64 = segs.iter().map(|s| s["distance"].as_f64().unwrap()).sum();
 
@@ -4278,10 +4636,8 @@ mod parity_regression_tests {
         let (p, _t, pts, _segs, _laps) = build_all();
 
         // ① flag 全点唯一值只有 1 个
-        let flags: std::collections::HashSet<i64> = pts
-            .iter()
-            .map(|q| q["flag"].as_i64().unwrap())
-            .collect();
+        let flags: std::collections::HashSet<i64> =
+            pts.iter().map(|q| q["flag"].as_i64().unwrap()).collect();
         assert_eq!(flags.len(), 1, "所有点的 flag 必须同值，实际 {flags:?}");
         assert!(flags.contains(&p.start_time_ms), "flag 应是整场起始戳");
 
@@ -4303,7 +4659,10 @@ mod parity_regression_tests {
             let qn = q["queueNum"].as_i64().unwrap();
             assert!((0..=24).contains(&qn), "第 {i} 点 queueNum={qn}");
             let st = q["state"].as_i64().unwrap();
-            assert!([1, 2, 3].contains(&st), "第 {i} 点 state={st} 不在真机三态里");
+            assert!(
+                [1, 2, 3].contains(&st),
+                "第 {i} 点 state={st} 不在真机三态里"
+            );
             let ty = q["type"].as_i64().unwrap();
             assert!(
                 [0, 3, 5, 6].contains(&ty),
@@ -4317,10 +4676,8 @@ mod parity_regression_tests {
             .map(|q| (q["radius"].as_f64().unwrap() * 100.0) as i64)
             .collect();
         assert!(rad.len() >= 4, "radius 只有 {} 种取值，等于常量", rad.len());
-        let cnt: std::collections::HashSet<i64> = pts
-            .iter()
-            .map(|q| q["count"].as_i64().unwrap())
-            .collect();
+        let cnt: std::collections::HashSet<i64> =
+            pts.iter().map(|q| q["count"].as_i64().unwrap()).collect();
         assert!(cnt.len() >= 6, "count 只有 {} 种取值，等于常量", cnt.len());
 
         // ⑥ id 从一个大整数起、连续递增（真机 3516~3629）
@@ -4397,10 +4754,25 @@ mod parity_regression_tests {
             *states.entry(q["state"].as_i64().unwrap()).or_insert(0) += 1;
         }
         // 新版真机（104 点）{0: 101, 3: 1, 5: 1, 6: 1}：没有 -1 灰点
-        assert_eq!(types.get(&-1).copied().unwrap_or(0), 0, "新版真机不发 -1 灰点: {types:?}");
-        assert_eq!(types.get(&2).copied().unwrap_or(0), 0, "新版真机不发 type=2: {types:?}");
-        assert_eq!(types.get(&7).copied().unwrap_or(0), 0, "新版真机不发 type=7: {types:?}");
-        assert!(states.get(&3).copied().unwrap_or(0) >= pts.len() / 5, "收尾段太少: {states:?}");
+        assert_eq!(
+            types.get(&-1).copied().unwrap_or(0),
+            0,
+            "新版真机不发 -1 灰点: {types:?}"
+        );
+        assert_eq!(
+            types.get(&2).copied().unwrap_or(0),
+            0,
+            "新版真机不发 type=2: {types:?}"
+        );
+        assert_eq!(
+            types.get(&7).copied().unwrap_or(0),
+            0,
+            "新版真机不发 type=7: {types:?}"
+        );
+        assert!(
+            states.get(&3).copied().unwrap_or(0) >= pts.len() / 5,
+            "收尾段太少: {states:?}"
+        );
         assert!(
             states.get(&1).copied().unwrap_or(0) > states.get(&3).copied().unwrap_or(0),
             "运动段应占多数: {states:?}"
@@ -4417,9 +4789,7 @@ mod parity_regression_tests {
         // 早先的正弦模型只给 6.7 m/km，圈 elevationGain 只有真机的 1/5。
         let asc: f64 = pts
             .windows(2)
-            .map(|w| {
-                (w[1]["bdA"].as_f64().unwrap() - w[0]["bdA"].as_f64().unwrap()).max(0.0)
-            })
+            .map(|w| (w[1]["bdA"].as_f64().unwrap() - w[0]["bdA"].as_f64().unwrap()).max(0.0))
             .sum();
         let last_dis = pts.last().unwrap()["totalDis"].as_f64().unwrap();
         let per_km = asc / (last_dis / 1000.0);
@@ -4454,12 +4824,18 @@ mod mark_match_tests {
     /// 沿经度方向等间距造一条直线轨迹（纬度 0，1 度经度 ≈ 111320m）。
     fn line_track(n: usize, step_m: f64) -> Vec<TrackPoint> {
         (0..n)
-            .map(|i| TrackPoint { lat: 0.0, lon: i as f64 * step_m / 111_320.0, time_ms: i as i64 * 5_000 })
+            .map(|i| TrackPoint {
+                lat: 0.0,
+                lon: i as f64 * step_m / 111_320.0,
+                time_ms: i as i64 * 5_000,
+            })
             .collect()
     }
 
     /// 线下点偏离轨迹的纬度偏移（米 → 度）。
-    fn off_line(m: f64) -> f64 { m / 111_320.0 }
+    fn off_line(m: f64) -> f64 {
+        m / 111_320.0
+    }
 
     #[test]
     fn reserved_start_point_falls_to_next_sample() {
@@ -4498,7 +4874,10 @@ mod mark_match_tests {
         let relaxed = match_checkpoints(&track, &[pt], &HashSet::new(), false);
         match relaxed[0] {
             MarkMatch::Relaxed { dist_m, .. } => {
-                assert!((dist_m - 60.0).abs() < 1.5, "偏出距离应约 60m，实际 {dist_m}");
+                assert!(
+                    (dist_m - 60.0).abs() < 1.5,
+                    "偏出距离应约 60m，实际 {dist_m}"
+                );
             }
             other => panic!("默认应 Relaxed，实际 {other:?}"),
         }

@@ -98,8 +98,7 @@ pub fn scale_to_length(
     }
 
     let base = points[0];
-    let snapshot: Vec<(usize, (f64, f64))> =
-        fixed.iter().map(|&i| (i, points[i])).collect();
+    let snapshot: Vec<(usize, (f64, f64))> = fixed.iter().map(|&i| (i, points[i])).collect();
 
     for _ in 0..20 {
         let current = path_length(points);
@@ -123,12 +122,7 @@ pub fn scale_to_length(
 /// 把一点平移到目标位置，并让邻域按线性衰减跟着移动，避免轨迹出现尖刺。
 ///
 /// 直接单点位移会在折线上留下一个突兀的折角，服务端轨迹图上很明显。
-pub fn nudge_to(
-    points: &mut [(f64, f64)],
-    index: usize,
-    target: (f64, f64),
-    spread: usize,
-) {
+pub fn nudge_to(points: &mut [(f64, f64)], index: usize, target: (f64, f64), spread: usize) {
     if index >= points.len() {
         return;
     }

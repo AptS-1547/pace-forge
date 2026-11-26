@@ -295,13 +295,7 @@ pub(crate) fn fmt_ms(ms: i64) -> String {
         year_days -= m;
         month += 1;
     }
-    format!(
-        "{:02}-{:02} {:02}:{:02}",
-        month,
-        year_days + 1,
-        h,
-        mi
-    )
+    format!("{:02}-{:02} {:02}:{:02}", month, year_days + 1, h, mi)
 }
 
 #[cfg(test)]

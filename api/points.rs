@@ -138,11 +138,12 @@ pub fn parse_points(v: &Value) -> Result<PointsContext, String> {
     let payload = v.get("data").unwrap_or(v);
     let points = extract_points(payload)?;
     let coords = points.iter().filter_map(point_xy).collect();
-    let gcj_coords = points
-        .iter()
-        .filter_map(super::policy::point_gcj)
-        .collect();
-    Ok(PointsContext { points, coords, gcj_coords })
+    let gcj_coords = points.iter().filter_map(super::policy::point_gcj).collect();
+    Ok(PointsContext {
+        points,
+        coords,
+        gcj_coords,
+    })
 }
 
 /// 嵌套下钻的最大层数。
@@ -165,7 +166,9 @@ fn extract_points_depth(payload: &Value, depth: usize) -> Result<Vec<Value>, Str
         "runPoints",
         "checkPointList",
     ] {
-        let Some(val) = payload.get(name) else { continue };
+        let Some(val) = payload.get(name) else {
+            continue;
+        };
         match val {
             Value::Array(a) => return Ok(a.clone()),
             // 有些版本把数组序列化成字符串
@@ -240,7 +243,9 @@ struct Cache {
 
 impl Cache {
     fn new() -> Self {
-        Self { map: std::collections::HashMap::new() }
+        Self {
+            map: std::collections::HashMap::new(),
+        }
     }
 
     fn get(&self, k: &str) -> Option<PointsContext> {
@@ -253,7 +258,8 @@ impl Cache {
     fn put(&mut self, k: &str, ctx: &PointsContext) {
         if self.map.len() >= CACHE_MAX_ENTRIES && !self.map.contains_key(k) {
             // 先丢过期的；还有满的才动刀丢最早过期的那个，绝不整表清空
-            self.map.retain(|_, (at, _)| at.elapsed().as_secs() < CACHE_TTL_SECS);
+            self.map
+                .retain(|_, (at, _)| at.elapsed().as_secs() < CACHE_TTL_SECS);
             if self.map.len() >= CACHE_MAX_ENTRIES {
                 if let Some(oldest) = self
                     .map
@@ -265,7 +271,8 @@ impl Cache {
                 }
             }
         }
-        self.map.insert(k.to_string(), (std::time::Instant::now(), ctx.clone()));
+        self.map
+            .insert(k.to_string(), (std::time::Instant::now(), ctx.clone()));
     }
 }
 
@@ -293,7 +300,10 @@ pub fn fetch_points_cached_at(
 ) -> Result<PointsContext, String> {
     let key = |d: i64| format!("{}:{lat:.4},{lng:.4}:d{d}", run_area_id.unwrap_or("-"));
     let read = |k: &str| -> Option<PointsContext> {
-        CACHE.lock().ok().and_then(|g| g.as_ref().and_then(|c| c.get(k)))
+        CACHE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|c| c.get(k)))
     };
     let write = |k: &str, ctx: &PointsContext| {
         if let Ok(mut g) = CACHE.lock() {

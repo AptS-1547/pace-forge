@@ -18,7 +18,7 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use super::geo::{distance, M_PER_DEG_LAT, m_per_deg_lng};
+use super::geo::{distance, m_per_deg_lng, M_PER_DEG_LAT};
 
 /// 标准正态抽样（Box-Muller）。
 ///
@@ -97,12 +97,7 @@ pub fn turn_speed_limit(a_c_max: f64, curvature: f64) -> f64 {
 /// 三点法的曲率（1/米）。
 ///
 /// 平面近似：把经纬度按等距圆柱投影换算成米，再算转角除以平均边长。
-fn curvature_at(
-    a: (f64, f64),
-    b: (f64, f64),
-    c: (f64, f64),
-    mid_lat: f64,
-) -> f64 {
+fn curvature_at(a: (f64, f64), b: (f64, f64), c: (f64, f64), mid_lat: f64) -> f64 {
     // 必须取「沿运动方向」的两条边：a→b 和 b→c。
     // 早先取的是 b→a 和 b→c（都从 b 出发），直线上两者方向相反，
     // atan2 会给出 π 而不是 0，于是直线被算成超急弯。
@@ -415,7 +410,8 @@ mod tests {
         let p = KinParams::default();
         let speeds = pace_profile(&pts, v0, &dts, 800.0, 42, &p, 0.2, 6.0, 1.0);
         let m = speeds.iter().sum::<f64>() / speeds.len() as f64;
-        let sd = (speeds.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / speeds.len() as f64).sqrt();
+        let sd =
+            (speeds.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / speeds.len() as f64).sqrt();
         assert!(
             sd / m < 0.55,
             "慢速跑速度相对离散度 {}/{} = {:.0}%，比标定记录（31%）宽出一倍",
@@ -437,7 +433,10 @@ mod tests {
                 pts.push((30.5, 104.0 + d / m_per_deg_lng(30.5)));
             } else {
                 let turn = (half as f64) * 5.0;
-                pts.push((30.5 + (d - turn) / M_PER_DEG_LAT, 104.0 + turn / m_per_deg_lng(30.5)));
+                pts.push((
+                    30.5 + (d - turn) / M_PER_DEG_LAT,
+                    104.0 + turn / m_per_deg_lng(30.5),
+                ));
             }
         }
         pts
@@ -445,9 +444,7 @@ mod tests {
 
     #[test]
     fn curvature_zero_on_straight() {
-        let pts: Vec<(f64, f64)> = (0..20)
-            .map(|i| (30.5, 104.0 + i as f64 * 1e-5))
-            .collect();
+        let pts: Vec<(f64, f64)> = (0..20).map(|i| (30.5, 104.0 + i as f64 * 1e-5)).collect();
         let (_, k) = arc_and_curvature(&pts);
         for (i, v) in k.iter().enumerate() {
             assert!(v.abs() < 1e-4, "直线第 {i} 点曲率 {v} 应接近 0");
@@ -468,10 +465,17 @@ mod tests {
         let (s, k) = arc_and_curvature(&pts);
         let p = KinParams::default();
         // 弯道处的限速应低于直道
-        let corner_i = k.iter().enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        let corner_i = k
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
         let v_corner = turn_speed_limit(p.a_c_max, k[corner_i].abs());
-        assert!(v_corner.is_finite() && v_corner < 20.0, "弯道限速 {v_corner}");
+        assert!(
+            v_corner.is_finite() && v_corner < 20.0,
+            "弯道限速 {v_corner}"
+        );
         // 弯道前 40m 的点应感受到可刹停约束
         let before = s.get(corner_i.saturating_sub(6)).copied().unwrap_or(0.0);
         let lim = speed_limit_ahead(&s, &k, before, &p);
@@ -485,9 +489,22 @@ mod tests {
             .collect();
         let dts = vec![2.0; 199];
         let target = 1000.0;
-        let w = pace_profile(&pts, 2.8, &dts, target, 42, &KinParams::default(), 1.0, 6.0, 1.0);
+        let w = pace_profile(
+            &pts,
+            2.8,
+            &dts,
+            target,
+            42,
+            &KinParams::default(),
+            1.0,
+            6.0,
+            1.0,
+        );
         let total: f64 = w.iter().zip(&dts).map(|(v, dt)| v * dt).sum();
-        assert!((total - target).abs() < 1.0, "总里程 {total} 偏离目标 {target}");
+        assert!(
+            (total - target).abs() < 1.0,
+            "总里程 {total} 偏离目标 {target}"
+        );
     }
 
     #[test]
@@ -496,7 +513,17 @@ mod tests {
             .map(|i| (30.5, 104.0 + i as f64 * 5.0 / m_per_deg_lng(30.5)))
             .collect();
         let dts = vec![2.0; 99];
-        let w = pace_profile(&pts, 2.5, &dts, 500.0, 1, &KinParams::default(), 1.5, 4.0, 1.0);
+        let w = pace_profile(
+            &pts,
+            2.5,
+            &dts,
+            500.0,
+            1,
+            &KinParams::default(),
+            1.5,
+            4.0,
+            1.0,
+        );
         // 中途停顿点是**有意的例外**：它远远低于 floor（0.06 m/s 那种），
         // 存在的意义就是把 App 配速图的纵轴撑开，别让主体波动被放大成锯齿。
         // 真机同样有这种点，所以这里只要求「绝大多数点」落在包络内。
@@ -517,7 +544,17 @@ mod tests {
             .map(|i| (30.5, 104.0 + i as f64 * 5.0 / m_per_deg_lng(30.5)))
             .collect();
         let dts = vec![1.5; 299];
-        let w = pace_profile(&pts, 3.0, &dts, 1200.0, 7, &KinParams::default(), 1.0, 6.0, 1.0);
+        let w = pace_profile(
+            &pts,
+            3.0,
+            &dts,
+            1200.0,
+            7,
+            &KinParams::default(),
+            1.0,
+            6.0,
+            1.0,
+        );
 
         // 真·lag-1 自相关：必须显著高于白噪声上界
         let r1 = lag1_autocorr(&w);
@@ -557,7 +594,10 @@ mod tests {
         let dts = vec![1.8; 399];
         // σ=0：这条测的是冲刺项本身。σ 拉到真机量级（1.10）之后，噪声
         // 会盖住 12% 的冲刺幅度，测的就不再是冲刺了。
-        let kin = KinParams { sigma: 0.0, ..Default::default() };
+        let kin = KinParams {
+            sigma: 0.0,
+            ..Default::default()
+        };
         let w = pace_profile(&pts, 2.8, &dts, 2000.0, 11, &kin, 1.0, 8.0, 1.0);
         let n = w.len();
         let mid_avg: f64 = w[n / 3..n * 2 / 3].iter().sum::<f64>() / (n / 3) as f64;
@@ -584,7 +624,10 @@ mod tests {
         let n = w.len();
         let mid: f64 = w[n / 3..n * 2 / 3].iter().sum::<f64>() / (n / 3) as f64;
         let tail: f64 = w[n - 20..].iter().sum::<f64>() / 20.0;
-        assert!((tail - mid).abs() / mid < 0.06, "关闭冲刺后尾段 {tail:.3} 应接近中段 {mid:.3}");
+        assert!(
+            (tail - mid).abs() / mid < 0.06,
+            "关闭冲刺后尾段 {tail:.3} 应接近中段 {mid:.3}"
+        );
     }
 
     #[test]
@@ -593,8 +636,28 @@ mod tests {
             .map(|i| (30.5, 104.0 + i as f64 * 5.0 / m_per_deg_lng(30.5)))
             .collect();
         let dts = vec![2.0; 79];
-        let a = pace_profile(&pts, 2.8, &dts, 400.0, 99, &KinParams::default(), 1.0, 6.0, 1.0);
-        let b = pace_profile(&pts, 2.8, &dts, 400.0, 99, &KinParams::default(), 1.0, 6.0, 1.0);
+        let a = pace_profile(
+            &pts,
+            2.8,
+            &dts,
+            400.0,
+            99,
+            &KinParams::default(),
+            1.0,
+            6.0,
+            1.0,
+        );
+        let b = pace_profile(
+            &pts,
+            2.8,
+            &dts,
+            400.0,
+            99,
+            &KinParams::default(),
+            1.0,
+            6.0,
+            1.0,
+        );
         assert_eq!(a, b);
     }
 }

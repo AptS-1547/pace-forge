@@ -49,7 +49,11 @@ impl SemesterSummary {
     pub fn summary(&self) -> String {
         format!(
             "{}：{:.2}km 有效（共 {:.2}km）· {} 次有效（共 {} 次）",
-            if self.sname.is_empty() { "本学期" } else { &self.sname },
+            if self.sname.is_empty() {
+                "本学期"
+            } else {
+                &self.sname
+            },
             self.semester_valid_dis / 1000.0,
             self.semester_dis / 1000.0,
             self.semester_valid_count,
@@ -154,7 +158,11 @@ pub fn fetch_summary_for(client: &Client, sid: Option<i64>) -> Result<SemesterSu
 pub fn parse_summary(v: &Value) -> SemesterSummary {
     let d = v.get("data").unwrap_or(v);
     SemesterSummary {
-        sname: d.get("sname").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        sname: d
+            .get("sname")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         semester_dis: d.get("semesterDis").and_then(|x| x.as_f64()).unwrap_or(0.0),
         semester_valid_dis: d
             .get("semesterValidDis")
@@ -197,11 +205,20 @@ pub fn parse_goal(v: &Value) -> SemesterGoal {
     };
     SemesterGoal {
         // 真实字段名（7.4.01 实测）：semesterGoal / semesterValid / startDate / endDate
-        target_dis: num(&["semesterGoal", "targetDis", "semesterTargetDis", "selDistance"]),
+        target_dis: num(&[
+            "semesterGoal",
+            "targetDis",
+            "semesterTargetDis",
+            "selDistance",
+        ]),
         target_count: num(&["targetCount", "semesterTargetCount", "selCount"]) as i64,
         begin_ms: num(&["startDate", "beginTime", "startTime"]) as i64,
         end_ms: num(&["endDate", "endTime", "stopTime"]) as i64,
-        sname: d.get("sname").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        sname: d
+            .get("sname")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         valid_dis: num(&["semesterValid"]),
         goal_method: num(&["goalMethod"]) as i64,
         sid: num(&["sid"]) as i64,
@@ -214,7 +231,11 @@ pub fn parse_goal(v: &Value) -> SemesterGoal {
 ///
 /// 返回 (有效计分跑次数, 这些跑分布在多少个自然日)。次数按「服务端自己给的
 /// validDis > 0」计，不做任何日上限假设——日上限那套只影响里程，不影响次数。
-pub fn derived_count(client: &Client, begin_ms: i64, end_ms: i64) -> Result<(usize, usize), String> {
+pub fn derived_count(
+    client: &Client,
+    begin_ms: i64,
+    end_ms: i64,
+) -> Result<(usize, usize), String> {
     use std::collections::BTreeSet;
     let mut days: BTreeSet<String> = BTreeSet::new();
     let mut runs = 0usize;
@@ -254,7 +275,10 @@ pub fn derived_count(client: &Client, begin_ms: i64, end_ms: i64) -> Result<(usi
             // 列表接口的字段名经过 `records::normalize_list`：有效里程叫
             // `validDistance`（原始字段 `validDis`），`sportType` 可能没下发——
             // 请求本身就是 type=1（计分跑），缺字段按计分跑算。
-            if r.get("sportType").and_then(|x| x.as_i64()).is_some_and(|s| s != 1) {
+            if r.get("sportType")
+                .and_then(|x| x.as_i64())
+                .is_some_and(|s| s != 1)
+            {
                 continue;
             }
             let valid = r

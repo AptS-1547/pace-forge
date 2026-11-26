@@ -2,27 +2,34 @@
 //!
 //! 全部为纯计算，不碰网络，可用单测完整验证。
 
+pub mod biomech;
 pub mod buckets;
 pub mod detect;
 pub mod fence_route;
-pub mod stadium;
-pub mod roadnet;
-pub mod tileroad;
-pub mod biomech;
-pub mod kinematics;
-pub mod preflight;
-pub mod simulate;
 pub mod geo;
+pub mod kinematics;
 pub mod planner;
+pub mod preflight;
+pub mod roadnet;
+pub mod simulate;
+pub mod stadium;
+pub mod tileroad;
 
-pub use stadium::{campus_oval_track, lap_length, lane_radius, looks_like_stadium, random_oval, stadium_track, OvalSpec, StadiumSpec};
-pub use biomech::{cadence_for, fatigue_from_km, gait, ou_cadence_series, speed_from, stride_for, Gait};
+pub use biomech::{
+    cadence_for, fatigue_from_km, gait, ou_cadence_series, speed_from, stride_for, Gait,
+};
 pub use buckets::{make_jitter, speed_buckets, step_buckets, SpeedBucket, StepBucket};
-pub use kinematics::{arc_and_curvature, pace_profile, speed_limit_ahead, turn_speed_limit, KinParams};
+pub use geo::{distance, path_length, sample_along, scale_to_length};
+pub use kinematics::{
+    arc_and_curvature, pace_profile, speed_limit_ahead, turn_speed_limit, KinParams,
+};
+pub use planner::{assign_times, plan, Checkpoint, PlanRequest, PlanResult, TrackPoint};
 pub use preflight::{inspect, inspect_at, Check, Issue, Level, Report};
 pub use simulate::{retime, simulate, validate, SimParams, SimResult};
-pub use geo::{distance, path_length, sample_along, scale_to_length};
-pub use planner::{assign_times, plan, Checkpoint, PlanRequest, PlanResult, TrackPoint};
+pub use stadium::{
+    campus_oval_track, lane_radius, lap_length, looks_like_stadium, random_oval, stadium_track,
+    OvalSpec, StadiumSpec,
+};
 
 /// 起步漂移段占全程的比例。
 ///
@@ -247,7 +254,7 @@ pub fn compress_startup(
             .map(|w| {
                 let dt = (((w[1].time_ms - start_ms) as f64 / 1000.0).floor()
                     - ((w[0].time_ms - start_ms) as f64 / 1000.0).floor())
-                    .max(1.0);
+                .max(1.0);
                 vmax * dt * 1.15
             })
             .collect();
@@ -594,9 +601,7 @@ fn turn_deg(path: &[(f64, f64)], j: usize) -> f64 {
     }
     let mlat = geo::M_PER_DEG_LAT;
     let mlng = geo::m_per_deg_lng(path[j].0).max(1.0);
-    let v = |a: (f64, f64), b: (f64, f64)| {
-        ((b.0 - a.0) * mlat, (b.1 - a.1) * mlng)
-    };
+    let v = |a: (f64, f64), b: (f64, f64)| ((b.0 - a.0) * mlat, (b.1 - a.1) * mlng);
     let (y1, x1) = v(path[j - 1], path[j]);
     let (y2, x2) = v(path[j], path[j + 1]);
     let l1 = (y1 * y1 + x1 * x1).sqrt();
@@ -762,7 +767,9 @@ pub fn sample_by_time(
     // 上限同时受「规则上限」和真机实测上限约束：真机最快的采样点 6.21 m/s
     // （31.07m / 5s），按 8 m/s 放开能跑出 40m 的相邻间隔，
     // `detect` 会当场报「不像走出来的」。
-    let ceil = v_ceil.min(crate::api::submit::MAX_POINT_SPEED_MPS).max(floor + 0.1);
+    let ceil = v_ceil
+        .min(crate::api::submit::MAX_POINT_SPEED_MPS)
+        .max(floor + 0.1);
 
     // 弧长初值等分，再迭代两轮让「按位置取点 → 速度剖面 → 按速度积分」自洽
     let mut s: Vec<f64> = (0..n)
@@ -847,7 +854,9 @@ pub fn sample_by_time(
     // 和 `snap_checkpoints` 是同一个手法。
     let mut override_pos: Option<(f64, f64)> = None;
     for i in 0..n {
-        let q = override_pos.take().unwrap_or_else(|| point_at_arc(path, &arc, s[i]));
+        let q = override_pos
+            .take()
+            .unwrap_or_else(|| point_at_arc(path, &arc, s[i]));
         out.push(TrackPoint {
             lat: q.0,
             lon: q.1,
@@ -1368,7 +1377,6 @@ pub fn queue_num(pos: usize, n: usize, startup: usize) -> i32 {
     (1 + (pos - startup) / step).min(24) as i32
 }
 
-
 #[cfg(test)]
 mod window_tests {
     use super::*;
@@ -1412,9 +1420,12 @@ mod window_tests {
             // 首段配速：窗口秒数 ÷ 窗口里程（分/公里）
             let first_pace_min = (w as f64 / 60.0) / (startup_m / 1000.0);
             // 出窗后的正常配速：剩余秒数 ÷ 剩余里程
-            let rest_pace_min =
-                ((total - w) as f64 / 60.0) / ((total_m - startup_m) / 1000.0);
-            let tag = if total == 555 { "实测样本时长" } else { "外推，无样本" };
+            let rest_pace_min = ((total - w) as f64 / 60.0) / ((total_m - startup_m) / 1000.0);
+            let tag = if total == 555 {
+                "实测样本时长"
+            } else {
+                "外推，无样本"
+            };
             println!(
                 "总时长 {total}s（{tag}）→ 窗口 {w}s / {pts} 个零速度点 / 里程预算 {startup_m:.0}m / 首段 {first_pace_min:.0}'/km，出窗后 {rest_pace_min:.2}'/km",
             );
@@ -1463,7 +1474,7 @@ mod nudge_tests {
         let mlat = 1.0 / 110_540.0;
         let mut pts = vec![
             tp(start.0, start.1, 0),
-            tp(end.0, end.1, 5000),          // 这一步从起点直冲终点，跳过整个拐角
+            tp(end.0, end.1, 5000), // 这一步从起点直冲终点，跳过整个拐角
             tp(end.0 + 30.0 * mlat, end.1, 10000), // 第三点：让第二点不是末点
         ];
         let before = pts[1];
@@ -1504,10 +1515,7 @@ mod nudge_tests {
     fn last_point_is_never_moved() {
         let dense = bent_shape();
         let (start, end) = (dense[0], dense[30]);
-        let mut pts = vec![
-            tp(start.0, start.1, 0),
-            tp(end.0, end.1, 5000),
-        ];
+        let mut pts = vec![tp(start.0, start.1, 0), tp(end.0, end.1, 5000)];
         let _ = nudge_to_corners(&mut pts, &dense, 12.0);
         // 末点（收尾哨兵）位置保持不变——即使它跨过了整个拐角
         assert_eq!((pts[1].lat, pts[1].lon), (end.0, end.1));
@@ -1518,7 +1526,10 @@ mod nudge_tests {
         let dense = bent_shape();
         let mut one = vec![tp(dense[0].0, dense[0].1, 0)];
         assert_eq!(nudge_to_corners(&mut one, &dense, 12.0), 0);
-        let mut two = vec![tp(dense[0].0, dense[0].1, 0), tp(dense[30].0, dense[30].1, 5000)];
+        let mut two = vec![
+            tp(dense[0].0, dense[0].1, 0),
+            tp(dense[30].0, dense[30].1, 5000),
+        ];
         assert_eq!(nudge_to_corners(&mut two, &[], 12.0), 0);
         assert_eq!(nudge_to_corners(&mut two, &dense, 0.0), 0);
         assert_eq!(nudge_to_corners(&mut two, &dense, -1.0), 0);
@@ -1554,17 +1565,17 @@ mod queue_num_tests {
     /// 所以尾部三档的宽度是 5/4/2，不是等宽的 4/4/3。
     pub(super) const REAL_POINT_QUEUE: [i32; 114] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3,
-        3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10,
-        10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 16,
-        16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20, 20, 20, 21, 21, 21,
-        21, 22, 22, 22, 22, 22, 23, 23, 23, 23, 24, 24,
+        3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10,
+        11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 16, 16, 16,
+        16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20, 20, 20, 21, 21, 21, 21, 22, 22,
+        22, 22, 22, 23, 23, 23, 23, 24, 24,
     ];
 
     /// 真机 `speed_json[i].queueNum`（55 个桶）：前 8 个 0，之后每 2 个桶 +1。
     const REAL_BUCKET_QUEUE: [i32; 55] = [
         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11,
-        11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22,
-        22, 23, 23, 24,
+        11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22,
+        23, 23, 24,
     ];
 
     /// 真机尾部的两个已知差：等宽网格给 23/24，真机是 22/23。
@@ -1581,10 +1592,17 @@ mod queue_num_tests {
             .map(|(i, &real)| (i, real, ours[i]))
             .filter(|&(_, real, got)| real != got)
             .collect();
-        assert!(diffs.is_empty(), "桶 queueNum 与真机不一致（下标, 真机, 我们）：{diffs:?}");
+        assert!(
+            diffs.is_empty(),
+            "桶 queueNum 与真机不一致（下标, 真机, 我们）：{diffs:?}"
+        );
         // 再逐元素硬比一遍，差异点在下面的 assert_eq 里能直接看到下标
         for (i, &real) in REAL_BUCKET_QUEUE.iter().enumerate() {
-            assert_eq!(ours[i], real, "第 {i} 个桶 queueNum 错：真机 {real} vs 我们 {}", ours[i]);
+            assert_eq!(
+                ours[i], real,
+                "第 {i} 个桶 queueNum 错：真机 {real} vs 我们 {}",
+                ours[i]
+            );
         }
     }
 
@@ -1622,7 +1640,11 @@ mod queue_num_tests {
             if TAIL_ALLOWED_DIFF.contains(&i) {
                 continue;
             }
-            assert_eq!(ours[i], real, "第 {i} 个点 queueNum 错：真机 {real} vs 我们 {}", ours[i]);
+            assert_eq!(
+                ours[i], real,
+                "第 {i} 个点 queueNum 错：真机 {real} vs 我们 {}",
+                ours[i]
+            );
         }
 
         // 变化下标：真机 19,23,…,103,108,112。等宽网格给 19,23,…,103,107,111，
@@ -1632,7 +1654,10 @@ mod queue_num_tests {
         };
         let real_changes = changes(&REAL_POINT_QUEUE);
         let our_changes = changes(&ours);
-        assert_eq!(&real_changes[..real_changes.len() - 2], &our_changes[..our_changes.len() - 2]);
+        assert_eq!(
+            &real_changes[..real_changes.len() - 2],
+            &our_changes[..our_changes.len() - 2]
+        );
         assert_eq!(&real_changes[real_changes.len() - 2..], &[108, 112]);
         assert_eq!(&our_changes[our_changes.len() - 2..], &[107, 111]);
     }
@@ -1641,7 +1666,11 @@ mod queue_num_tests {
     /// 只要有人把实现改回 `round((pos-su)/span*23)`，它们立刻变红。
     #[test]
     fn no_linear_interpolation_drift() {
-        assert_eq!(queue_num(22, 114, 19), 1, "第 22 点仍是第 1 档（线性插值会给 2）");
+        assert_eq!(
+            queue_num(22, 114, 19),
+            1,
+            "第 22 点仍是第 1 档（线性插值会给 2）"
+        );
         assert_eq!(queue_num(26, 114, 19), 2);
         assert_eq!(queue_num(30, 114, 19), 3);
         // 桶侧：线性插值会给 9→2、11→3
@@ -1823,7 +1852,11 @@ mod checkpoint_hit_tests {
             expected_interval_sec: Some(SAMPLE_INTERVAL_SEC),
         });
         let det = crate::track::detect::inspect(
-            &view.points.iter().map(|p| (p.lat, p.lon)).collect::<Vec<_>>(),
+            &view
+                .points
+                .iter()
+                .map(|p| (p.lat, p.lon))
+                .collect::<Vec<_>>(),
             &sim.speed_buckets,
             crate::track::detect::PointRule::default(),
             view.start_time_ms + crate::track::startup_sec(view.total_time_sec) * 1000,
@@ -1881,8 +1914,16 @@ mod checkpoint_hit_tests {
         }
         // 起跑点本身就在第一个打卡点上（围栏/规划都从 must[0] 起跑），那些
         // 残距本身就是 0 的点不会被「移动」，所以这里只要求每个点都到位。
-        assert!(rep.moved() + 1 >= cps.len(), "只有 {} 个点被吸附", rep.moved());
-        assert!(rep.skipped.is_empty(), "不该有点位被跳过：{:?}", rep.skipped);
+        assert!(
+            rep.moved() + 1 >= cps.len(),
+            "只有 {} 个点被吸附",
+            rep.moved()
+        );
+        assert!(
+            rep.skipped.is_empty(),
+            "不该有点位被跳过：{:?}",
+            rep.skipped
+        );
         // 吸附不能把轨迹扯出跳变（GEO_JUMP_SOFT 是 60m）
         assert!(
             rep.max_gap_m < 60.0,
@@ -1892,11 +1933,7 @@ mod checkpoint_hit_tests {
 
         // 报文反解之后仍然是同一件事（gLat/gLng 存 1e-7 度，往返误差 ~1cm）
         let (report, det) = preflight_of(&cps, &after, len, dur);
-        assert!(
-            !det.blocked(),
-            "吸附后反检测体检不过：{:?}",
-            det.lines()
-        );
+        assert!(!det.blocked(), "吸附后反检测体检不过：{:?}", det.lines());
         assert!(
             !report.blocked(),
             "有必到点的跑被自检拦死：{:?}",
@@ -2010,11 +2047,7 @@ mod checkpoint_hit_tests {
                     .iter()
                     .map(|&cp| min_dist(&old_track, cp))
                     .fold(0.0, f64::max);
-                let cp_miss = old
-                    .issues
-                    .iter()
-                    .filter(|i| i.code == "CP_MISS")
-                    .count();
+                let cp_miss = old.issues.iter().filter(|i| i.code == "CP_MISS").count();
                 assert!(
                     old.blocked(),
                     "dist={dist} dur={dur} seed={seed} 改前居然没被拦，扫描无效"
@@ -2097,7 +2130,11 @@ mod checkpoint_hit_tests {
                             "planner dist={dist} dur={dur} seed={seed} 被拦：{:?}",
                             report.lines()
                         );
-                        assert!(!det.blocked(), "planner seed={seed} 反检测不过：{:?}", det.lines());
+                        assert!(
+                            !det.blocked(),
+                            "planner seed={seed} 反检测不过：{:?}",
+                            det.lines()
+                        );
                         let worst = cps
                             .iter()
                             .map(|&cp| min_dist(&track, cp))
@@ -2133,7 +2170,11 @@ mod checkpoint_hit_tests {
         let cps = official_cps();
         let dur = 555i64;
         let (track, len, rep) = fence_pipeline(&cps, 1683.0, dur, 2026, true);
-        assert!(rep.skipped.is_empty(), "不该有点位被跳过：{:?}", rep.skipped);
+        assert!(
+            rep.skipped.is_empty(),
+            "不该有点位被跳过：{:?}",
+            rep.skipped
+        );
         for (i, s) in rep.items.iter().enumerate() {
             assert!(
                 s.after_m <= CHECKPOINT_HIT_M,
@@ -2172,11 +2213,8 @@ mod checkpoint_hit_tests {
         };
         let sub = build(&params, &track, &[], &sim).expect("build");
         let pts = sub.points.clone();
-        let segs = crate::api::submit::build_segments_from_points(
-            &pts,
-            START_MS,
-            sim.total_steps as i64,
-        );
+        let segs =
+            crate::api::submit::build_segments_from_points(&pts, START_MS, sim.total_steps as i64);
         assert!(segs.len() > 2, "段表太短：{}", segs.len());
 
         let last_dis = pts.last().unwrap()["totalDis"].as_f64().unwrap();
@@ -2272,7 +2310,10 @@ mod checkpoint_hit_tests {
             rep.max_shift_m
         );
         // 吸附不能改变点数（否则等于偷偷换了采样节奏）
-        assert_eq!(track.len(), pipeline(&cps, 2000.0, 700, 2026, false).unwrap().0.len());
+        assert_eq!(
+            track.len(),
+            pipeline(&cps, 2000.0, 700, 2026, false).unwrap().0.len()
+        );
     }
 }
 
@@ -2283,7 +2324,11 @@ mod gap_clamp_tests {
     use super::*;
 
     fn tp(lat: f64, lon: f64) -> TrackPoint {
-        TrackPoint { lat, lon, time_ms: 0 }
+        TrackPoint {
+            lat,
+            lon,
+            time_ms: 0,
+        }
     }
 
     /// 沿 lat 走的一条直线，`n` 个点、间距 `step_m`。
@@ -2339,10 +2384,7 @@ mod gap_clamp_tests {
         pts[2].lat += 20.0 / mlat;
         clamp_sample_gaps(&mut pts, &[], 31.5);
         for i in 0..2 {
-            let g = geo::distance(
-                (pts[i].lat, pts[i].lon),
-                (pts[i + 1].lat, pts[i + 1].lon),
-            );
+            let g = geo::distance((pts[i].lat, pts[i].lon), (pts[i + 1].lat, pts[i + 1].lon));
             assert!(g <= 31.6, "第 {i} 段仍有 {g:.2}m，没收敛");
         }
     }
@@ -2401,7 +2443,11 @@ mod sample_rate_tests {
         let t = sample_times(555, START_MS, SAMPLE_INTERVAL_SEC);
         // 真机 114 点里有一个 `totalTime` 与首点完全相同的重复点，
         // 严格递增的发不出去，所以我们是 113（少 1 个）。
-        assert_eq!(t.len(), REAL_POINTS - 1, "1683m/555s 应该出 113 个上报点（真机 114 含一个重复 0）");
+        assert_eq!(
+            t.len(),
+            REAL_POINTS - 1,
+            "1683m/555s 应该出 113 个上报点（真机 114 含一个重复 0）"
+        );
         // 真机前三点是 0 / 0 / 3（两个点同一秒）。我们保留 0 / 3，
         // 丢掉那个发不出去的重复 0。
         let rel: Vec<i64> = t.iter().map(|x| (x - START_MS) / 1000).collect();
@@ -2423,9 +2469,21 @@ mod sample_rate_tests {
             h.keys().all(|k| (3..=5).contains(k)),
             "间隔只能落在真机出现过的 3/4/5 秒，实际直方图 {h:?}"
         );
-        assert_eq!(h.get(&5).copied().unwrap_or(0), 109, "5 秒间隔应有 109 个（真机 109），实际 {h:?}");
-        assert_eq!(h.get(&3).copied().unwrap_or(0), 2, "3 秒间隔应有 2 个（真机 2，起步 + 收尾），实际 {h:?}");
-        assert_eq!(h.get(&4).copied().unwrap_or(0), 1, "4 秒间隔应有 1 个（真机 1，收尾），实际 {h:?}");
+        assert_eq!(
+            h.get(&5).copied().unwrap_or(0),
+            109,
+            "5 秒间隔应有 109 个（真机 109），实际 {h:?}"
+        );
+        assert_eq!(
+            h.get(&3).copied().unwrap_or(0),
+            2,
+            "3 秒间隔应有 2 个（真机 2，起步 + 收尾），实际 {h:?}"
+        );
+        assert_eq!(
+            h.get(&4).copied().unwrap_or(0),
+            1,
+            "4 秒间隔应有 1 个（真机 1，收尾），实际 {h:?}"
+        );
         // 起步窗口 18 个点（真机 19，差的正是那个发不出去的重复 0）
         assert_eq!(
             startup_point_count(&t, START_MS, 555),
@@ -2446,7 +2504,10 @@ mod sample_rate_tests {
             );
             let d: Vec<i64> = t.windows(2).map(|w| (w[1] - w[0]) / 1000).collect();
             let bad: Vec<i64> = d.iter().copied().filter(|x| *x < 3 || *x > 5).collect();
-            assert!(bad.is_empty(), "总时长 {total} 出现真机没有的间隔 {bad:?}（全部 {d:?}）");
+            assert!(
+                bad.is_empty(),
+                "总时长 {total} 出现真机没有的间隔 {bad:?}（全部 {d:?}）"
+            );
         }
     }
 
@@ -2543,7 +2604,11 @@ mod sample_rate_tests {
         let n = track.len();
         let times: Vec<i64> = track.iter().map(|p| p.time_ms).collect();
         let su = startup_point_count(&times, START_MS, 555);
-        assert_eq!((n, su), (113, 18), "点数/起步点数必须先对上 5 秒网格（真机 114/19 含重复 0）");
+        assert_eq!(
+            (n, su),
+            (113, 18),
+            "点数/起步点数必须先对上 5 秒网格（真机 114/19 含重复 0）"
+        );
         let ours: Vec<i32> = (0..n).map(|i| queue_num(i, n, su)).collect();
         let real = &super::queue_num_tests::REAL_POINT_QUEUE;
         // 真机第 0、1 点时间戳相同（都是 0 秒），我们是 0 秒 / 3 秒，
@@ -2772,7 +2837,7 @@ mod sample_rate_tests {
             let (i, w) = w;
             let dt = (((w[1].time_ms - START_MS) as f64 / 1000.0).floor()
                 - ((w[0].time_ms - START_MS) as f64 / 1000.0).floor())
-                .max(1.0);
+            .max(1.0);
             let step = geo::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon));
             assert!(
                 step <= vmax * dt * 1.15 + 0.75,
@@ -2810,9 +2875,7 @@ mod sample_rate_tests {
     fn chords_hit(track: &[TrackPoint], blockers: &[Vec<(f64, f64)>]) -> usize {
         track
             .windows(2)
-            .filter(|w| {
-                chord_hits_blocker((w[0].lat, w[0].lon), (w[1].lat, w[1].lon), blockers)
-            })
+            .filter(|w| chord_hits_blocker((w[0].lat, w[0].lon), (w[1].lat, w[1].lon), blockers))
             .count()
     }
 
@@ -2847,9 +2910,11 @@ mod sample_rate_tests {
         ];
         // 折线必须全程在楼外（否则这条夹具测的就不是「弦穿楼」）
         assert!(
-            !path
-                .windows(2)
-                .any(|w| chord_hits_blocker(w[0], w[1], std::slice::from_ref(&building))),
+            !path.windows(2).any(|w| chord_hits_blocker(
+                w[0],
+                w[1],
+                std::slice::from_ref(&building)
+            )),
             "夹具不成立：折线本身就穿楼了"
         );
         let blockers = vec![building.clone()];
@@ -2858,16 +2923,7 @@ mod sample_rate_tests {
         let kin = kinematics::KinParams::default();
 
         // 不给障碍：两条弦直接从楼里穿过去
-        let naive = sample_by_time(
-            &path,
-            &times,
-            START_MS as u64,
-            &kin,
-            0.5,
-            10.0,
-            &[],
-            &[],
-        );
+        let naive = sample_by_time(&path, &times, START_MS as u64, &kin, 0.5, 10.0, &[], &[]);
         let before = chords_hit(&naive, &blockers);
         // 给障碍：补点绕开，一条都不许穿
         let guarded = sample_by_time(
@@ -2982,10 +3038,19 @@ mod sample_rate_tests {
         let kin = kinematics::KinParams::default();
         let naive = sample_by_time(&path, &times, START_MS as u64, &kin, 0.5, 10.0, &[], &[]);
         let guarded = sample_by_time(
-            &path, &times, START_MS as u64, &kin, 0.5, 10.0, &blockers, &[],
+            &path,
+            &times,
+            START_MS as u64,
+            &kin,
+            0.5,
+            10.0,
+            &blockers,
+            &[],
         );
-        let (naive_cross, guarded_cross) =
-            (chords_hit(&naive, &blockers), chords_hit(&guarded, &blockers));
+        let (naive_cross, guarded_cross) = (
+            chords_hit(&naive, &blockers),
+            chords_hit(&guarded, &blockers),
+        );
         // 重复率：相邻两步夹角 > 90° 的比例（与 tileroad 折返判据同口径）
         let repeat_rate = |t: &[TrackPoint]| {
             let steps: Vec<(f64, f64)> = t
@@ -3059,7 +3124,14 @@ mod sample_rate_tests {
         let times = sample_times(67, START_MS, SAMPLE_INTERVAL_SEC);
         let kin = kinematics::KinParams::default();
         let guarded = sample_by_time(
-            &avoided, &times, START_MS as u64, &kin, 0.5, 10.0, &blockers, &[],
+            &avoided,
+            &times,
+            START_MS as u64,
+            &kin,
+            0.5,
+            10.0,
+            &blockers,
+            &[],
         );
         let guarded_cross = chords_hit(&guarded, &blockers);
         println!(

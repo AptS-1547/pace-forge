@@ -99,15 +99,7 @@ pub fn simulate(points: &[(f64, f64, i64)], p: &SimParams) -> Result<SimResult, 
     let target_len = total_len;
     let v0 = target_len / p.total_sec as f64;
     let speeds = pace_profile(
-        &xy,
-        v0,
-        &dts,
-        target_len,
-        p.seed,
-        &p.kin,
-        p.v_floor,
-        p.v_ceil,
-        1.0,
+        &xy, v0, &dts, target_len, p.seed, &p.kin, p.v_floor, p.v_ceil, 1.0,
     );
 
     // ② 步频：由 OU 回归到「该速度的目标步频」
@@ -398,7 +390,9 @@ pub fn retime(
     let dt_avg = total_sec as f64 / (n - 1) as f64;
     let dts0 = vec![dt_avg; n - 1];
     let v0 = total_len / total_sec.max(1) as f64;
-    let speeds = pace_profile(points, v0, &dts0, total_len, seed, kin, v_floor, v_ceil, 1.0);
+    let speeds = pace_profile(
+        points, v0, &dts0, total_len, seed, kin, v_floor, v_ceil, 1.0,
+    );
 
     // 由速度反推每段用时，并用最大余数法分配，保证总时长精确。
     //
@@ -560,7 +554,10 @@ mod tests {
                 / sim.cadences.len() as f64)
                 .sqrt()
         };
-        assert!(sd < 25.0, "步频 sd {sd:.1} 过大：瞬时速度不该拖着步频来回扫");
+        assert!(
+            sd < 25.0,
+            "步频 sd {sd:.1} 过大：瞬时速度不该拖着步频来回扫"
+        );
     }
 
     use super::*;
@@ -569,7 +566,11 @@ mod tests {
         let step_t = sec * 1000 / (n as i64 - 1);
         (0..n)
             .map(|i| {
-                let t = if i == n - 1 { sec * 1000 } else { i as i64 * step_t };
+                let t = if i == n - 1 {
+                    sec * 1000
+                } else {
+                    i as i64 * step_t
+                };
                 (30.5 + i as f64 * 4.5e-5, 104.0, 1_730_000_000_000 + t)
             })
             .collect()
@@ -671,7 +672,15 @@ mod time_precision_tests {
         let pts: Vec<(f64, f64)> = (0..n)
             .map(|i| (31.2304 + i as f64 * 7.0 / 111_320.0, 101.4737))
             .collect();
-        let (times, _, _) = retime(&pts, 720, 1_790_000_000_000, 42, &KinParams::default(), 1.39, 8.33);
+        let (times, _, _) = retime(
+            &pts,
+            720,
+            1_790_000_000_000,
+            42,
+            &KinParams::default(),
+            1.39,
+            8.33,
+        );
         assert_eq!(times.len(), n);
         for w in times.windows(2) {
             let dt = w[1] - w[0];
@@ -679,10 +688,7 @@ mod time_precision_tests {
         }
         // 末点不能被推过总时长
         let span = (times[n - 1] - times[0]) / 1000;
-        assert!(
-            (span - 720).abs() <= 2,
-            "总时长 {span}s 偏离目标 720s"
-        );
+        assert!((span - 720).abs() <= 2, "总时长 {span}s 偏离目标 720s");
     }
 
     /// 慢速段也要满足 1 秒下限（这条最容易破）。
@@ -693,10 +699,17 @@ mod time_precision_tests {
             .map(|i| (31.2304 + i as f64 * 5.0 / 111_320.0, 101.4737))
             .collect();
         // 2 公里跑 40 分钟 = 0.83 m/s，接近下限
-        let (times, _, _) = retime(&pts, 2400, 1_790_000_000_000, 7, &KinParams::default(), 0.5, 2.0);
+        let (times, _, _) = retime(
+            &pts,
+            2400,
+            1_790_000_000_000,
+            7,
+            &KinParams::default(),
+            0.5,
+            2.0,
+        );
         for w in times.windows(2) {
             assert!(w[1] - w[0] >= 1000, "慢速段间隔不足 1 秒");
         }
     }
 }
-

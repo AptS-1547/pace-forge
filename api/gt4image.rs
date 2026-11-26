@@ -5,7 +5,6 @@
 //! 图像匹配部分实现。
 //! 算法本身与业务无关，未做改动，仅保留本地测试。
 
-
 /// PNG 解码 → 灰度（RGBA 合成到黑底）。
 pub fn decode_gray(png: &[u8]) -> Result<(Vec<u8>, usize, usize), String> {
     let img = image::load_from_memory(png).map_err(|e| format!("PNG 解码失败: {e}"))?;
@@ -76,9 +75,13 @@ pub fn canny(src: &[f32], w: usize, h: usize, low: f32, high: f32) -> Vec<u8> {
     for y in 0..h as i32 {
         for x in 0..w as i32 {
             let gx = -at(x - 1, y - 1) - 2.0 * at(x - 1, y) - at(x - 1, y + 1)
-                + at(x + 1, y - 1) + 2.0 * at(x + 1, y) + at(x + 1, y + 1);
+                + at(x + 1, y - 1)
+                + 2.0 * at(x + 1, y)
+                + at(x + 1, y + 1);
             let gy = -at(x - 1, y - 1) - 2.0 * at(x, y - 1) - at(x + 1, y - 1)
-                + at(x - 1, y + 1) + 2.0 * at(x, y + 1) + at(x + 1, y + 1);
+                + at(x - 1, y + 1)
+                + 2.0 * at(x, y + 1)
+                + at(x + 1, y + 1);
             let i = (y * w as i32 + x) as usize;
             mag[i] = (gx * gx + gy * gy).sqrt();
             dir[i] = gy.atan2(gx);
@@ -233,7 +236,10 @@ mod tests {
         }
         let bg_blur = gaussian_blur(&bg, w, h);
         let bg_edges = canny(&bg_blur, w, h, 50.0, 120.0);
-        assert!(bg_edges.iter().filter(|&&v| v == 255).count() > 20, "边缘太少");
+        assert!(
+            bg_edges.iter().filter(|&&v| v == 255).count() > 20,
+            "边缘太少"
+        );
         // 模板 = x=30 起裁 30x30（亮块 + 周边背景，真实切片同构）
         let (tw2, th2) = (30usize, 30usize);
         let mut tpl = vec![0u8; tw2 * th2];

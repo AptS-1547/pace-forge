@@ -54,11 +54,10 @@ pub fn open(
     }
 
     // 2. AES 解密
-    let r = v
-        .get("r")
-        .and_then(|x| x.as_str())
-        .ok_or("响应缺 r 字段")?;
-    let cipher = B64.decode(r).map_err(|e| format!("r 不是合法 base64: {e}"))?;
+    let r = v.get("r").and_then(|x| x.as_str()).ok_or("响应缺 r 字段")?;
+    let cipher = B64
+        .decode(r)
+        .map_err(|e| format!("r 不是合法 base64: {e}"))?;
     let plain_padded = Aes128CbcDec::new_from_slices(&session.response_key, &[0u8; 16])
         .map_err(|e| format!("AES 初始化失败: {e}"))?
         .decrypt_padded_vec_mut::<Pkcs7>(&cipher)
@@ -82,8 +81,8 @@ pub fn open(
     };
 
     // 4. 内层 data
-    let inner: serde_json::Value = serde_json::from_slice(&plain_padded)
-        .map_err(|e| format!("内层明文不是 JSON: {e}"))?;
+    let inner: serde_json::Value =
+        serde_json::from_slice(&plain_padded).map_err(|e| format!("内层明文不是 JSON: {e}"))?;
     let data_b64 = inner
         .get("data")
         .and_then(|x| x.as_str())
@@ -105,10 +104,12 @@ fn verify_signature(plaintext: &[u8], sig_b64: &str) -> Result<bool, String> {
     let der = B64
         .decode(RESP_VERIFY_SPKI_B64)
         .map_err(|e| format!("响应公钥 base64 解码失败: {e}"))?;
-    let pubkey = RsaPublicKey::from_public_key_der(&der)
-        .map_err(|e| format!("响应公钥解析失败: {e}"))?;
+    let pubkey =
+        RsaPublicKey::from_public_key_der(&der).map_err(|e| format!("响应公钥解析失败: {e}"))?;
 
-    let sig = B64.decode(sig_b64).map_err(|e| format!("s 不是合法 base64: {e}"))?;
+    let sig = B64
+        .decode(sig_b64)
+        .map_err(|e| format!("s 不是合法 base64: {e}"))?;
     let block_size = pubkey.n().bits().div_ceil(8);
     if sig.len() != block_size {
         return Err(format!(
@@ -203,13 +204,14 @@ mod tests {
     #[test]
     fn digest_matches_raw_and_digestinfo_forms() {
         let md5: [u8; 16] = [
-            0x9e, 0x10, 0x7d, 0xd2, 0x9a, 0x2b, 0x4c, 0x5e, 0x11, 0x63, 0x8f, 0xa1, 0x7c, 0x3d, 0x0b, 0x94,
+            0x9e, 0x10, 0x7d, 0xd2, 0x9a, 0x2b, 0x4c, 0x5e, 0x11, 0x63, 0x8f, 0xa1, 0x7c, 0x3d,
+            0x0b, 0x94,
         ];
         assert!(digest_matches(&md5, &md5), "裸 MD5 必须通过");
 
         let mut digestinfo = vec![
-            0x30, 0x20, 0x30, 0x0C, 0x06, 0x08, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x05, 0x05, 0x00,
-            0x04, 0x10,
+            0x30, 0x20, 0x30, 0x0C, 0x06, 0x08, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x05,
+            0x05, 0x00, 0x04, 0x10,
         ];
         digestinfo.extend_from_slice(&md5);
         assert_eq!(digestinfo.len(), 34, "DigestInfo 形态应为 18+16 字节");
@@ -218,6 +220,9 @@ mod tests {
         // 旧口径：hex 字符串的字节（32 字节），末尾 16 字节与摘要不同 —— 必须不通过
         let hex_bytes = b"9e107dd29a2b4c5e11638fa17c3d0b94";
         assert_eq!(hex_bytes.len(), 32);
-        assert!(!digest_matches(hex_bytes, &md5), "hex 字符串口径不能再被当成通过");
+        assert!(
+            !digest_matches(hex_bytes, &md5),
+            "hex 字符串口径不能再被当成通过"
+        );
     }
 }

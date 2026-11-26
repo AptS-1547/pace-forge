@@ -106,6 +106,9 @@ mod tests {
         assert!(parse(r#"{"error":10000}"#).is_err());
         assert!(parse(r#"{"data":"abc"}"#).is_err());
         assert!(parse(r#"{"data":123}"#).is_err(), "1970 年的时间戳要拒绝");
-        assert!(parse(r#"{"data":99999999999999}"#).is_err(), "超出 2100 年要拒绝");
+        assert!(
+            parse(r#"{"data":99999999999999}"#).is_err(),
+            "超出 2100 年要拒绝"
+        );
     }
 }

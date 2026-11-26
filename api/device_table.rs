@@ -80,8 +80,16 @@ pub fn catalog() -> &'static BTreeMap<String, CatalogEntry> {
                             .and_then(|x| x.as_str())
                             .unwrap_or("")
                             .to_string(),
-                        name: val.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                        brand: val.get("brand").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                        name: val
+                            .get("name")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        brand: val
+                            .get("brand")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                     },
                 );
             }
@@ -163,7 +171,14 @@ pub fn platforms() -> Vec<(String, String, String, String)> {
     table()
         .platforms
         .iter()
-        .map(|(code, p)| (code.clone(), p.soc.clone(), p.name.clone(), p.vendor.clone()))
+        .map(|(code, p)| {
+            (
+                code.clone(),
+                p.soc.clone(),
+                p.name.clone(),
+                p.vendor.clone(),
+            )
+        })
         .collect()
 }
 
@@ -181,7 +196,10 @@ pub fn suggested(limit: usize) -> Vec<(String, CatalogEntry)> {
                 continue;
             }
             // 同一机型常有多个 code（国行/国际），按名字去一次重
-            if out.iter().any(|(_, x): &(String, CatalogEntry)| x.name == e.name) {
+            if out
+                .iter()
+                .any(|(_, x): &(String, CatalogEntry)| x.name == e.name)
+            {
                 continue;
             }
             out.push((code.clone(), e.clone()));
@@ -243,8 +261,16 @@ fn parse_table(raw: &str) -> Table {
                 k.clone(),
                 Model {
                     platform: platform.to_string(),
-                    brand: val.get("brand").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                    src: val.get("src").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                    brand: val
+                        .get("brand")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    src: val
+                        .get("src")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 },
             );
         }
@@ -407,12 +433,17 @@ pub fn report() -> String {
     ));
     out.push_str("\n平台 → SoC：\n");
     for (code, p) in &t.platforms {
-        out.push_str(&format!("  {code:<11} {:<8} {}（{}）\n", p.soc, p.name, p.vendor));
+        out.push_str(&format!(
+            "  {code:<11} {:<8} {}（{}）\n",
+            p.soc, p.name, p.vendor
+        ));
     }
     if t.models.is_empty() {
         out.push_str("\n机型表为空：\n");
         out.push_str("  只有平台层能直接用（如 PACE_DEVICE_MODEL 走平台代号），具体机型还没收。\n");
-        out.push_str("  收法：真机跑 `adb shell getprop ro.product.model` + `getprop ro.board.platform`，\n");
+        out.push_str(
+            "  收法：真机跑 `adb shell getprop ro.product.model` + `getprop ro.board.platform`，\n",
+        );
         out.push_str("        把两行结果连同出处（截图/日期）写进 data/devices.json 的 models。\n");
     } else {
         out.push_str("\n机型 → 平台：\n");
@@ -437,10 +468,10 @@ pub fn report() -> String {
                 // 没设，不必提示
             } else {
                 match catalog_lookup(model) {
-                Some(e) => out.push_str(&format!(
-                    "  目录命中：{model} → {} {}（codename {}）\n",
-                    e.brand, e.name, e.codename
-                )),
+                    Some(e) => out.push_str(&format!(
+                        "  目录命中：{model} → {} {}（codename {}）\n",
+                        e.brand, e.name, e.codename
+                    )),
                     None => out.push_str(&format!(
                         "  目录未命中：{model}（不是已知官方 model code，可能是笔误或平台代号）\n"
                     )),
@@ -450,7 +481,9 @@ pub fn report() -> String {
     }
     out.push_str(&format!("\n[当前] cpuModel 实际发：{cur}\n"));
     if cur == ABI_FALLBACK {
-        out.push_str("        （ABI 兜底。设 PACE_DEVICE_MODEL=<机型或平台代号> 才会发 SoC 型号）\n");
+        out.push_str(
+            "        （ABI 兜底。设 PACE_DEVICE_MODEL=<机型或平台代号> 才会发 SoC 型号）\n",
+        );
     }
     out
 }
@@ -462,7 +495,11 @@ mod tests {
     #[test]
     fn table_parses_and_has_platforms() {
         let t = table();
-        assert!(t.platforms.len() >= 10, "平台表应有内容: {}", t.platforms.len());
+        assert!(
+            t.platforms.len() >= 10,
+            "平台表应有内容: {}",
+            t.platforms.len()
+        );
         assert_eq!(soc_for_platform("kalama"), Some("SM8550"));
         assert_eq!(soc_for_platform("mt6989"), Some("MT6989"));
         assert_eq!(soc_for_platform("不存在的平台"), None);
@@ -487,7 +524,9 @@ mod tests {
     fn env_defaults_to_abi_when_unset() {
         // 不设 env 时行为与历史一致
         assert_eq!(
-            std::env::var("PACE_DEVICE_MODEL").is_err().then_some(ABI_FALLBACK),
+            std::env::var("PACE_DEVICE_MODEL")
+                .is_err()
+                .then_some(ABI_FALLBACK),
             Some(ABI_FALLBACK)
         );
         assert_eq!(ABI_FALLBACK, "arm64-v8a");
@@ -496,7 +535,8 @@ mod tests {
     #[test]
     fn platform_code_also_works_as_model() {
         // 只知道芯片时可以直接填平台代号
-        let soc = soc_for_model("kalama").or_else(|| soc_for_platform("kalama").map(str::to_string));
+        let soc =
+            soc_for_model("kalama").or_else(|| soc_for_platform("kalama").map(str::to_string));
         assert_eq!(soc.as_deref(), Some("SM8550"));
         assert_eq!(soc_for_platform("mt6989"), Some("MT6989"));
     }
@@ -518,7 +558,11 @@ mod tests {
     fn catalog_does_not_imply_soc() {
         // 目录里有这台机器，但 models 层（带出处的 SoC）还是空的
         assert!(catalog_lookup("2211133C").is_some());
-        assert_eq!(soc_for_model("2211133C"), None, "目录里没有平台映射，仍给 ABI");
+        assert_eq!(
+            soc_for_model("2211133C"),
+            None,
+            "目录里没有平台映射，仍给 ABI"
+        );
         assert_eq!(soc_for_model("fuxi"), None, "目录不含 codename 映射");
     }
 
@@ -533,7 +577,10 @@ mod tests {
         );
         // 营销名
         let by_name = search_catalog("xiaomi 13", 10);
-        assert!(by_name.iter().any(|(_, e)| e.name.contains("Xiaomi 13")), "按名字搜不到");
+        assert!(
+            by_name.iter().any(|(_, e)| e.name.contains("Xiaomi 13")),
+            "按名字搜不到"
+        );
         // 空查询不要返回全表
         assert!(search_catalog("", 10).is_empty());
         assert!(search_catalog("   ", 10).is_empty());
@@ -578,16 +625,32 @@ mod tests {
         let bs = brands();
         assert!(bs.len() >= 6, "品牌数太少: {bs:?}");
         // 大小写合并后不该出现两个 Vivo
-        let vivo: Vec<&String> = bs.iter().map(|(n, _)| n).filter(|n| n.eq_ignore_ascii_case("vivo")).collect();
+        let vivo: Vec<&String> = bs
+            .iter()
+            .map(|(n, _)| n)
+            .filter(|n| n.eq_ignore_ascii_case("vivo"))
+            .collect();
         assert_eq!(vivo.len(), 1, "品牌名大小写要合并: {bs:?}");
-        let xiaomi = bs.iter().find(|(n, _)| n.eq_ignore_ascii_case("xiaomi")).expect("要有小米");
+        let xiaomi = bs
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("xiaomi"))
+            .expect("要有小米");
         assert!(xiaomi.1 > 100, "小米机型数: {}", xiaomi.1);
         let list = models_of_brand("Xiaomi", 200);
         // 排序稳定：同一品牌的列表按名字不区分大小写升序
-        let names: Vec<String> = list.iter().take(8).map(|(_, e)| e.name.to_lowercase()).collect();
-        assert!(names.windows(2).all(|w| w[0] <= w[1]), "排序不对: {names:?}");
+        let names: Vec<String> = list
+            .iter()
+            .take(8)
+            .map(|(_, e)| e.name.to_lowercase())
+            .collect();
+        assert!(
+            names.windows(2).all(|w| w[0] <= w[1]),
+            "排序不对: {names:?}"
+        );
         assert!(!list.is_empty());
-        assert!(list.iter().all(|(_, e)| e.brand.eq_ignore_ascii_case("xiaomi")));
+        assert!(list
+            .iter()
+            .all(|(_, e)| e.brand.eq_ignore_ascii_case("xiaomi")));
         // 名字去重
         let mut names: Vec<&str> = list.iter().map(|(_, e)| e.name.as_str()).collect();
         let n = names.len();

@@ -135,7 +135,10 @@ mod tests {
     fn drops_none_values() {
         let mut fields: SignFields = f(&[("a", "1")]);
         fields.push(("b".into(), None));
-        assert_eq!(sign_with_salt(&fields, "s"), sign_with_salt(&f(&[("a", "1")]), "s"));
+        assert_eq!(
+            sign_with_salt(&fields, "s"),
+            sign_with_salt(&f(&[("a", "1")]), "s")
+        );
     }
 
     #[test]
@@ -146,7 +149,10 @@ mod tests {
             ("token", "abc"),
             ("timeStamp", "1730000000000"),
         ]));
-        assert_eq!(got, "3388658301c0b8e4a40f73cc17c81e71", "与 Python 实现不一致");
+        assert_eq!(
+            got, "3388658301c0b8e4a40f73cc17c81e71",
+            "与 Python 实现不一致"
+        );
     }
 
     #[test]

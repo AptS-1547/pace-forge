@@ -14,8 +14,8 @@
 use serde_json::Value;
 
 use crate::crypto::envelope::{seal, SessionKeys};
-use sha2::{Digest, Sha256};
 use crate::crypto::{decrypt, sign::token_sign, SignFields};
+use sha2::{Digest, Sha256};
 
 /// 可选硬件标识头的开关。
 ///
@@ -105,7 +105,10 @@ impl DeviceProfile {
     /// 同上，但 HOME 基目录由调用方指定（测试注入隔离目录用）。
     pub(crate) fn for_account_in(base: &std::path::Path, scope: &str) -> Self {
         let device_id = persistent_device_id_in(base, scope);
-        let mut d = Self { device_id: device_id.clone(), ..Self::base() };
+        let mut d = Self {
+            device_id: device_id.clone(),
+            ..Self::base()
+        };
         // 账号级机型：设了就发 SoC 型号，没设仍然是 ABI（与历史行为一致）。
         // device_id 不参与这次计算，所以换机型不会换设备。
         d.cpu_model = resolve_cpu_model(device_model_in(base, scope).as_deref());
@@ -128,7 +131,11 @@ impl DeviceProfile {
             let mut hasher = Sha256::new();
             hasher.update(seed.as_bytes());
             hasher.update(salt.as_bytes());
-            hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
         };
         // 安卓 android_id 是 16 位小写 hex
         self.android_id = h("android_id")[..16].to_string();
@@ -137,7 +144,12 @@ impl DeviceProfile {
         let mac = |salt: &str, sep: &str| -> String {
             let x = h(salt);
             let bytes: Vec<String> = (0..6)
-                .map(|i| format!("{:02x}", u8::from_str_radix(&x[i * 2..i * 2 + 2], 16).unwrap_or(0)))
+                .map(|i| {
+                    format!(
+                        "{:02x}",
+                        u8::from_str_radix(&x[i * 2..i * 2 + 2], 16).unwrap_or(0)
+                    )
+                })
                 .collect();
             let mut b = bytes.clone();
             if let Ok(v) = u8::from_str_radix(&b[0], 16) {
@@ -432,11 +444,20 @@ impl Client {
             ("blMac".into(), hw_id(&self.device.bl_mac)),
             ("wifiMac".into(), hw_id(&self.device.wifi_mac)),
             ("IMEI".into(), hw_id(&self.device.imei)),
-            ("appInstallTime".into(), self.device.app_install_time.to_string()),
-            ("appUpdateTime".into(), self.device.app_update_time.to_string()),
+            (
+                "appInstallTime".into(),
+                self.device.app_install_time.to_string(),
+            ),
+            (
+                "appUpdateTime".into(),
+                self.device.app_update_time.to_string(),
+            ),
             // CustomDeviceId 也是客户端自造值，真机 HAR 里同样是空串
             // （issue #17：59/59）。跟着硬件头开关一起清。
-            ("CustomDeviceId".into(), hw_id(&self.device.custom_device_id)),
+            (
+                "CustomDeviceId".into(),
+                hw_id(&self.device.custom_device_id),
+            ),
         ];
         if let Some(uid) = &self.creds.uid {
             headers.push(("uid".into(), uid.clone()));
@@ -448,8 +469,14 @@ impl Client {
         // tokenSign
         let sign_fields: SignFields = vec![
             ("timeStamp".into(), Some(now_ms.to_string())),
-            ("token".into(), Some(self.creds.token.clone().unwrap_or_default())),
-            ("uid".into(), Some(self.creds.uid.clone().unwrap_or_default())),
+            (
+                "token".into(),
+                Some(self.creds.token.clone().unwrap_or_default()),
+            ),
+            (
+                "uid".into(),
+                Some(self.creds.uid.clone().unwrap_or_default()),
+            ),
         ];
         headers.push(("tokenSign".into(), token_sign(&sign_fields)));
 
@@ -465,12 +492,7 @@ impl Client {
     ///
     /// 返回业务 JSON 字符串（已解密）。HTTP 非 2xx 也会尝试解密，
     /// 因为服务端有时在错误响应里同样使用加密信封。
-    pub fn request(
-        &self,
-        method: &str,
-        url: &str,
-        body: Option<&Value>,
-    ) -> Result<String, String> {
+    pub fn request(&self, method: &str, url: &str, body: Option<&Value>) -> Result<String, String> {
         self.request_with_headers(method, url, body, &[])
     }
 
@@ -502,7 +524,8 @@ impl Client {
         // 所以 body 信封派生出的 key 直接丢弃——服务端不用它加密响应。
         let resp = match body {
             Some(b) => {
-                let plain = serde_json::to_string(b).map_err(|e| format!("body 序列化失败: {e}"))?;
+                let plain =
+                    serde_json::to_string(b).map_err(|e| format!("body 序列化失败: {e}"))?;
                 let body_env = seal(&plain)?;
                 req.send_string(&body_env.wire)
             }
@@ -511,9 +534,7 @@ impl Client {
 
         let (status, text) = match resp {
             Ok(r) => (r.status(), r.into_string().map_err(|e| e.to_string())?),
-            Err(ureq::Error::Status(code, r)) => {
-                (code, r.into_string().unwrap_or_default())
-            }
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap_or_default()),
             Err(e) => return Err(format!("网络错误: {e}")),
         };
 
@@ -544,7 +565,10 @@ impl Client {
 
         match decrypt::open(&text, &session, self.require_signature) {
             Ok(d) => Ok(d.body),
-            Err(e) => Err(format!("HTTP {status} 解密失败: {e}；原文 {} ", truncate(&text, 120))),
+            Err(e) => Err(format!(
+                "HTTP {status} 解密失败: {e}；原文 {} ",
+                truncate(&text, 120)
+            )),
         }
     }
 }
@@ -589,7 +613,10 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
     if code == Some(crate::crypto::CODE_OK) {
         return Ok(v);
     }
-    let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("未知错误");
+    let msg = v
+        .get("message")
+        .and_then(|x| x.as_str())
+        .unwrap_or("未知错误");
     // 服务端内部故障要单独说清楚。它长得像「业务错误」，其实是后端服务被
     // 注册中心白名单拒绝后把异常原样透传上来，跟本地环境一点关系都没有。
     // 不点明的话，用户会去换网络、重装、换账号、挂代理，全白费
@@ -620,7 +647,11 @@ mod tests {
     #[test]
     fn hw_headers_default_empty_derived_on_demand() {
         std::env::remove_var("PACE_DEVICE_HW_HEADERS");
-        assert_eq!(hw_id("abc"), "", "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）");
+        assert_eq!(
+            hw_id("abc"),
+            "",
+            "默认必须是空串（与 7.4.21 的 getHeaderMap 一致）"
+        );
         std::env::set_var("PACE_DEVICE_HW_HEADERS", "derived");
         assert_eq!(hw_id("abc"), "abc", "derived 时应发派生假值");
         std::env::remove_var("PACE_DEVICE_HW_HEADERS");
@@ -655,7 +686,10 @@ mod tests {
             sum += v;
         }
         assert_eq!(sum % 10, 0, "Luhn 校验不通过: {}", p.imei);
-        assert_eq!(luhn_check_digit(&[4, 9, 0, 1, 5, 4, 2, 0, 3, 2, 3, 7, 5, 1]), 8);
+        assert_eq!(
+            luhn_check_digit(&[4, 9, 0, 1, 5, 4, 2, 0, 3, 2, 3, 7, 5, 1]),
+            8
+        );
     }
 
     /// 服务端集群故障要在**解密之前**就认出来。
@@ -690,7 +724,11 @@ mod tests {
     #[test]
     fn nonce_is_uuid_v4_format() {
         let u = uuid_v4();
-        assert_eq!(u.len(), 36, "nonce 必须是 36 字符 UUID，否则安全接口返回空 body");
+        assert_eq!(
+            u.len(),
+            36,
+            "nonce 必须是 36 字符 UUID，否则安全接口返回空 body"
+        );
         assert_eq!(u.matches('-').count(), 4);
     }
 
@@ -726,7 +764,11 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "设备标识文件权限必须是 600");
         }
-        assert_eq!(persistent_device_id_in(t.home(), "13800000000"), a, "同一 scope 必须稳定");
+        assert_eq!(
+            persistent_device_id_in(t.home(), "13800000000"),
+            a,
+            "同一 scope 必须稳定"
+        );
         assert_ne!(
             persistent_device_id_in(t.home(), "13900000000"),
             a,
@@ -810,7 +852,10 @@ mod tests {
         );
         // 别的非零码仍然走原来的「业务错误」，不要被这条吞掉
         let e2 = expect_ok(r#"{"error":10121,"message":"设备异常"}"#).unwrap_err();
-        assert!(e2.starts_with("业务错误"), "10121 不该被当成服务端故障：{e2}");
+        assert!(
+            e2.starts_with("业务错误"),
+            "10121 不该被当成服务端故障：{e2}"
+        );
     }
 
     /// 护栏：设备标识的注入路径**绝不能**是真实 `$HOME/.pace-forge-device-id*`。

@@ -196,9 +196,7 @@ pub fn center_from_fences(fences: &[Fence]) -> Result<(f64, f64), String> {
         }
     };
     let n = ring.len() as f64;
-    let s = ring
-        .iter()
-        .fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
+    let s = ring.iter().fold((0.0, 0.0), |a, q| (a.0 + q.0, a.1 + q.1));
     Ok((s.0 / n, s.1 / n))
 }
 
@@ -260,9 +258,7 @@ fn fence_items_from(raw: &Value, depth: u8) -> Vec<Value> {
         Value::Array(items) => items
             .iter()
             .map(|it| match it {
-                Value::String(t) => {
-                    serde_json::from_str::<Value>(t).unwrap_or_else(|_| it.clone())
-                }
+                Value::String(t) => serde_json::from_str::<Value>(t).unwrap_or_else(|_| it.clone()),
                 other => other.clone(),
             })
             .collect(),
@@ -296,9 +292,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// `points` 改名成别的，光看「点数为 0」是查不出来的。
 fn fence_diag(v: &Value) -> String {
     let data = v.get("data").unwrap_or(v);
-    let raw = data
-        .get("geoFences")
-        .or_else(|| v.get("geoFences"));
+    let raw = data.get("geoFences").or_else(|| v.get("geoFences"));
 
     let Some(raw) = raw else {
         return "响应里没有 geoFences 字段".into();
@@ -322,13 +316,14 @@ fn fence_diag(v: &Value) -> String {
             Value::Array(a) => {
                 format!("数组（{} 个元素，但没抠出任何围栏）", a.len())
             }
-            Value::String(t) => format!(
-                "字符串，内容开头=[{}]",
-                truncate_str(t, 160)
-            ),
+            Value::String(t) => format!("字符串，内容开头=[{}]", truncate_str(t, 160)),
             Value::Object(o) => format!(
                 "对象，字段=[{}]",
-                o.keys().take(12).cloned().collect::<Vec<String>>().join(",")
+                o.keys()
+                    .take(12)
+                    .cloned()
+                    .collect::<Vec<String>>()
+                    .join(",")
             ),
         };
         return format!(
@@ -392,7 +387,11 @@ pub fn parse_fences(v: &Value) -> Result<Vec<Fence>, String> {
                     .and_then(value_as_i64)
                     .or_else(|| f.get("runAreaId").and_then(value_as_i64))
                     .or_else(|| f.get("areaId").and_then(value_as_i64)),
-                name: f.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                name: f
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 ring,
                 pass_points: parse_pass_points(f),
             });
@@ -551,7 +550,9 @@ pub fn geo_fence_json(
     //
     // `run_area_id` / `fence_id` / `name` 三个参数留着不动签名，将来要回到
     // 完整结构时，把下面这行换回注释里那版即可（`PACE_FENCE_FULL=1` 也能切）。
-    let full = std::env::var("PACE_FENCE_FULL").map(|v| v == "1").unwrap_or(false);
+    let full = std::env::var("PACE_FENCE_FULL")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     if full {
         return json!([{
             "distance": 0.0,
@@ -574,9 +575,7 @@ fn ring_contains(ring: &[(f64, f64)], p: (f64, f64)) -> bool {
         let (yi, xi) = ring[i];
         let (yj, xj) = ring[j];
         // 注意：环里存的是 (lat, lon)，射线法按 (x=lon, y=lat)
-        if ((yi > p.0) != (yj > p.0))
-            && (p.1 < (xj - xi) * (p.0 - yi) / (yj - yi) + xi)
-        {
+        if ((yi > p.0) != (yj > p.0)) && (p.1 < (xj - xi) * (p.0 - yi) / (yj - yi) + xi) {
             inside = !inside;
         }
         j = i;
@@ -634,8 +633,13 @@ mod tests {
     /// 真实 `geoFences: null` 响应 → 空数组 → 可诊断错误，整条链不 panic。
     #[test]
     fn unconfigured_response_yields_actionable_error() {
-        assert!(geo_fences_unconfigured(&json!({ "data": { "geoFences": null } })));
-        assert_eq!(choose_center(None, &[]).unwrap_err(), center_from_fences(&[]).unwrap_err());
+        assert!(geo_fences_unconfigured(
+            &json!({ "data": { "geoFences": null } })
+        ));
+        assert_eq!(
+            choose_center(None, &[]).unwrap_err(),
+            center_from_fences(&[]).unwrap_err()
+        );
     }
 
     #[test]
@@ -646,7 +650,10 @@ mod tests {
             ring: vec![(40.0, 100.0), (40.0, 100.002), (40.002, 100.002)],
             pass_points: vec![],
         }];
-        assert_eq!(center_from_fences(&fs).unwrap(), ((120.002_f64) / 3.0, 300.004 / 3.0));
+        assert_eq!(
+            center_from_fences(&fs).unwrap(),
+            ((120.002_f64) / 3.0, 300.004 / 3.0)
+        );
     }
 
     #[test]
@@ -860,11 +867,17 @@ mod tests {
     /// 官方围栏」拦住。但 service 端判定项里没有围栏这一条。
     #[test]
     fn geo_fences_null_is_unconfigured_not_error() {
-        assert!(geo_fences_unconfigured(&json!({"data": {"geoFences": null}})));
+        assert!(geo_fences_unconfigured(
+            &json!({"data": {"geoFences": null}})
+        ));
         assert!(geo_fences_unconfigured(&json!({"geoFences": null})));
         // 空数组是「有字段但没内容」，走另一条路，不算显式 null
-        assert!(!geo_fences_unconfigured(&json!({"data": {"geoFences": []}})));
-        assert!(!geo_fences_unconfigured(&json!({"data": {"geoFences": "[]"}})));
+        assert!(!geo_fences_unconfigured(
+            &json!({"data": {"geoFences": []}})
+        ));
+        assert!(!geo_fences_unconfigured(
+            &json!({"data": {"geoFences": "[]"}})
+        ));
         assert!(!geo_fences_unconfigured(&json!({"data": {}})));
     }
 
@@ -889,24 +902,41 @@ mod tests {
         // 默认形态：只有 points
         let s = geo_fence_json(1668, Some(1668), "学校", &ring);
         let v: Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v[0].as_object().unwrap().keys().collect::<Vec<_>>(), vec!["points"]);
+        assert_eq!(
+            v[0].as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["points"]
+        );
         let pts = v[0]["points"].as_array().unwrap();
         assert_eq!(pts.len(), 4);
         assert!(pts[0].get("glat").is_some());
         assert!(pts[0].get("glng").is_some());
         // 两套坐标都是真值，且 GCJ-02 与 BD-09 不相等
-        let (lat, lng) = (pts[0]["lat"].as_f64().unwrap(), pts[0]["lng"].as_f64().unwrap());
-        let (glat, glng) = (pts[0]["glat"].as_f64().unwrap(), pts[0]["glng"].as_f64().unwrap());
+        let (lat, lng) = (
+            pts[0]["lat"].as_f64().unwrap(),
+            pts[0]["lng"].as_f64().unwrap(),
+        );
+        let (glat, glng) = (
+            pts[0]["glat"].as_f64().unwrap(),
+            pts[0]["glng"].as_f64().unwrap(),
+        );
         assert!(lat != 0.0 && lng != 0.0 && glat != 0.0 && glng != 0.0);
         assert!((lat - glat).abs() > 1e-4 && (lng - glng).abs() > 1e-4);
         // 6 位小数：与真机样本的精度一致（≈0.1m）
-        let frac = format!("{glat}").split('.').nth(1).map(|f| f.len()).unwrap_or(0);
+        let frac = format!("{glat}")
+            .split('.')
+            .nth(1)
+            .map(|f| f.len())
+            .unwrap_or(0);
         assert!(frac <= 6, "围栏坐标应保留 6 位小数，实际 {glat}");
         // 完整结构：PACE_FENCE_FULL=1 时补上 distance / id / name
         unsafe { std::env::set_var("PACE_FENCE_FULL", "1") };
         let full = geo_fence_json(1668, Some(1668), "学校", &ring);
         let vf: Value = serde_json::from_str(&full).unwrap();
-        assert_eq!(vf[0]["id"], json!(1668), "完整结构里围栏 id 必须是真实围栏 id");
+        assert_eq!(
+            vf[0]["id"],
+            json!(1668),
+            "完整结构里围栏 id 必须是真实围栏 id"
+        );
         assert_eq!(vf[0]["name"], json!("学校"));
         assert_eq!(vf[0]["distance"], json!(0.0));
         // 围栏响应没有 id 时退回 runAreaId，不能发 null
@@ -943,8 +973,10 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(bd.len(), 2);
         assert_eq!(gcj.len(), 2);
-        assert!((items[1]["glat"].as_f64().unwrap() - pps[1].glat).abs() > 1e-9,
-            "缺 GCJ 坐标时必须由 BD-09 反算出来");
+        assert!(
+            (items[1]["glat"].as_f64().unwrap() - pps[1].glat).abs() > 1e-9,
+            "缺 GCJ 坐标时必须由 BD-09 反算出来"
+        );
     }
 
     #[test]
@@ -954,7 +986,10 @@ mod tests {
         });
         let pps = parse_pass_points(&v);
         assert_eq!(pps.len(), 1, "字符串化数组必须能解析");
-        assert!(pps[0].lat != 0.0 && pps[0].lon != 0.0, "只有 GCJ 时要反算出 BD-09");
+        assert!(
+            pps[0].lat != 0.0 && pps[0].lon != 0.0,
+            "只有 GCJ 时要反算出 BD-09"
+        );
         assert_eq!(pps[0].point_name, "X");
     }
 
@@ -964,7 +999,8 @@ mod tests {
         assert!(parse_pass_points(&serde_json::json!({"passPoints": []})).is_empty());
         assert!(parse_pass_points(&serde_json::json!({
             "passPoints": [{"lat": 0, "lon": 0}, {"pointName": "无坐标"}]
-        })).is_empty());
+        }))
+        .is_empty());
     }
 
     #[test]

@@ -73,11 +73,7 @@ pub enum LoginOutcome {
 }
 
 /// 执行登录。成功时直接修改 `client.creds`。
-pub fn login(
-    client: &mut Client,
-    username: &str,
-    password: &str,
-) -> Result<LoginOutcome, String> {
+pub fn login(client: &mut Client, username: &str, password: &str) -> Result<LoginOutcome, String> {
     let uuid = uuid_v4();
 
     // 1. 安全初审
@@ -114,7 +110,10 @@ pub fn login(
         });
         let val = client.request(
             "POST",
-            &format!("{}/api/v70270/security/geevalidate", crate::crypto::hosts::RUN),
+            &format!(
+                "{}/api/v70270/security/geevalidate",
+                crate::crypto::hosts::RUN
+            ),
             Some(&payload),
         )?;
         let v = expect_ok(&val)?;
@@ -176,7 +175,6 @@ pub fn login(
 }
 
 use super::client::uuid_v4;
-
 
 /// 调服务端登出接口，让当前 token 失效。
 ///
@@ -261,7 +259,9 @@ mod tests {
     /// 会话还在，下次重登直接 10121 锁一小时。
     #[test]
     fn logout_does_not_trust_unparseable_response() {
-        assert!(!response_confirms_logout("<html><body>502 Bad Gateway</body></html>"));
+        assert!(!response_confirms_logout(
+            "<html><body>502 Bad Gateway</body></html>"
+        ));
         assert!(!response_confirms_logout(""));
         assert!(!response_confirms_logout("{\"error\":10000")); // 被截断的 JSON
         assert!(!response_confirms_logout("OK")); // 明文但非 JSON

@@ -234,8 +234,7 @@ fn try_stadium_track(
     //
     // 标准 400m 跑道外框：长 84.39 + 2×46.26 ≈ 177m，宽 2×46.26 ≈ 92.5m。
     // 外准差给足（长 ±28、宽 ±22），覆盖实测里打卡点略微内缩的情况。
-    let looks_standard_400 =
-        (major - 177.0).abs() < 28.0 && (minor - 92.5).abs() < 22.0;
+    let looks_standard_400 = (major - 177.0).abs() < 28.0 && (minor - 92.5).abs() < 22.0;
     // 280m 左右的校内小场也常见（直道 ~55、半径 ~26），外框约 160×75。
     let looks_small_oval = (major - 160.0).abs() < 30.0 && (minor - 75.0).abs() < 20.0;
 
@@ -268,7 +267,12 @@ fn try_stadium_track(
     };
     log(&format!(
         "[track] 操场绕圈：直道{:.0}m 半径{:.0}m 朝向{:.0}° {:.1}圈（单圈{:.0}m），{} 个打卡点",
-        spec.straight, spec.radius, spec.heading.to_degrees(), spec.laps, lap, cps.len()
+        spec.straight,
+        spec.radius,
+        spec.heading.to_degrees(),
+        spec.laps,
+        lap,
+        cps.len()
     ));
 
     let mut pts = crate::track::campus_oval_track((cx, cy), &spec, sample_step_m, seed);
@@ -368,11 +372,7 @@ fn stadium_point_order_ok(pts: &[(f64, f64)], cps: &[Checkpoint], log: &mut Log)
 ///   这条轨迹交上去就是一次「漏打卡」，白烧提交额度还留档。
 ///   这种情况放弃操场形状，回退到路线规划（那条链会逐一经过 must 点），
 ///   并把原因打进日志，让用户知道为什么没绕圈。
-fn stadium_cp_fits(
-    pts: &[(f64, f64)],
-    cps: &[Checkpoint],
-    log: &mut Log,
-) -> bool {
+fn stadium_cp_fits(pts: &[(f64, f64)], cps: &[Checkpoint], log: &mut Log) -> bool {
     let mut max_d = 0.0f64;
     let mut bad: Option<(&str, f64)> = None;
     for c in cps {
@@ -554,7 +554,9 @@ fn try_route_on_tiles(
                 ));
                 return None;
             }
-            log(&format!("[tiles] 沿瓦片道路 {length_m:.0}m（目标 {want_m:.0}m）"));
+            log(&format!(
+                "[tiles] 沿瓦片道路 {length_m:.0}m（目标 {want_m:.0}m）"
+            ));
             Some(crate::track::fence_route::FenceRoute {
                 points,
                 length_m,
@@ -600,7 +602,9 @@ impl RunParams {
                 return Err(format!("步数不能为负，收到 {st}"));
             }
         }
-        if !(-90.0..=90.0).contains(&self.center_lat) || !(-180.0..=180.0).contains(&self.center_lng) {
+        if !(-90.0..=90.0).contains(&self.center_lat)
+            || !(-180.0..=180.0).contains(&self.center_lng)
+        {
             return Err(format!(
                 "定位锚点越界: ({}, {})",
                 self.center_lat, self.center_lng
@@ -857,7 +861,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         Err(e) => return Err(e),
     };
 
-    log(&format!("[耗时] 校时+策略 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    log(&format!(
+        "[耗时] 校时+策略 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
     stage_t = std::time::Instant::now();
 
     // ② fence
@@ -914,7 +921,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         }
     };
 
-    log(&format!("[耗时] 围栏 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    log(&format!(
+        "[耗时] 围栏 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
     stage_t = std::time::Instant::now();
 
     // ③ points
@@ -930,7 +940,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             client,
             p.center_lat,
             p.center_lng,
-            pick.as_ref().map(|k| k.selected.run_area_id.to_string()).as_deref(),
+            pick.as_ref()
+                .map(|k| k.selected.run_area_id.to_string())
+                .as_deref(),
             Some(p.distance_m.round() as i64),
         )
     } {
@@ -945,7 +957,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
                         k.selected.name,
                         items.len()
                     ));
-                    PointsContext { points: items, coords: bd, gcj_coords: gcj }
+                    PointsContext {
+                        points: items,
+                        coords: bd,
+                        gcj_coords: gcj,
+                    }
                 }
                 None => {
                     log("· [points] 点位接口为空，且所选围栏未下发必经点");
@@ -974,17 +990,21 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
                     let name = raw.get("pointName").and_then(|v| v.as_str()).unwrap_or("");
                     log(&format!("[points]  #{i} isFixed={fixed} {name}"));
                 }
-
             }
             c
         }
         Err(e) => {
-            log(&format!("⚠ [points] 接口失败（可能限流），无打卡点继续: {e}"));
+            log(&format!(
+                "⚠ [points] 接口失败（可能限流），无打卡点继续: {e}"
+            ));
             PointsContext::default()
         }
     };
 
-    log(&format!("[耗时] 打卡点 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    log(&format!(
+        "[耗时] 打卡点 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
     stage_t = std::time::Instant::now();
 
     // ④ 规划
@@ -1071,12 +1091,8 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         // 不传 must：手绘的整条价值就是用户自己控制形状，把没画到的点位
         // 强行插进去只会在原地拉出几百米的跳变（GEO_JUMP），把线撕烂。
         // 漏了点位由前端实时提示，用户自己补笔画。
-        let mut pts = crate::track::fence_route::resample_with_checkpoints(
-            custom,
-            p.sample_step_m,
-            &[],
-            0.0,
-        );
+        let mut pts =
+            crate::track::fence_route::resample_with_checkpoints(custom, p.sample_step_m, &[], 0.0);
         // 首尾离得近就接上，否则一圈画完终点回到起点会算成一次瞬移
         if pts.len() >= 2 {
             let (first, last) = (pts[0], pts[pts.len() - 1]);
@@ -1148,7 +1164,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             points: pts
                 .into_iter()
                 .zip(times)
-                .map(|((lat, lng), t)| crate::track::TrackPoint { lat, lon: lng, time_ms: t })
+                .map(|((lat, lng), t)| crate::track::TrackPoint {
+                    lat,
+                    lon: lng,
+                    time_ms: t,
+                })
                 .collect(),
             checkpoints: cps.clone(),
             actual_length_m: actual,
@@ -1165,7 +1185,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             points: pts
                 .into_iter()
                 .zip(times)
-                .map(|((lat, lng), t)| crate::track::TrackPoint { lat, lon: lng, time_ms: t })
+                .map(|((lat, lng), t)| crate::track::TrackPoint {
+                    lat,
+                    lon: lng,
+                    time_ms: t,
+                })
                 .collect(),
             checkpoints: cps.clone(),
             actual_length_m: actual,
@@ -1179,7 +1203,8 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             cps.len()
         ));
         use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });
+        let mut rng =
+            rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });
         let _ = &mut rng;
 
         let must: Vec<(f64, f64)> = cps.iter().map(|c| (c.lat, c.lng)).collect();
@@ -1237,9 +1262,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             // 华南一带 GCJ-02 → BD-09 要偏 900 米以上（实测河源 950 m），
             // 于是避让一直在执行，只是绕的是几百米外另一块地——看起来就是
             // 「禁区完全没用，挪走也不变」。
-            let to_bd = |poly: &Vec<(f64, f64)>, f: fn(f64, f64) -> (f64, f64)| -> Vec<(f64, f64)> {
-                poly.iter().map(|&(la, ln)| f(la, ln)).collect()
-            };
+            let to_bd =
+                |poly: &Vec<(f64, f64)>, f: fn(f64, f64) -> (f64, f64)| -> Vec<(f64, f64)> {
+                    poly.iter().map(|&(la, ln)| f(la, ln)).collect()
+                };
             match crate::track::roadnet::fetch_buildings(bbox) {
                 Ok(b) if !b.is_empty() => {
                     log(&format!("[block] 建筑轮廓 {} 栋", b.len()));
@@ -1261,7 +1287,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             let local = crate::track::roadnet::load_local_blockers();
             if !local.is_empty() {
                 log(&format!("[block] 本地标注禁区 {} 块", local.len()));
-                v.extend(local.iter().map(|p| to_bd(p, crate::api::coord::gcj02_to_bd09)));
+                v.extend(
+                    local
+                        .iter()
+                        .map(|p| to_bd(p, crate::api::coord::gcj02_to_bd09)),
+                );
             }
             v
         };
@@ -1289,7 +1319,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         } else {
             None
         };
-        log(&format!("[耗时] 拉路网 {:.1}s", stage_t.elapsed().as_secs_f64()));
+        log(&format!(
+            "[耗时] 拉路网 {:.1}s",
+            stage_t.elapsed().as_secs_f64()
+        ));
         stage_t = std::time::Instant::now();
 
         let route = if let Some(r) = on_roads {
@@ -1446,7 +1479,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             actual_length_m: actual,
         }
     } else {
-        log(&format!("[track] 规划 {}m，{} 个必经点…", p.distance_m, cps.len()));
+        log(&format!(
+            "[track] 规划 {}m，{} 个必经点…",
+            p.distance_m,
+            cps.len()
+        ));
         let req = PlanRequest {
             center_lat: p.center_lat,
             center_lng: p.center_lng,
@@ -1459,7 +1496,8 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             end: p.end,
         };
         use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });
+        let mut rng =
+            rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });
         let _ = &mut rng;
         plan(&req, &mut rng)?
     };
@@ -1487,7 +1525,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         (track.actual_length_m - p.distance_m).abs() / p.distance_m * 100.0
     ));
 
-    log(&format!("[耗时] 规划 {:.1}s", stage_t.elapsed().as_secs_f64()));
+    log(&format!(
+        "[耗时] 规划 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
     stage_t = std::time::Instant::now();
 
     // ⑤ 上报采样：**等时间** 5 秒（真机节奏），几何仍走密采样。
@@ -1576,7 +1617,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 采样点挪到点位在轨迹上的投影（位移 ≤ 半个步长），吸附只需要收尾。
     let aligned = crate::track::align_samples_to_checkpoints(&mut track_points, &snap_cps);
     if aligned > 0 {
-        log(&format!("√ [align] 压缩后按轨迹重新对齐打卡点 {aligned} 个"));
+        log(&format!(
+            "√ [align] 压缩后按轨迹重新对齐打卡点 {aligned} 个"
+        ));
     }
 
     // ⑤.6 压缩之后**重新吸附打卡点**。
@@ -1614,7 +1657,12 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 上一步的 `nudge_to` 是按 1/(k+1) 衰减平移的，挪完没复查间距：原本贴着
     // 上限的（6.3 m/s × 5s = 31.5m）再被拉开就成了 38.7m / 7.74 m/s，超了
     // 服务端的单点速度上限，App 上是一条斜穿场地的直线。这里只动非打卡点。
-    let pinned: Vec<usize> = snap.items.iter().filter(|s| s.shifted).map(|s| s.index).collect();
+    let pinned: Vec<usize> = snap
+        .items
+        .iter()
+        .filter(|s| s.shifted)
+        .map(|s| s.index)
+        .collect();
     let max_gap = crate::api::submit::MAX_POINT_SPEED_MPS * crate::track::SAMPLE_INTERVAL_SEC;
     let clamped = crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
     // ⓹.6 拐角补位：把跨过拐角的上报点挪到拐角上（插点会被 SAMPLE_RATE_SHORT 拦）。
@@ -1628,9 +1676,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 回退。实测没有兜底时 2km/12min 会被顶到 2.64km。
     let len_of = |p: &[crate::track::TrackPoint]| -> f64 {
         p.windows(2)
-            .map(|w| {
-                crate::track::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon))
-            })
+            .map(|w| crate::track::distance((w[0].lat, w[0].lon), (w[1].lat, w[1].lon)))
             .sum()
     };
     let len_before = len_of(&track_points);
@@ -1660,8 +1706,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 拐角补位是把点**挪走**，挪完间距可能又超了——上面那次 `clamp_sample_gaps`
     // 跑在补位之前，管不到这里。实测有一条轨迹补位后第 130 点间距 50.1m，
     // 本地体检直接把它判成「不像走出来的」拦掉提交。补位后再压一次。
-    let clamped_after_corner =
-        crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
+    let clamped_after_corner = crate::track::clamp_sample_gaps(&mut track_points, &pinned, max_gap);
     let clamped = clamped + clamped_after_corner;
     if clamped > 0 {
         log(&format!(
@@ -1716,7 +1761,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
     // 与 `allLocJson` 末点的 totalDis 同源，所以在这里重算一次。
     // 吸附改过坐标，这一次重算同时把吸附引起的几米变化算进去。
     let real_len = crate::track::geo::path_length(
-        &track_points.iter().map(|q| (q.lat, q.lon)).collect::<Vec<_>>(),
+        &track_points
+            .iter()
+            .map(|q| (q.lat, q.lon))
+            .collect::<Vec<_>>(),
     )
     .round() as i64;
 
@@ -1903,7 +1951,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         .and_then(|v| v.as_str())
         .and_then(|x| serde_json::from_str::<Value>(x).ok())
         .and_then(|v| v.get("fivePointJson").cloned())
-        .and_then(|v| v.as_str().and_then(|x| serde_json::from_str::<Vec<Value>>(x).ok()))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|x| serde_json::from_str::<Vec<Value>>(x).ok())
+        })
         .unwrap_or_default();
     let n_fixed = fp_items.len();
 
@@ -2121,7 +2172,11 @@ pub fn body_pace_note(
     let margin_slow = (slow - body_pace) * 60.0;
     let worst = margin_fast.min(margin_slow);
     if worst < 0.0 {
-        let side = if margin_fast < 0.0 { "快于下界" } else { "慢于上界" };
+        let side = if margin_fast < 0.0 {
+            "快于下界"
+        } else {
+            "慢于上界"
+        };
         return Some(format!(
             "! [pace] 主体配速 {} {}（区间 {}~{}，起步窗口 {}s 不产里程）——逐点几乎全部会标红，建议把时长调长或距离调短。",
             fmt(body_pace), side, fmt(fast), fmt(slow), startup as i64
@@ -2135,7 +2190,10 @@ pub fn body_pace_note(
     }
     Some(format!(
         "[pace] 主体配速 {}（区间 {}~{}，余量 {:.0} 秒）",
-        fmt(body_pace), fmt(fast), fmt(slow), worst
+        fmt(body_pace),
+        fmt(fast),
+        fmt(slow),
+        worst
     ))
 }
 
@@ -2165,7 +2223,20 @@ pub(crate) fn day_key_of(ms: i64) -> String {
         }
     }
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let md = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let md = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1usize;
     for (i, &len) in md.iter().enumerate() {
         if d < len {
@@ -2252,7 +2323,11 @@ pub fn run_full(
                     let st = r
                         .get("startTime")
                         .and_then(|x| x.as_i64())
-                        .or_else(|| r.get("startTime").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok()))
+                        .or_else(|| {
+                            r.get("startTime")
+                                .and_then(|x| x.as_str())
+                                .and_then(|s| s.parse::<i64>().ok())
+                        })
                         .unwrap_or(0);
                     // startTime 可能是秒也可能是毫秒（服务端两种都见过）。
                     // 按数量级判断：小于 1e11 当秒处理，乘 1000——之前直接按
@@ -2263,10 +2338,7 @@ pub fn run_full(
                         st
                     };
                     if day_key_of(st_ms) == today {
-                        done += r
-                            .get("totalDis")
-                            .and_then(|x| x.as_f64())
-                            .unwrap_or(0.0);
+                        done += r.get("totalDis").and_then(|x| x.as_f64()).unwrap_or(0.0);
                     }
                 }
             }
@@ -2304,7 +2376,9 @@ pub fn run_full(
         Some((start, end)) => {
             let now = local_hms();
             if crate::api::policy::in_window(&now, &start, &end) {
-                log(&format!("√ [window] 当前 {now} 在有效时段 {start}–{end} 内"));
+                log(&format!(
+                    "√ [window] 当前 {now} 在有效时段 {start}–{end} 内"
+                ));
             } else {
                 return Err(format!(
                     "当前 {now} 不在学校有效时段 {start}–{end} 内，服务端会回 11016（不在有效时段）。\n    换个时间再跑，别在这里白烧一次提交。"
@@ -2336,7 +2410,10 @@ pub fn run_full(
             ));
         }
         if freeze > 0 {
-            log(&format!("√ [freeze] 无冻结（上次冻结已于 {} 结束）", freeze / 1000));
+            log(&format!(
+                "√ [freeze] 无冻结（上次冻结已于 {} 结束）",
+                freeze / 1000
+            ));
         } else {
             log("√ [freeze] 无冻结");
         }
@@ -2353,7 +2430,10 @@ pub fn run_full(
                     ));
                 }
                 Status::NoRecord => log("√ [cheat] 违规名单自查：当前账号无记录"),
-                s => log(&format!("[cheat] 自查结果未知（{}），按放行处理", s.label())),
+                s => log(&format!(
+                    "[cheat] 自查结果未知（{}），按放行处理",
+                    s.label()
+                )),
             },
             Err(e) => log(&format!("[cheat] 自查失败（不影响提交）: {e}")),
         }
@@ -2525,7 +2605,10 @@ pub fn run_full(
     let mut body = submission.save_record.clone();
     let dropped = crate::track::detect::strip_forbidden(&mut body);
     if !dropped.is_empty() {
-        log(&format!("[detect] 已剔除不该有的字段: {}", dropped.join(", ")));
+        log(&format!(
+            "[detect] 已剔除不该有的字段: {}",
+            dropped.join(", ")
+        ));
     }
     // 自由跑 / 户外跑：save/record 报文整个省略 fivePointJson。
     // neko 实测 sportType=4 这样发服务端收下且 App 归到自由跑；发空串
@@ -2550,7 +2633,9 @@ pub fn run_full(
     // position 必须是 0,1,2,… 连续递增、数组同序、isFixed 只有首点为 1。
     // 只要这一行不对，页面上就一定会少点位，先查这里再查轨迹。
     if let Ok(env) = serde_json::from_str::<serde_json::Value>(
-        body.get("fivePointJson").and_then(|v| v.as_str()).unwrap_or("{}"),
+        body.get("fivePointJson")
+            .and_then(|v| v.as_str())
+            .unwrap_or("{}"),
     ) {
         if let Some(inner) = env
             .get("fivePointJson")
@@ -2570,7 +2655,11 @@ pub fn run_full(
                     )
                 })
                 .collect();
-            log(&format!("[fixed-point] {} 个必到点：{}", list.len(), list.join(" → ")));
+            log(&format!(
+                "[fixed-point] {} 个必到点：{}",
+                list.len(),
+                list.join(" → ")
+            ));
         }
     }
     log(&format!(
@@ -2597,10 +2686,7 @@ pub fn run_full(
             // 服务端对上传失败有 3 天窗口（App 文案：「成绩已暂时保存至本地，
             // 请于3天内上传成绩」）。所以提交失败不等于白跑，别急着重新刷一条
             // ——先确认这条有没有入账，重复提交才是真麻烦。
-            log(&format!(
-                "! [submit] 提交失败：{}",
-                f.message
-            ));
+            log(&format!("! [submit] 提交失败：{}", f.message));
             log(
                 "  服务端有 3 天补传窗口：这条记录客户端侧已生成，先到 App 记录页\n  \
                  核对是否入账，别立刻重刷（重复提交比失败更麻烦）",
@@ -2613,7 +2699,9 @@ pub fn run_full(
     if let Some(rrid) = out.record_id {
         // 台账落账失败不该让整次提交失败（记录已经入账了），但要说出来。
         if let Err(e) = guard.accepted(&uuid, rrid) {
-            log(&format!("[guard] 警告：台账写 accepted 失败（记录已提交）: {e}"));
+            log(&format!(
+                "[guard] 警告：台账写 accepted 失败（记录已提交）: {e}"
+            ));
         }
     }
     log(&format!("√ [submit] 提交成功，记录 id={:?}", out.record_id));
@@ -2666,10 +2754,7 @@ pub fn run_full(
     }
     out.obs_keys = keys;
 
-    log(&format!(
-        "  静默窗口 {} 秒内不要再发跑步请求",
-        SILENCE_SEC
-    ));
+    log(&format!("  静默窗口 {} 秒内不要再发跑步请求", SILENCE_SEC));
 
     // ⑩ 回读服务端判定。
     //
@@ -2685,7 +2770,10 @@ pub fn run_full(
             Ok(d) => {
                 let num = |k: &str| d.get(k).and_then(|v| v.as_f64());
                 let cheat = d.get("isCheat").and_then(|v| v.as_i64()).unwrap_or(-1);
-                let step_st = d.get("stepFreqStatus").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let step_st = d
+                    .get("stepFreqStatus")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(-1);
                 let vd = num("validDis");
                 let td = num("totalDis");
                 let mut bad: Vec<String> = Vec::new();
@@ -2697,7 +2785,10 @@ pub fn run_full(
                 }
                 if let (Some(v), Some(t)) = (vd, td) {
                     if t > 0.0 && v + 1.0 < t {
-                        bad.push(format!("validDis={v:.0}m < totalDis={t:.0}m（被扣了 {:.0}m）", t - v));
+                        bad.push(format!(
+                            "validDis={v:.0}m < totalDis={t:.0}m（被扣了 {:.0}m）",
+                            t - v
+                        ));
                     }
                 }
                 // 记录状态：服务端把分类写在这里（App 记录列表的标签就来自它）。
@@ -2729,11 +2820,7 @@ pub fn run_full(
                     for r in list {
                         let ok = r.get("complete").and_then(|v| v.as_bool()).unwrap_or(true);
                         let reason = r.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-                        log(&format!(
-                            "  · {} {}",
-                            if ok { "✓" } else { "✗" },
-                            reason
-                        ));
+                        log(&format!("  · {} {}", if ok { "✓" } else { "✗" }, reason));
                         if !ok {
                             bad.push(format!("规则未达标：{reason}"));
                         }
@@ -2748,19 +2835,25 @@ pub fn run_full(
                     let text = bad.join(" ");
                     let mut tips: Vec<&str> = Vec::new();
                     if text.contains("配速") {
-                        tips.push("配速不达标：调时长或距离，让平均配速落进区间（reasonList 里写了范围）");
+                        tips.push(
+                            "配速不达标：调时长或距离，让平均配速落进区间（reasonList 里写了范围）",
+                        );
                     }
                     if text.contains("步频") {
                         tips.push("步频不达标：检查 sportType 与步数设置，服务端按每分钟步数判");
                     }
                     if text.contains("点位") || text.contains("打卡") {
-                        tips.push("点位没全过：把锚点挪开、换一条路线，或看 [fixed-point] 那行的下标");
+                        tips.push(
+                            "点位没全过：把锚点挪开、换一条路线，或看 [fixed-point] 那行的下标",
+                        );
                     }
                     if text.contains("最少要跑") || text.contains("分钟") {
                         tips.push("距离/时长不够：目标值要是服务端下发的最低要求，别自己往下调");
                     }
                     if text.contains("作弊") || text.contains("扣") {
-                        tips.push("被扣量/判作弊：这一条已经记进违规计数，先停手查 [cheat] 与设备环境");
+                        tips.push(
+                            "被扣量/判作弊：这一条已经记进违规计数，先停手查 [cheat] 与设备环境",
+                        );
                     }
                     for t in tips {
                         log(&format!("    → {t}"));
@@ -2952,7 +3045,6 @@ fn gz_json(v: &Value) -> String {
     gz(v.to_string().as_bytes())
 }
 
-
 /// 生成两个 objectKey 并上传。
 pub fn upload_detail(
     client: &Client,
@@ -3078,8 +3170,18 @@ mod obs_tests {
         // 没有 extension_json——早先按两处参考实现多发了第 11 个键。
         assert_eq!(keys.len(), 10, "必须是 10 个键，实际 {keys:?}");
         assert!(v.get("extension_json").is_none(), "真机没有 extension_json");
-        for k in ["rrid", "uuid", "uid", "run_data", "fixed_point_json",
-                  "segment_json", "speed_json", "step_freq_json", "laps_json", "runFaceCheck"] {
+        for k in [
+            "rrid",
+            "uuid",
+            "uid",
+            "run_data",
+            "fixed_point_json",
+            "segment_json",
+            "speed_json",
+            "step_freq_json",
+            "laps_json",
+            "runFaceCheck",
+        ] {
             assert!(v.get(k).is_some(), "缺 key: {k}");
         }
 
@@ -3118,7 +3220,10 @@ mod tests {
     fn free_run_omits_five_point_json() {
         let mut body = json!({ "sportType": 4, "fivePointJson": "{}", "uid": "1" });
         assert!(omit_five_point_for_free_run(&mut body, true));
-        assert!(body.get("fivePointJson").is_none(), "自由跑不应带 fivePointJson");
+        assert!(
+            body.get("fivePointJson").is_none(),
+            "自由跑不应带 fivePointJson"
+        );
         assert_eq!(body["sportType"], json!(4), "其余字段不动");
 
         let mut scored = json!({ "sportType": 1, "fivePointJson": "{}" });
@@ -3260,7 +3365,10 @@ mod tests {
             "长度 {len:.0}m 偏离目标 2000m 太多"
         );
         let got = logs.borrow();
-        assert!(got.iter().any(|l| l.contains("操场绕圈")), "缺少操场日志: {got:?}");
+        assert!(
+            got.iter().any(|l| l.contains("操场绕圈")),
+            "缺少操场日志: {got:?}"
+        );
     }
 
     /// 打卡点散在几百米范围 → 不是操场，必须返回 None 走路线规划。
@@ -3360,7 +3468,10 @@ mod tests {
         let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
         let l2 = std::rc::Rc::clone(&logs);
         let mut log = move |s: &str| l2.borrow_mut().push(s.to_string());
-        assert!(!stadium_cp_fits(&pts, &cps, &mut log), "1.1km 外的点位不该判贴合");
+        assert!(
+            !stadium_cp_fits(&pts, &cps, &mut log),
+            "1.1km 外的点位不该判贴合"
+        );
         drop(log);
         let got = logs.borrow();
         assert!(
@@ -3410,8 +3521,16 @@ mod tests {
     #[test]
     fn detail_payload_has_required_fields() {
         let pts = vec![
-            crate::track::TrackPoint { lat: 30.5, lon: 104.0, time_ms: 1000 },
-            crate::track::TrackPoint { lat: 30.5001, lon: 104.0, time_ms: 2000 },
+            crate::track::TrackPoint {
+                lat: 30.5,
+                lon: 104.0,
+                time_ms: 1000,
+            },
+            crate::track::TrackPoint {
+                lat: 30.5001,
+                lon: 104.0,
+                time_ms: 2000,
+            },
         ];
         let sim = crate::track::SimResult {
             speeds: vec![2.0],
@@ -3425,7 +3544,14 @@ mod tests {
         };
         let p = RunParams::default();
         let v = detail_payload(&pts, &sim, &p, "12345");
-        for k in ["uid", "sportType", "totalDistance", "totalTime", "totalSteps", "route"] {
+        for k in [
+            "uid",
+            "sportType",
+            "totalDistance",
+            "totalTime",
+            "totalSteps",
+            "route",
+        ] {
             assert!(v.get(k).is_some(), "缺字段 {k}");
         }
         assert_eq!(v["route"].as_array().unwrap().len(), 2);
@@ -3539,12 +3665,16 @@ mod fixed_point_payload_tests {
         // 算进 `fivePointJson`，两条路径互不依赖。
         let loc = crate::api::submit::build_points(&pts, &[], start_ms, None).expect("points");
         let obj = detail_payload_rrid(&sim, "123", 99, start_ms, "U", &five, &loc);
-        let raw = obj["run_data"].as_str().expect("run_data 是 gzip+base64 字符串");
+        let raw = obj["run_data"]
+            .as_str()
+            .expect("run_data 是 gzip+base64 字符串");
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(raw)
             .expect("base64");
         let mut text = String::new();
-        GzDecoder::new(&bytes[..]).read_to_string(&mut text).expect("gunzip");
+        GzDecoder::new(&bytes[..])
+            .read_to_string(&mut text)
+            .expect("gunzip");
         let run: serde_json::Value = serde_json::from_str(&text).unwrap();
         let loc: Vec<serde_json::Value> =
             serde_json::from_str(run["allLocJson"].as_str().unwrap()).unwrap();
@@ -3591,7 +3721,6 @@ mod fixed_point_payload_tests {
         }
     }
 }
-
 
 #[cfg(test)]
 mod single_point_source_tests {
@@ -3643,9 +3772,32 @@ mod single_point_source_tests {
     ///
     /// 只用来钉住一件事：**envelope 白名单里不许混进点位字段**。
     const POINT_FIELDS: &[&str] = &[
-        "avgSpeed", "bdA", "bdD", "bdG", "bdS", "coorType", "count", "dtr", "flag", "gLat",
-        "gLng", "gainTime", "id", "lat", "lng", "locType", "locationId", "queueNum", "radius",
-        "speed", "state", "stepDistance", "totalDis", "totalTime", "type", "validDis",
+        "avgSpeed",
+        "bdA",
+        "bdD",
+        "bdG",
+        "bdS",
+        "coorType",
+        "count",
+        "dtr",
+        "flag",
+        "gLat",
+        "gLng",
+        "gainTime",
+        "id",
+        "lat",
+        "lng",
+        "locType",
+        "locationId",
+        "queueNum",
+        "radius",
+        "speed",
+        "state",
+        "stepDistance",
+        "totalDis",
+        "totalTime",
+        "type",
+        "validDis",
         "validTime",
     ];
 
@@ -3801,7 +3953,9 @@ mod single_point_source_tests {
     /// `save_record.fivePointJson` 的内层点位数组（envelope → 串 → 数组）。
     fn five_point_items(body: &Value) -> Vec<Value> {
         let env: Value = serde_json::from_str(
-            body["fivePointJson"].as_str().expect("fivePointJson 是字符串"),
+            body["fivePointJson"]
+                .as_str()
+                .expect("fivePointJson 是字符串"),
         )
         .expect("fivePointJson 是 JSON");
         serde_json::from_str(env["fivePointJson"].as_str().expect("内层是字符串"))
@@ -3813,8 +3967,10 @@ mod single_point_source_tests {
         assert_eq!(a.len(), b.len(), "{label}：点位数不同");
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             let (xo, yo) = (
-                x.as_object().unwrap_or_else(|| panic!("{label} 第 {i} 点不是对象")),
-                y.as_object().unwrap_or_else(|| panic!("{label} 第 {i} 点不是对象")),
+                x.as_object()
+                    .unwrap_or_else(|| panic!("{label} 第 {i} 点不是对象")),
+                y.as_object()
+                    .unwrap_or_else(|| panic!("{label} 第 {i} 点不是对象")),
             );
             let ka: Vec<&String> = xo.keys().collect();
             let kb: Vec<&String> = yo.keys().collect();
@@ -3875,8 +4031,8 @@ mod single_point_source_tests {
         let f = fixture();
 
         // ① 自检那份：与 `flow::dry_run` 的 probe 一字不差地组装
-        let probe = submit::build(&probe_params(&f), &f.track, &f.fixed, &f.sim)
-            .expect("自检报文应能组装");
+        let probe =
+            submit::build(&probe_params(&f), &f.track, &f.fixed, &f.sim).expect("自检报文应能组装");
         // ② 提交那份（真实身份 / 真实围栏）
         let up = upload_params(&f);
         let submission = submit::build(&up, &f.track, &f.fixed, &f.sim).expect("提交报文应能组装");
@@ -3921,7 +4077,10 @@ mod single_point_source_tests {
             .iter()
             .filter(|p| p["type"].as_i64() == Some(2))
             .count();
-        assert_eq!(marked, 5, "计分跑的打卡标记应与必到点数一致，实际 {marked} 个");
+        assert_eq!(
+            marked, 5,
+            "计分跑的打卡标记应与必到点数一致，实际 {marked} 个"
+        );
 
         // envelope 层：差异只允许出现在白名单里
         assert_envelope_diff_allowlisted(&probe.save_record, &submission.save_record);
@@ -4038,7 +4197,10 @@ mod issue37_tests {
         // 数组序 0,180,90,270 ≠ 绕圈首次经过序 0,90,180,270
         let cps = vec![cp_at(0.0), cp_at(180.0), cp_at(90.0), cp_at(270.0)];
         let mut log = |_s: &str| {};
-        assert!(!stadium_point_order_ok(&pts, &cps, &mut log), "不同序必须回退");
+        assert!(
+            !stadium_point_order_ok(&pts, &cps, &mut log),
+            "不同序必须回退"
+        );
     }
 
     /// 数组序与绕圈序一致 → 放行（真操场不被误杀）。

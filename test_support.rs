@@ -78,11 +78,7 @@ pub(crate) fn real_data_dir() -> PathBuf {
 /// 每个模块各写一条这样的测试，防止将来有人把 `*_in` 改回默认路径。
 pub(crate) fn assert_isolated(injected: &Path, what: &str) {
     let real = real_data_dir();
-    assert_ne!(
-        injected,
-        real,
-        "{what} 不能等于真实 $HOME/.pace-forge"
-    );
+    assert_ne!(injected, real, "{what} 不能等于真实 $HOME/.pace-forge");
     assert!(
         !injected.starts_with(&real),
         "{what} 不能落在真实 $HOME/.pace-forge 之下: {}",

@@ -66,7 +66,11 @@ impl State {
         if let Some(id) = &current {
             println!("[web] 恢复 {} 个账号，当前={id}", clients.len());
         }
-        Self { book, clients, current }
+        Self {
+            book,
+            clients,
+            current,
+        }
     }
 
     /// 改了设备字段（机型）之后重建这个账号的 client：下一次请求就带新 cpuModel。
@@ -107,7 +111,9 @@ impl State {
 
     /// 当前账号是否可发请求。
     fn logged_in(&self) -> bool {
-        self.current_account().map(|a| a.logged_in()).unwrap_or(false)
+        self.current_account()
+            .map(|a| a.logged_in())
+            .unwrap_or(false)
     }
 
     /// 当前账号的 Client。
@@ -303,7 +309,9 @@ fn device_scope(id_or_username: &str) -> String {
 /// 不设置时只允许本机访问——绑 0.0.0.0 又没有口令，等于把「登录/提交/删账号」
 /// 暴露给同网段任意主机，密码还是明文 HTTP 传的。
 fn auth_token() -> Option<String> {
-    std::env::var("PACE_FORGE_TOKEN").ok().filter(|t| !t.is_empty())
+    std::env::var("PACE_FORGE_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
 }
 
 /// 请求来源是否本机。
@@ -363,7 +371,10 @@ fn check_auth(request: &tiny_http::Request, token: Option<&str>) -> Result<(), (
             }
         }
         None => {
-            let remote = request.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+            let remote = request
+                .remote_addr()
+                .map(|a| a.ip().to_string())
+                .unwrap_or_default();
             if is_loopback(&remote) {
                 Ok(())
             } else {
@@ -494,7 +505,13 @@ pub fn serve(addr: &str) -> Result<(), String> {
 fn origin_matches_host(origin: Option<&str>, host: Option<&str>) -> bool {
     let Some(o) = origin else { return true }; // curl / 脚本不带 Origin
     let Some(h) = host else { return false };
-    let oh = o.split("//").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    let oh = o
+        .split("//")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("");
     oh.eq_ignore_ascii_case(h.trim())
 }
 
@@ -544,11 +561,14 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Get, "/api/me") => {
             let st = lock_state(&state);
             match st.current_account() {
-                Some(a) => json_ok(request, json!({
-                    "id": a.id, "uid": a.uid, "unid": a.unid,
-                    "name": a.name, "username": a.username, "school": a.school,
-                    "loggedIn": a.logged_in(),
-                })),
+                Some(a) => json_ok(
+                    request,
+                    json!({
+                        "id": a.id, "uid": a.uid, "unid": a.unid,
+                        "name": a.name, "username": a.username, "school": a.school,
+                        "loggedIn": a.logged_in(),
+                    }),
+                ),
                 None => json_err(request, "未登录"),
             }
         }
@@ -666,12 +686,12 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             };
             handle_raw(request, state, &body)
         }
-        (Method::Get, "/api/health") => json_ok(request, json!({"ok": true, "version": crate::VERSION})),
+        (Method::Get, "/api/health") => {
+            json_ok(request, json!({"ok": true, "version": crate::VERSION}))
+        }
         // 出口 IP 自检（#10）：显示提交时服务端用的公网 IP，并标出是否走了代理。
         // 探测失败返回 ok:false，前端显示「出口未知」，不阻塞任何功能。
-        (Method::Get, "/api/egress-ip") => {
-            json_ok(request, crate::api::egress::cached_json())
-        }
+        (Method::Get, "/api/egress-ip") => json_ok(request, crate::api::egress::cached_json()),
         // 网络自检：生成卡住时用来回答「哪条链路不通」，只探连通性。
         (Method::Get, "/api/netcheck") => handle_netcheck(request),
         _ => {
@@ -705,8 +725,16 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
 }
 
 fn handle_login(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
-    let username = body.get("username").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let mut password = body.get("password").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let username = body
+        .get("username")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut password = body
+        .get("password")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     if username.is_empty() {
         return json_err(request, "手机号要填");
     }
@@ -811,10 +839,7 @@ fn handle_plan(
     // 0 或缺失都表示「没指定」，交给模型按配速推算。
     // 手填步数很容易和配速对不上——12 分钟 2300 步 = 192 步/分，
     // 而 2.78 m/s 的典型步频只有 158，差 34 步会被自检判 GAIT_MISMATCH。
-    let steps = body["steps"]
-        .as_i64()
-        .filter(|v| *v > 0)
-        .map(|v| v as i32);
+    let steps = body["steps"].as_i64().filter(|v| *v > 0).map(|v| v as i32);
     let sport_type = body["sportType"].as_i64().unwrap_or(1) as i32;
     let run_mode = body["runMode"].as_i64().unwrap_or(1);
     let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
@@ -924,8 +949,7 @@ fn handle_plan(
                 });
 
                 // 打卡点 + 是否被轨迹覆盖
-                let track_xy: Vec<(f64, f64)> =
-                    o.track.iter().map(|t| (t.lat, t.lon)).collect();
+                let track_xy: Vec<(f64, f64)> = o.track.iter().map(|t| (t.lat, t.lon)).collect();
                 let cps: Vec<Value> = o
                     .points
                     .coords
@@ -938,12 +962,7 @@ fn handle_plan(
                             .fold(f64::MAX, f64::min);
                         // 高德地图按 GCJ-02 网格切瓦片，前端摆点位必须用这一套，
                         // 否则点位会整体偏出去几百米
-                        let (ga, go) = o
-                            .points
-                            .gcj_coords
-                            .get(i)
-                            .copied()
-                            .unwrap_or((a, b));
+                        let (ga, go) = o.points.gcj_coords.get(i).copied().unwrap_or((a, b));
                         json!({
                             "index": i + 1,
                             "lat": a,
@@ -970,55 +989,70 @@ fn handle_plan(
                     .collect();
 
                 let ac = {
-                    let c: Vec<f64> = o.sim.step_buckets.iter().map(|b| b.steps_num as f64).collect();
+                    let c: Vec<f64> = o
+                        .sim
+                        .step_buckets
+                        .iter()
+                        .map(|b| b.steps_num as f64)
+                        .collect();
                     if c.len() >= 4 {
                         let m = c.iter().sum::<f64>() / c.len() as f64;
                         let den: f64 = c.iter().map(|x| (x - m).powi(2)).sum();
                         if den > 1e-9 {
                             c.windows(2).map(|w| (w[0] - m) * (w[1] - m)).sum::<f64>() / den
-                        } else { 0.0 }
-                    } else { 0.0 }
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    }
                 };
 
-                return json_ok(request, json!({
-                    "online": true,
-                    "distance": distance_km,
-                    "duration": duration_min,
-                    "actualLength": o.real_length_m,
-                    "steps": o.total_steps,
-                    "avgCadence": (o.avg_cadence * 10.0).round() / 10.0,
-                    "pointCount": o.track_points,
-                    "bucketCount": o.sim.step_buckets.len(),
-                    "stepAutocorr": (ac * 1000.0).round() / 1000.0,
-                    "blocked": o.report.blocked(),
-                    "issueSummary": o.report.summary(),
-                    "issues": o.report.lines(),
-                    "fence": fence,
-                    "checkpoints": cps,
-                    "checkpointTotal": o.points.coords.len(),
-                    "checkpointPassed": passed,
-                    "coords": coords,
-                    "mode": "online",
-                    "trackMode": o.track_mode,
-                    "stadiumFallback": o.stadium_fallback,
-                    "policy": {
-                        "minDistance": o.policy.min_distance,
-                        "validTime": o.policy.valid_time,
-                    },
-                    "logs": logs.borrow().clone(),
-                    "note": "已连服务端：围栏与打卡点为真实数据，未提交",
-                }));
+                return json_ok(
+                    request,
+                    json!({
+                        "online": true,
+                        "distance": distance_km,
+                        "duration": duration_min,
+                        "actualLength": o.real_length_m,
+                        "steps": o.total_steps,
+                        "avgCadence": (o.avg_cadence * 10.0).round() / 10.0,
+                        "pointCount": o.track_points,
+                        "bucketCount": o.sim.step_buckets.len(),
+                        "stepAutocorr": (ac * 1000.0).round() / 1000.0,
+                        "blocked": o.report.blocked(),
+                        "issueSummary": o.report.summary(),
+                        "issues": o.report.lines(),
+                        "fence": fence,
+                        "checkpoints": cps,
+                        "checkpointTotal": o.points.coords.len(),
+                        "checkpointPassed": passed,
+                        "coords": coords,
+                        "mode": "online",
+                        "trackMode": o.track_mode,
+                        "stadiumFallback": o.stadium_fallback,
+                        "policy": {
+                            "minDistance": o.policy.min_distance,
+                            "validTime": o.policy.valid_time,
+                        },
+                        "logs": logs.borrow().clone(),
+                        "note": "已连服务端：围栏与打卡点为真实数据，未提交",
+                    }),
+                );
             }
             // dry_run 失败就退回本地合成，但要把原因带出来——
             // 否则页面只显示「本地合成」，完全不知道服务端哪一步卡住了
             if let Err(e) = r {
                 // 把日志一起带出去。自检失败时日志里逐条写着哪个检查没过，
                 // 只回一句「自检未通过」等于让用户猜。
-                return json_ok(request, json!({
-                    "ok": false,
-                    "error": format!("真实流程失败：{e}"),
-                    "logs": logs.borrow().clone(),
-                }));
+                return json_ok(
+                    request,
+                    json!({
+                        "ok": false,
+                        "error": format!("真实流程失败：{e}"),
+                        "logs": logs.borrow().clone(),
+                    }),
+                );
             }
         }
     }
@@ -1184,42 +1218,53 @@ fn handle_plan(
     let bucket_count = (total_sec / 10).max(1);
     let issues: Vec<String> = report.lines();
     let ac = {
-        let c: Vec<f64> = sim.step_buckets.iter().map(|b| b.steps_num as f64).collect();
+        let c: Vec<f64> = sim
+            .step_buckets
+            .iter()
+            .map(|b| b.steps_num as f64)
+            .collect();
         if c.len() >= 4 {
             let m = c.iter().sum::<f64>() / c.len() as f64;
             let den: f64 = c.iter().map(|x| (x - m).powi(2)).sum();
             if den > 1e-9 {
                 c.windows(2).map(|w| (w[0] - m) * (w[1] - m)).sum::<f64>() / den
-            } else { 0.0 }
-        } else { 0.0 }
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
     };
-    json_ok(request, json!({
-        "distance": distance_km,
-        "duration": duration_min,
-        "steps": steps,
-        "predictedSpeed": sub.save_record["speed"],
-        "predictedCalorie": sub.save_record["calorie"],
-        "avgStepFreq": sub.save_record["avgStepFreq"],
-        "complete": sub.save_record["complete"],
-        "signature": sub.save_record["signature"],
-        "payloadBytes": serde_json::to_string(&sub.save_record).map(|s| s.len()).unwrap_or(0),
-        "pointCount": track.points.len(),
-        "actualLength": (track.actual_length_m * 100.0).round() / 100.0,
-        "bucketCount": bucket_count,
-        "checkpoints": track.checkpoints.len(),
-        "coords": coords,
-        "mode": mode,
-        // 离线预览不是真实提交的几何：操场模式这里画的是固定尺寸标准跑道，
-        // 在线提交时是从打卡点反推的椭圆。前端据此提示一句。
-        "preview": true,
-        "lane": lane,
-        "avgCadence": (sim.avg_cadence * 10.0).round() / 10.0,
-        "stepAutocorr": (ac * 1000.0).round() / 1000.0,
-        "blocked": report.blocked(),
-        "issueSummary": report.summary(),
-        "issues": issues,
-        "note": "本地预演，未提交到服务器",
-    }))
+    json_ok(
+        request,
+        json!({
+            "distance": distance_km,
+            "duration": duration_min,
+            "steps": steps,
+            "predictedSpeed": sub.save_record["speed"],
+            "predictedCalorie": sub.save_record["calorie"],
+            "avgStepFreq": sub.save_record["avgStepFreq"],
+            "complete": sub.save_record["complete"],
+            "signature": sub.save_record["signature"],
+            "payloadBytes": serde_json::to_string(&sub.save_record).map(|s| s.len()).unwrap_or(0),
+            "pointCount": track.points.len(),
+            "actualLength": (track.actual_length_m * 100.0).round() / 100.0,
+            "bucketCount": bucket_count,
+            "checkpoints": track.checkpoints.len(),
+            "coords": coords,
+            "mode": mode,
+            // 离线预览不是真实提交的几何：操场模式这里画的是固定尺寸标准跑道，
+            // 在线提交时是从打卡点反推的椭圆。前端据此提示一句。
+            "preview": true,
+            "lane": lane,
+            "avgCadence": (sim.avg_cadence * 10.0).round() / 10.0,
+            "stepAutocorr": (ac * 1000.0).round() / 1000.0,
+            "blocked": report.blocked(),
+            "issueSummary": report.summary(),
+            "issues": issues,
+            "note": "本地预演，未提交到服务器",
+        }),
+    )
 }
 
 // ---------- 记分跑：学期进度 ----------
@@ -1253,12 +1298,15 @@ fn handle_accounts(request: tiny_http::Request, state: Shared) -> Result<(), Str
         .iter()
         .map(|a| account_view(a, a.id == cur))
         .collect();
-    json_ok(request, json!({
-        "count": list.len(),
-        "ready": st.book.ready().len(),
-        "current": cur,
-        "accounts": list,
-    }))
+    json_ok(
+        request,
+        json!({
+            "count": list.len(),
+            "ready": st.book.ready().len(),
+            "current": cur,
+            "accounts": list,
+        }),
+    )
 }
 
 fn handle_add_account(
@@ -1277,7 +1325,11 @@ fn handle_add_account(
     match login(&mut client, &username, &password) {
         Ok(LoginOutcome::Ok(profile)) => {
             let mut st = lock_state(&state);
-            let id = if profile.uid.is_empty() { username.clone() } else { profile.uid.clone() };
+            let id = if profile.uid.is_empty() {
+                username.clone()
+            } else {
+                profile.uid.clone()
+            };
             let enc = crate::api::accounts::seal_password(&password).unwrap_or_default();
             let mut acc = crate::api::accounts::Account {
                 id: id.clone(),
@@ -1291,12 +1343,15 @@ fn handle_add_account(
             }
             st.book.upsert(acc);
             st.apply_login(&id, &profile);
-            json_ok(request, json!({
-                "id": id,
-                "name": profile.name,
-                "school": profile.campus_name,
-                "uid": profile.uid,
-            }))
+            json_ok(
+                request,
+                json!({
+                    "id": id,
+                    "name": profile.name,
+                    "school": profile.campus_name,
+                    "uid": profile.uid,
+                }),
+            )
         }
         Ok(LoginOutcome::NeedCaptcha { uuid, message }) => {
             json_err(request, &format!("{message}（uuid={uuid}）"))
@@ -1346,7 +1401,10 @@ fn handle_del_account(
     {
         return json_err(request, &error);
     }
-    json_ok(request, json!({"removed": true, "remoteLogout": remote, "needConfirm": false}))
+    json_ok(
+        request,
+        json!({"removed": true, "remoteLogout": remote, "needConfirm": false}),
+    )
 }
 
 /// 按账号退出登录：只清登录态，保留手机号和存盘密码。
@@ -1356,29 +1414,21 @@ fn handle_del_account(
 ///
 /// 同样要先调服务端 `/api/v6/user/logout`。只清本地 token 的话服务端
 /// 会话还活着，账号被标记「已登录」，再登触发 10121 并锁一小时。
-fn handle_logout_one(
-    request: tiny_http::Request,
-    state: Shared,
-    id: &str,
-) -> Result<(), String> {
+fn handle_logout_one(request: tiny_http::Request, state: Shared, id: &str) -> Result<(), String> {
     let mut st = lock_state(&state);
     let remote = remote_logout(&mut st, id);
-    let was_current = match st.end_account_session(
-        &session::data_dir(),
-        id,
-        AccountSessionAction::Logout,
-    ) {
-        Ok(was_current) => was_current,
-        Err(error) => return json_err(request, &error),
-    };
-    json_ok(request, json!({"ok": true, "remoteLogout": remote, "wasCurrent": was_current}))
+    let was_current =
+        match st.end_account_session(&session::data_dir(), id, AccountSessionAction::Logout) {
+            Ok(was_current) => was_current,
+            Err(error) => return json_err(request, &error),
+        };
+    json_ok(
+        request,
+        json!({"ok": true, "remoteLogout": remote, "wasCurrent": was_current}),
+    )
 }
 
-fn handle_switch(
-    request: tiny_http::Request,
-    state: Shared,
-    id: &str,
-) -> Result<(), String> {
+fn handle_switch(request: tiny_http::Request, state: Shared, id: &str) -> Result<(), String> {
     let mut st = lock_state(&state);
     if st.book.get(id).is_none() {
         return json_err(request, "账号不存在");
@@ -1387,11 +1437,7 @@ fn handle_switch(
     json_ok(request, json!({"current": id}))
 }
 
-fn handle_toggle(
-    request: tiny_http::Request,
-    state: Shared,
-    id: &str,
-) -> Result<(), String> {
+fn handle_toggle(request: tiny_http::Request, state: Shared, id: &str) -> Result<(), String> {
     let mut st = lock_state(&state);
     let enabled = match st.book.get_mut(id) {
         Some(a) => {
@@ -1405,11 +1451,7 @@ fn handle_toggle(
 }
 
 /// 用已存密码重新登录一个账号。
-fn handle_login_one(
-    request: tiny_http::Request,
-    state: Shared,
-    id: &str,
-) -> Result<(), String> {
+fn handle_login_one(request: tiny_http::Request, state: Shared, id: &str) -> Result<(), String> {
     let (username, password) = {
         let st = lock_state(&state);
         match st.book.get(id) {
@@ -1431,7 +1473,10 @@ fn handle_login_one(
         Ok(LoginOutcome::Ok(profile)) => {
             let mut st = lock_state(&state);
             st.apply_login(id, &profile);
-            json_ok(request, json!({"id": id, "name": profile.name, "uid": profile.uid}))
+            json_ok(
+                request,
+                json!({"id": id, "name": profile.name, "uid": profile.uid}),
+            )
         }
         Ok(LoginOutcome::NeedCaptcha { message, .. }) => json_err(request, &message),
         Err(e) => json_err(request, &e),
@@ -1479,15 +1524,14 @@ fn handle_login_all(request: tiny_http::Request, state: Shared) -> Result<(), St
     }
 
     let ok = results.iter().filter(|r| r["ok"] == true).count();
-    json_ok(request, json!({"total": results.len(), "ok": ok, "results": results}))
+    json_ok(
+        request,
+        json!({"total": results.len(), "ok": ok, "results": results}),
+    )
 }
 
 /// 批量刷：所有就绪账号依次跑一遍。
-fn handle_batch(
-    request: tiny_http::Request,
-    state: Shared,
-    body: &Value,
-) -> Result<(), String> {
+fn handle_batch(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
     let distance_km = body["distance"].as_f64().unwrap_or(2.0);
     let duration_min = body["duration"].as_f64().unwrap_or(12.0);
     let run_mode = body["runMode"].as_i64().unwrap_or(1);
@@ -1516,7 +1560,11 @@ fn handle_batch(
     let gap_ms = body["gapMs"].as_u64().unwrap_or(8000);
     let only: Vec<String> = body["ids"]
         .as_array()
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     if distance_km <= 0.0 || distance_km > 42.0 {
@@ -1581,7 +1629,7 @@ fn handle_batch(
             start_at_ms,
             alt_range: parse_alt_range(body),
             prefer_stadium: body["mode"].as_str() == Some("stadium"),
-                prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
+            prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
             ..Default::default()
         };
 
@@ -1625,12 +1673,15 @@ fn handle_batch(
 
     let ok = results.iter().filter(|r| r["ok"] == true).count();
     let submitted = results.iter().filter(|r| r["submitted"] == true).count();
-    json_ok(request, json!({
-        "total": results.len(),
-        "ok": ok,
-        "submitted": submitted,
-        "results": results,
-    }))
+    json_ok(
+        request,
+        json!({
+            "total": results.len(),
+            "ok": ok,
+            "submitted": submitted,
+            "results": results,
+        }),
+    )
 }
 
 // ---------- 补跑时刻 ----------
@@ -1677,27 +1728,33 @@ fn handle_starttimes(request: tiny_http::Request) -> Result<(), String> {
             st::random_in_day(now, days, dur_s, r)
         }
         // 现在跑就是现在跑，不参与钳制（前端也不会拿它去弹确认框）
-        "now" => Ok(st::StartTime { ms: now, clamped: false }),
+        "now" => Ok(st::StartTime {
+            ms: now,
+            clamped: false,
+        }),
         other => return json_err(request, &format!("未知模式 {other}")),
     };
 
     match result {
-        Ok(x) => json_ok(request, json!({
-            "mode": mode,
-            "startMs": x.ms,
-            "stopMs": x.stop_ms(dur_s),
-            "startText": st::format_ms(x.ms, tz),
-            "stopText": st::format_ms(x.stop_ms(dur_s), tz),
-            "clamped": x.clamped,
-            "durationSec": dur_s,
-            "nowText": st::format_ms(now, tz),
-            "limits": {
-                "maxDaysAgo": st::MAX_DAYS_AGO,
-                "maxAgoMin": st::MAX_AGO_MIN,
-                "randHourLo": st::RAND_HOUR_LO,
-                "randHourHi": st::RAND_HOUR_HI,
-            },
-        })),
+        Ok(x) => json_ok(
+            request,
+            json!({
+                "mode": mode,
+                "startMs": x.ms,
+                "stopMs": x.stop_ms(dur_s),
+                "startText": st::format_ms(x.ms, tz),
+                "stopText": st::format_ms(x.stop_ms(dur_s), tz),
+                "clamped": x.clamped,
+                "durationSec": dur_s,
+                "nowText": st::format_ms(now, tz),
+                "limits": {
+                    "maxDaysAgo": st::MAX_DAYS_AGO,
+                    "maxAgoMin": st::MAX_AGO_MIN,
+                    "randHourLo": st::RAND_HOUR_LO,
+                    "randHourHi": st::RAND_HOUR_HI,
+                },
+            }),
+        ),
         Err(e) => json_err(request, &e),
     }
 }
@@ -1731,7 +1788,11 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
     };
     if let Ok(raw) = client.request(
         "POST",
-        &format!("{}{}", crate::crypto::consts::hosts::RUN, crate::api::semester::SUMMARY_PATH),
+        &format!(
+            "{}{}",
+            crate::crypto::consts::hosts::RUN,
+            crate::api::semester::SUMMARY_PATH
+        ),
         Some(&raw_body),
     ) {
         if let Ok(v) = serde_json::from_str::<Value>(&raw) {
@@ -1743,15 +1804,18 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
 
     match crate::api::semester::fetch_summary(&client) {
         Ok(sm) => {
-            out.insert("summary".into(), json!({
-                "sname": sm.sname,
-                "semesterDis": sm.semester_dis,
-                "semesterValidDis": sm.semester_valid_dis,
-                "semesterCount": sm.semester_count,
-                "semesterValidCount": sm.semester_valid_count,
-                "validRatio": sm.valid_ratio(),
-                "text": sm.summary(),
-            }));
+            out.insert(
+                "summary".into(),
+                json!({
+                    "sname": sm.sname,
+                    "semesterDis": sm.semester_dis,
+                    "semesterValidDis": sm.semester_valid_dis,
+                    "semesterCount": sm.semester_count,
+                    "semesterValidCount": sm.semester_valid_count,
+                    "validRatio": sm.valid_ratio(),
+                    "text": sm.summary(),
+                }),
+            );
         }
         Err(e) => {
             out.insert("summaryError".into(), json!(e));
@@ -1759,7 +1823,11 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
     }
     if let Ok(raw) = client.request(
         "POST",
-        &format!("{}{}", crate::crypto::consts::hosts::RUN, crate::api::semester::PERSONAL_PATH),
+        &format!(
+            "{}{}",
+            crate::crypto::consts::hosts::RUN,
+            crate::api::semester::PERSONAL_PATH
+        ),
         Some(&json!({"runMode": 1})),
     ) {
         if let Ok(v) = serde_json::from_str::<Value>(&raw) {
@@ -1775,14 +1843,17 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            out.insert("goal".into(), json!({
-                "targetDis": g.target_dis,
-                "targetCount": g.target_count,
-                "daysLeft": g.days_left(now),
-                "inTerm": g.in_term(now),
-                // 2 = 按里程考核，次数两项服务端给 0；前端据此说明而不是显示成 0 次
-                "goalMethod": g.goal_method,
-            }));
+            out.insert(
+                "goal".into(),
+                json!({
+                    "targetDis": g.target_dis,
+                    "targetCount": g.target_count,
+                    "daysLeft": g.days_left(now),
+                    "inTerm": g.in_term(now),
+                    // 2 = 按里程考核，次数两项服务端给 0；前端据此说明而不是显示成 0 次
+                    "goalMethod": g.goal_method,
+                }),
+            );
         }
         Err(e) => {
             out.insert("goalError".into(), json!(e));
@@ -1802,11 +1873,7 @@ fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Str
 ///
 /// 锚点优先级：query 的 `lat`/`lng` > 围栏质心。两边都没有就没法查
 /// （服务端必须知道你在哪个校区），明确报错而不是猜一个坐标。
-fn handle_points(
-    request: tiny_http::Request,
-    state: Shared,
-    query: &str,
-) -> Result<(), String> {
+fn handle_points(request: tiny_http::Request, state: Shared, query: &str) -> Result<(), String> {
     let client = {
         let st = lock_state(&state);
         if !st.logged_in() {
@@ -1866,11 +1933,7 @@ fn handle_points(
         .unwrap_or(2000);
 
     match crate::api::points::fetch_points_at_distance(
-        &client,
-        anchor.0,
-        anchor.1,
-        None,
-        distance_m,
+        &client, anchor.0, anchor.1, None, distance_m,
     ) {
         Ok(ctx) => {
             let points: Vec<Value> = ctx
@@ -1912,11 +1975,7 @@ fn handle_points(
     }
 }
 
-fn handle_fences(
-    request: tiny_http::Request,
-    state: Shared,
-    _query: &str,
-) -> Result<(), String> {
+fn handle_fences(request: tiny_http::Request, state: Shared, _query: &str) -> Result<(), String> {
     // 先把 client 克隆出来再放锁。Client 是 Clone，网络请求几十秒，
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
@@ -2000,11 +2059,7 @@ fn parse_custom_path(body: &Value) -> Option<Vec<(f64, f64)>> {
         .filter(|v| v.len() >= 2)
 }
 
-fn handle_run(
-    request: tiny_http::Request,
-    state: Shared,
-    body: &Value,
-) -> Result<(), String> {
+fn handle_run(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
     let distance_km = body["distance"].as_f64().unwrap_or(2.0);
     let duration_min = body["duration"].as_f64().unwrap_or(12.0);
     let lat = body["lat"].as_f64();
@@ -2092,7 +2147,7 @@ fn handle_run(
         custom_path,
         alt_range: parse_alt_range(body),
         prefer_stadium: body["mode"].as_str() == Some("stadium"),
-                prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
+        prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
         ..Default::default()
     };
 
@@ -2126,16 +2181,19 @@ fn handle_run(
                     }
                 }
             }
-            json_ok(request, json!({
-            "submitted": o.submitted,
-            "recordId": o.record_id,
-            "distance": o.real_length_m,
-            "steps": o.total_steps,
-            "cadence": o.avg_cadence,
-            "points": o.track_points,
-            "obsKeys": o.obs_keys.len(),
-            "logs": logs.borrow().clone(),
-            }))
+            json_ok(
+                request,
+                json!({
+                "submitted": o.submitted,
+                "recordId": o.record_id,
+                "distance": o.real_length_m,
+                "steps": o.total_steps,
+                "cadence": o.avg_cadence,
+                "points": o.track_points,
+                "obsKeys": o.obs_keys.len(),
+                "logs": logs.borrow().clone(),
+                }),
+            )
         }
         Err(e) => json_err(request, &format!("{e}\n---\n{}", logs.borrow().join("\n"))),
     }
@@ -2155,7 +2213,10 @@ fn handle_egress_put(
     body: &Value,
 ) -> Result<(), String> {
     use crate::api::egress;
-    let spec = body["proxy"].as_str().map(str::trim).filter(|p| !p.is_empty());
+    let spec = body["proxy"]
+        .as_str()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
     if let Err(e) = egress::save_proxy(spec) {
         return json_err(request, &e);
     }
@@ -2179,12 +2240,19 @@ fn handle_egress_put(
 }
 
 /// 当前账号的机型配置（`?q=` 有值时顺带搜官方目录）。
-fn handle_device_get(request: tiny_http::Request, state: Shared, query: &str) -> Result<(), String> {
+fn handle_device_get(
+    request: tiny_http::Request,
+    state: Shared,
+    query: &str,
+) -> Result<(), String> {
     use crate::api::{client, device_table};
     let (scope, cur_model) = {
         let st = lock_state(&state);
         match st.current_account() {
-            Some(a) => (device_scope(&a.id), client::account_model(&device_scope(&a.id))),
+            Some(a) => (
+                device_scope(&a.id),
+                client::account_model(&device_scope(&a.id)),
+            ),
             None => (String::new(), None),
         }
     };
@@ -2244,7 +2312,11 @@ fn handle_device_get(request: tiny_http::Request, state: Shared, query: &str) ->
 }
 
 /// 设置当前账号的机型。`model` 为空/null 表示清掉（回到 ABI）。
-fn handle_device_put(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
+fn handle_device_put(
+    request: tiny_http::Request,
+    state: Shared,
+    body: &Value,
+) -> Result<(), String> {
     use crate::api::client;
     let scope = {
         let st = lock_state(&state);
@@ -2253,7 +2325,10 @@ fn handle_device_put(request: tiny_http::Request, state: Shared, body: &Value) -
             None => return json_err(request, "请先登录再设置机型"),
         }
     };
-    let model = body["model"].as_str().map(str::trim).filter(|m| !m.is_empty());
+    let model = body["model"]
+        .as_str()
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
     if let Some(m) = model {
         if m.len() > 64 || m.chars().any(|c| c.is_control()) {
             return json_err(request, "机型 code 不合法（最长 64，不能含控制字符）");
@@ -2262,7 +2337,10 @@ fn handle_device_put(request: tiny_http::Request, state: Shared, body: &Value) -
     // 给了平台代号就顺手记一条用户级映射（内置表查不到 SoC 时用得上）
     if let (Some(m), Some(plat)) = (
         model,
-        body["platform"].as_str().map(str::trim).filter(|p| !p.is_empty()),
+        body["platform"]
+            .as_str()
+            .map(str::trim)
+            .filter(|p| !p.is_empty()),
     ) {
         if let Err(e) = crate::api::device_table::set_user_model(m, plat) {
             return json_err(request, &e);
@@ -2277,9 +2355,9 @@ fn handle_device_put(request: tiny_http::Request, state: Shared, body: &Value) -
         st.rebuild_client(&scope);
     }
     let cpu = client::resolve_cpu_model(model);
-    let hit = model.and_then(crate::api::device_table::catalog_lookup).map(|e| {
-        json!({"name": e.name, "brand": e.brand, "codename": e.codename})
-    });
+    let hit = model
+        .and_then(crate::api::device_table::catalog_lookup)
+        .map(|e| json!({"name": e.name, "brand": e.brand, "codename": e.codename}));
     json_ok(
         request,
         json!({
@@ -2373,11 +2451,7 @@ fn handle_obs_fetch(
 /// 透传任意业务接口，用于探测没写进代码的接口。
 ///
 /// body: {"path":"/api/v670/...","body":{...},"host":"run|discovery"}
-fn handle_raw(
-    request: tiny_http::Request,
-    state: Shared,
-    body: &Value,
-) -> Result<(), String> {
+fn handle_raw(request: tiny_http::Request, state: Shared, body: &Value) -> Result<(), String> {
     let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
     if !path.starts_with("/api/") {
         return json_err(request, "path 必须是 /api/ 开头");
@@ -2398,27 +2472,41 @@ fn handle_raw(
         };
         c.clone()
     };
-    let method = match body.get("method").and_then(|v| v.as_str()).unwrap_or("POST") {
+    let method = match body
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("POST")
+    {
         "GET" => "GET",
         _ => "POST",
     };
     let full = if method == "GET" && !inner.as_object().map(|o| o.is_empty()).unwrap_or(true) {
-        let qs: Vec<String> = inner.as_object().map(|o| {
-            o.iter().filter_map(|(k, v)| match v {
-                Value::String(sv) => Some(format!("{k}={}", sv.replace(' ', "%20"))),
-                Value::Number(n) => Some(format!("{k}={n}")),
-                _ => None,
-            }).collect()
-        }).unwrap_or_default();
-        if qs.is_empty() { format!("{host}{path}") } else { format!("{host}{path}?{}", qs.join("&")) }
+        let qs: Vec<String> = inner
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| match v {
+                        Value::String(sv) => Some(format!("{k}={}", sv.replace(' ', "%20"))),
+                        Value::Number(n) => Some(format!("{k}={n}")),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if qs.is_empty() {
+            format!("{host}{path}")
+        } else {
+            format!("{host}{path}?{}", qs.join("&"))
+        }
     } else {
         format!("{host}{path}")
     };
     let payload = if method == "GET" { None } else { Some(&inner) };
     match client.request(method, &full, payload) {
         Ok(raw) => {
-            let v: Value = serde_json::from_str(&raw)
-                .unwrap_or_else(|_| json!({"raw_text": raw.chars().take(2000).collect::<String>()}));
+            let v: Value = serde_json::from_str(&raw).unwrap_or_else(
+                |_| json!({"raw_text": raw.chars().take(2000).collect::<String>()}),
+            );
             json_ok(request, v)
         }
         Err(e) => json_err(request, &e),
@@ -2477,9 +2565,15 @@ fn handle_cheat(request: tiny_http::Request, state: Shared, query: &str) -> Resu
 }
 
 fn handle_records(request: tiny_http::Request, state: Shared, query: &str) -> Result<(), String> {
-    let page = query_param(query, "page").and_then(|v| v.parse().ok()).unwrap_or(1u32);
-    let size = query_param(query, "size").and_then(|v| v.parse().ok()).unwrap_or(20u32);
-    let sport = query_param(query, "type").and_then(|v| v.parse().ok()).unwrap_or(1u32);
+    let page = query_param(query, "page")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1u32);
+    let size = query_param(query, "size")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20u32);
+    let sport = query_param(query, "type")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1u32);
 
     // 先把 client 克隆出来再放锁。Client 是 Clone，网络请求几十秒，
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
@@ -2561,11 +2655,7 @@ fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("header 构造失败")
 }
 
-fn respond_json(
-    request: tiny_http::Request,
-    status: u16,
-    body: Value,
-) -> Result<(), String> {
+fn respond_json(request: tiny_http::Request, status: u16, body: Value) -> Result<(), String> {
     let s = serde_json::to_string(&body).unwrap_or_else(|_| "{}".into());
     let resp = Response::from_string(s)
         .with_status_code(status)
@@ -2700,7 +2790,10 @@ fn respond_html(request: tiny_http::Request, html: &str) -> Result<(), String> {
         .with_header(header("Referrer-Policy", "no-referrer"))
         // 不设这个头，浏览器会一直用缓存的旧页面：改了按钮逻辑用户也看不到，
         // 点了还是旧行为（表现为「退出键没反应」）。
-        .with_header(header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"))
+        .with_header(header(
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate, max-age=0",
+        ))
         .with_header(header("Pragma", "no-cache"))
         .with_header(header("Expires", "0"));
     request.respond(resp).map_err(|e| e.to_string())
@@ -2733,7 +2826,9 @@ mod account_session_tests {
         assert_isolated(&dir, "Web 账号会话");
         let mut state = State::new();
         state.book.upsert(saved_account("first", "uid-a", "user-a"));
-        state.book.upsert(saved_account("second", "uid-b", "user-b"));
+        state
+            .book
+            .upsert(saved_account("second", "uid-b", "user-b"));
         state.current = Some("first".into());
         accounts::save_in_dir(&dir, &state.book).unwrap();
         (temp, state)
@@ -2812,7 +2907,10 @@ mod account_session_tests {
             .end_account_session(&dir, "second", AccountSessionAction::Logout)
             .unwrap();
         assert!(!dir.join("session.json").exists());
-        assert!(!restore_account_book(&dir).get("second").unwrap().logged_in());
+        assert!(!restore_account_book(&dir)
+            .get("second")
+            .unwrap()
+            .logged_in());
     }
 
     #[test]
@@ -2840,7 +2938,10 @@ mod account_session_tests {
             .end_account_session(&dir, "first", AccountSessionAction::Logout)
             .is_err());
         assert!(state.book.get("first").unwrap().logged_in());
-        assert!(accounts::load_in_dir(&dir).get("first").unwrap().logged_in());
+        assert!(accounts::load_in_dir(&dir)
+            .get("first")
+            .unwrap()
+            .logged_in());
     }
 }
 
@@ -2969,12 +3070,21 @@ mod origin_tests {
     #[test]
     fn same_origin_passes_and_cross_site_is_blocked() {
         // 本机页面自己的写请求
-        assert!(origin_matches_host(Some("http://127.0.0.1:9999"), Some("127.0.0.1:9999")));
-        assert!(origin_matches_host(Some("http://localhost:8899"), Some("localhost:8899")));
+        assert!(origin_matches_host(
+            Some("http://127.0.0.1:9999"),
+            Some("127.0.0.1:9999")
+        ));
+        assert!(origin_matches_host(
+            Some("http://localhost:8899"),
+            Some("localhost:8899")
+        ));
         // curl / 脚本不带 Origin
         assert!(origin_matches_host(None, Some("127.0.0.1:9999")));
         // 恶意网页盲打 127.0.0.1：Origin 是它自己，Host 才是目标
-        assert!(!origin_matches_host(Some("https://evil.example"), Some("127.0.0.1:9999")));
+        assert!(!origin_matches_host(
+            Some("https://evil.example"),
+            Some("127.0.0.1:9999")
+        ));
         // 有 Origin 却没有 Host —— 不认
         assert!(!origin_matches_host(Some("http://127.0.0.1:9999"), None));
     }
@@ -3032,7 +3142,11 @@ mod fence_coord_tests {
     #[test]
     fn fence_ring_must_be_converted_to_gcj() {
         // 东北某平原校区一带（issue 里那位用户的学校）
-        let ring_bd = [(47.3794, 103.9502), (47.3800, 103.9510), (47.3790, 103.9520)];
+        let ring_bd = [
+            (47.3794, 103.9502),
+            (47.3800, 103.9510),
+            (47.3790, 103.9520),
+        ];
         let ring_gcj: Vec<(f64, f64)> = ring_bd.iter().map(|&(a, b)| bd09_to_gcj02(a, b)).collect();
 
         assert_eq!(ring_gcj.len(), ring_bd.len(), "点数不能变");
@@ -3062,7 +3176,10 @@ mod fence_coord_tests {
         assert!(
             (ba - p.0).abs() < 1e-5 && (bo - p.1).abs() < 1e-5,
             "往返 ({} {}) → ({} {}) 偏差过大",
-            p.0, p.1, ba, bo
+            p.0,
+            p.1,
+            ba,
+            bo
         );
     }
 }
@@ -3121,12 +3238,18 @@ mod center_input_tests {
         // BD-09 相对 GCJ-02 的偏移随纬度变化（经度方向被 cos(lat) 压缩，
         // 这个纬度上实测 855m），所以只断言量级，不断言具体值。
         let d_gcj = distance((lat, lng), gcj);
-        assert!(d_gcj > 100.0 && d_gcj < 1500.0, "gcj02→bd09 偏移异常: {d_gcj}m");
+        assert!(
+            d_gcj > 100.0 && d_gcj < 1500.0,
+            "gcj02→bd09 偏移异常: {d_gcj}m"
+        );
 
         // WGS-84 多叠一层，和 GCJ-02 的结果必须真的不一样——两者若被
         // 当成同一套处理，说明转换链有一环没接上。
         let d_wgs = distance((lat, lng), wgs);
-        assert!(d_wgs > 100.0 && d_wgs < 2000.0, "wgs84→bd09 偏移异常: {d_wgs}m");
+        assert!(
+            d_wgs > 100.0 && d_wgs < 2000.0,
+            "wgs84→bd09 偏移异常: {d_wgs}m"
+        );
         assert!(
             (d_wgs - d_gcj).abs() > 50.0,
             "两套转换结果几乎重合，可能有一层没生效: {d_wgs}m vs {d_gcj}m"
@@ -3168,7 +3291,12 @@ mod loopback_tests {
         ] {
             assert!(is_loopback(ok), "{ok} 应判为本机");
         }
-        for no in ["10.0.0.1", "192.168.1.2", "::ffff:192.168.1.2", "114.114.114.114"] {
+        for no in [
+            "10.0.0.1",
+            "192.168.1.2",
+            "::ffff:192.168.1.2",
+            "114.114.114.114",
+        ] {
             assert!(!is_loopback(no), "{no} 不该判为本机");
         }
     }
@@ -3226,10 +3354,7 @@ mod token_tests {
         assert!(ct_eq(want, want));
         assert!(!ct_eq(&want[..16], want), "前缀相同不能算相等");
         assert!(!ct_eq("", want));
-        assert!(!ct_eq(
-            "0123456789abcdef0123456789abcdee",
-            want
-        ));
+        assert!(!ct_eq("0123456789abcdef0123456789abcdee", want));
     }
 }
 

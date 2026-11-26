@@ -70,10 +70,7 @@ fn make_iv(random4: [u8; 4], plain: &[u8]) -> [u8; 16] {
     nonce[..4].copy_from_slice(&random4);
     nonce[4..].copy_from_slice(&digest[..4]);
 
-    let hex = nonce
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let hex = nonce.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let mut iv = [0u8; 16];
     iv.copy_from_slice(&hex.as_bytes()[..16]);
     iv
@@ -85,8 +82,7 @@ fn make_iv(random4: [u8; 4], plain: &[u8]) -> [u8; 16] {
 /// `random4` 同一份明文配同一个值得到同一个 token，便于测试。
 pub fn encrypt_token(plain: &[u8], random4: [u8; 4]) -> String {
     let iv = make_iv(random4, plain);
-    let cipher = Enc::new(GT_KEY.into(), &iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(plain);
+    let cipher = Enc::new(GT_KEY.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(plain);
 
     let mut out = Vec::with_capacity(25 + cipher.len());
     out.extend_from_slice(MAGIC);
@@ -136,7 +132,8 @@ mod tests {
     fn golden_vector() {
         let got = encrypt_token(br#"{"a":1}"#, [0x11, 0x22, 0x33, 0x44]);
         assert_eq!(
-            got, "R0VFAAUxMTIyMzM0NDAxNWFiZDdmAAAAECc8nwc1mlvLNbq5fbAGXQs="
+            got,
+            "R0VFAAUxMTIyMzM0NDAxNWFiZDdmAAAAECc8nwc1mlvLNbq5fbAGXQs="
         );
     }
 

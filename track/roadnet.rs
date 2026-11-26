@@ -122,7 +122,10 @@ fn overpass_post(body: &str, what: &str) -> Result<String, String> {
         return Ok(text);
     }
     DOWN_AT_MS.store(now_ms_u64(), std::sync::atomic::Ordering::Relaxed);
-    let last = errs.last().cloned().unwrap_or_else(|| "窗口内没有端点返回".into());
+    let last = errs
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "窗口内没有端点返回".into());
     Err(format!(
         "所有 Overpass 端点都失败（{what}，并发竞速 {}s，最后一次: {last}）",
         RACE_WINDOW.as_secs()
@@ -172,13 +175,19 @@ impl RoadNet {
                 if contains(fence, p.0, p.1) {
                     cur.push(p);
                 } else if cur.len() >= 2 {
-                    segments.push(RoadSegment { points: std::mem::take(&mut cur), kind: seg.kind.clone() });
+                    segments.push(RoadSegment {
+                        points: std::mem::take(&mut cur),
+                        kind: seg.kind.clone(),
+                    });
                 } else {
                     cur.clear();
                 }
             }
             if cur.len() >= 2 {
-                segments.push(RoadSegment { points: cur, kind: seg.kind.clone() });
+                segments.push(RoadSegment {
+                    points: cur,
+                    kind: seg.kind.clone(),
+                });
             }
         }
         RoadNet {
@@ -192,7 +201,12 @@ impl RoadNet {
     pub fn total_length_m(&self) -> f64 {
         self.segments
             .iter()
-            .map(|s| s.points.windows(2).map(|w| distance(w[0], w[1])).sum::<f64>())
+            .map(|s| {
+                s.points
+                    .windows(2)
+                    .map(|w| distance(w[0], w[1]))
+                    .sum::<f64>()
+            })
             .sum()
     }
 }
@@ -276,10 +290,7 @@ pub fn fetch(bbox: (f64, f64, f64, f64)) -> Result<RoadNet, String> {
 /// 在写盘处（`session::write_file_private`）。生产入口是
 /// [`cache_get`] / [`cache_put`]，它们用 `home_dir()` 作为 base 转调本函数。
 fn cache_path_in(base: &std::path::Path, bbox: (f64, f64, f64, f64)) -> std::path::PathBuf {
-    let key = format!(
-        "{:.3}_{:.3}_{:.3}_{:.3}",
-        bbox.0, bbox.1, bbox.2, bbox.3
-    );
+    let key = format!("{:.3}_{:.3}_{:.3}_{:.3}", bbox.0, bbox.1, bbox.2, bbox.3);
     crate::api::session::data_dir_in(base).join(format!("roads-{key}.json"))
 }
 
@@ -291,7 +302,10 @@ fn cache_get_in(base: &std::path::Path, bbox: (f64, f64, f64, f64)) -> Option<Ro
     let path = cache_path_in(base, bbox);
     let meta = std::fs::metadata(&path).ok()?;
     // 超过 7 天就重拉
-    if let Ok(age) = meta.modified().and_then(|t| t.elapsed().map_err(std::io::Error::other)) {
+    if let Ok(age) = meta
+        .modified()
+        .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+    {
         if age.as_secs() > 7 * 86400 {
             return None;
         }
@@ -313,7 +327,11 @@ fn cache_get_in(base: &std::path::Path, bbox: (f64, f64, f64, f64)) -> Option<Ro
         if pts.len() >= 2 {
             segments.push(RoadSegment {
                 points: pts,
-                kind: s.get("kind").and_then(|k| k.as_str()).unwrap_or("unknown").into(),
+                kind: s
+                    .get("kind")
+                    .and_then(|k| k.as_str())
+                    .unwrap_or("unknown")
+                    .into(),
             });
         }
     }
@@ -382,7 +400,6 @@ pub fn fetch_water(bbox: (f64, f64, f64, f64)) -> Result<Vec<Vec<(f64, f64)>>, S
     Ok(polys)
 }
 
-
 /// 本地手绘禁区（Web 地图上圈出来的楼、施工区、封路）。
 ///
 /// OSM 在国内校园几乎空白，Overpass 拉不到建筑轮廓，只能人工标一次。
@@ -427,10 +444,7 @@ pub fn save_local_blockers(polys: &[Vec<(f64, f64)>]) -> Result<(), String> {
 /// 同上，但 HOME 基目录由调用方指定。
 ///
 /// 首次运行（`~/.pace-forge/` 还不存在）时由 `write_file_private` 建目录。
-fn save_local_blockers_in(
-    base: &std::path::Path,
-    polys: &[Vec<(f64, f64)>],
-) -> Result<(), String> {
+fn save_local_blockers_in(base: &std::path::Path, polys: &[Vec<(f64, f64)>]) -> Result<(), String> {
     let path = blockers_path_in(base);
     let body = serde_json::json!({
         "polys": polys
@@ -507,7 +521,10 @@ fn poly_cache_get_in(
 ) -> Option<Vec<Vec<(f64, f64)>>> {
     let path = poly_cache_path_in(base, bbox, kind);
     let meta = std::fs::metadata(&path).ok()?;
-    if let Ok(age) = meta.modified().and_then(|t| t.elapsed().map_err(std::io::Error::other)) {
+    if let Ok(age) = meta
+        .modified()
+        .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+    {
         if age.as_secs() > 30 * 86400 {
             return None;
         }
@@ -568,7 +585,10 @@ fn water_cache_get_in(
 ) -> Option<Vec<Vec<(f64, f64)>>> {
     let path = water_cache_path_in(base, bbox);
     let meta = std::fs::metadata(&path).ok()?;
-    if let Ok(age) = meta.modified().and_then(|t| t.elapsed().map_err(std::io::Error::other)) {
+    if let Ok(age) = meta
+        .modified()
+        .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+    {
         if age.as_secs() > 30 * 86400 {
             return None;
         }
@@ -596,7 +616,11 @@ fn water_cache_put(bbox: (f64, f64, f64, f64), polys: &[Vec<(f64, f64)>]) {
     water_cache_put_in(&home_dir(), bbox, polys)
 }
 
-fn water_cache_put_in(base: &std::path::Path, bbox: (f64, f64, f64, f64), polys: &[Vec<(f64, f64)>]) {
+fn water_cache_put_in(
+    base: &std::path::Path,
+    bbox: (f64, f64, f64, f64),
+    polys: &[Vec<(f64, f64)>],
+) {
     // 空结果不写缓存，理由同建筑轮廓：瞬时空集不能锁死 30 天。
     if polys.is_empty() {
         return;
@@ -719,7 +743,11 @@ pub fn route_on_roads_with(
             let (a, b) = (seg.points[0], *seg.points.last().unwrap());
             let da = distance(cur, a);
             let db = distance(cur, b);
-            let (near, far, rev) = if da <= db { (a, b, false) } else { (b, a, true) };
+            let (near, far, rev) = if da <= db {
+                (a, b, false)
+            } else {
+                (b, a, true)
+            };
 
             // 这一段能不能帮我们靠近 target
             let helps = distance(far, target) < distance(near, target);
@@ -763,9 +791,7 @@ pub fn route_on_roads_with(
         legs += 1;
 
         // 打卡点：走过就标记完成
-        pending.retain(|&m| {
-            !points.iter().any(|p| distance(*p, m) < 30.0)
-        });
+        pending.retain(|&m| !points.iter().any(|p| distance(*p, m) < 30.0));
 
         if total >= want_m {
             break;
@@ -882,7 +908,10 @@ mod tests {
         drop(tx);
         assert!(ok.expect("应取到成功结果").contains("elements"));
         assert_eq!(errs.len(), 1, "失败原因要一并收集: {errs:?}");
-        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "不该等到窗口结束");
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(1),
+            "不该等到窗口结束"
+        );
     }
 
     /// 竞速：窗口内没有任何成功，返回空并保留失败原因。
@@ -907,7 +936,10 @@ mod tests {
         let (ok, errs) = select_first_ok(&rx, std::time::Duration::from_millis(120));
         assert!(ok.is_none() && errs.is_empty());
         assert!(t0.elapsed() >= std::time::Duration::from_millis(110));
-        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "窗口就是上限");
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(1),
+            "窗口就是上限"
+        );
     }
 
     fn l_shape_net() -> RoadNet {
@@ -922,11 +954,20 @@ mod tests {
         }];
         segs.push(RoadSegment {
             points: (0..=20)
-                .map(|i| (lat0 + i as f64 * 10.0 / m_per_deg_lat(lat0), lon0 + 200.0 / m_per_deg_lng(lat0)))
+                .map(|i| {
+                    (
+                        lat0 + i as f64 * 10.0 / m_per_deg_lat(lat0),
+                        lon0 + 200.0 / m_per_deg_lng(lat0),
+                    )
+                })
                 .collect(),
             kind: "path".into(),
         });
-        RoadNet { segments: segs, source: "test".into(), mask: None }
+        RoadNet {
+            segments: segs,
+            source: "test".into(),
+            mask: None,
+        }
     }
 
     /// 必经点在够不着的另一段路上时，必须返回 Err，不能给一条「漏打卡」的 Ok。
@@ -949,8 +990,14 @@ mod tests {
             .collect();
         let net = RoadNet {
             segments: vec![
-                RoadSegment { points: a, kind: "footway".into() },
-                RoadSegment { points: b, kind: "footway".into() },
+                RoadSegment {
+                    points: a,
+                    kind: "footway".into(),
+                },
+                RoadSegment {
+                    points: b,
+                    kind: "footway".into(),
+                },
             ],
             source: "test".into(),
             mask: None,
@@ -980,7 +1027,9 @@ mod tests {
         // 每个点都必须落在某一段路上（端点之间线性插值也在路上）
         for p in &r.points {
             let on = net.segments.iter().any(|s| {
-                s.points.windows(2).any(|w| point_on_segment(*p, w[0], w[1], 3.0))
+                s.points
+                    .windows(2)
+                    .any(|w| point_on_segment(*p, w[0], w[1], 3.0))
             });
             assert!(on, "点 {p:?} 不在任何道路上");
         }
@@ -1129,11 +1178,7 @@ mod tests {
                 cache_path_in(home, BBOX),
                 cache_path_in(&real, BBOX),
             ),
-            (
-                "blockers",
-                blockers_path_in(home),
-                blockers_path_in(&real),
-            ),
+            ("blockers", blockers_path_in(home), blockers_path_in(&real)),
             (
                 "buildings 缓存",
                 poly_cache_path_in(home, BBOX, "buildings"),

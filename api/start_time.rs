@@ -44,7 +44,11 @@ impl StartTime {
         if self.clamped {
             format!("{s}（原时刻超界，已提前）")
         } else {
-            format!("{s}（结束 {}，用时 {}s）", format_ms(self.stop_ms(dur_s), default_tz_offset_min()), dur_s)
+            format!(
+                "{s}（结束 {}，用时 {}s）",
+                format_ms(self.stop_ms(dur_s), default_tz_offset_min()),
+                dur_s
+            )
         }
     }
 }
@@ -58,9 +62,15 @@ pub fn latest_start_ms(now_ms: i64, dur_s: i64) -> i64 {
 pub fn clamp(start_ms: i64, now_ms: i64, dur_s: i64) -> StartTime {
     let latest = latest_start_ms(now_ms, dur_s);
     if start_ms > latest {
-        StartTime { ms: latest, clamped: true }
+        StartTime {
+            ms: latest,
+            clamped: true,
+        }
     } else {
-        StartTime { ms: start_ms, clamped: false }
+        StartTime {
+            ms: start_ms,
+            clamped: false,
+        }
     }
 }
 
@@ -165,7 +175,8 @@ pub fn specified(
     let local_now = now_ms + tz * 60_000;
     let today = local_now.div_euclid(86_400_000);
     let target_day = today - days_ago;
-    let local_target = target_day * 86_400_000 + (hour as i64) * 3_600_000 + (minute as i64) * 60_000;
+    let local_target =
+        target_day * 86_400_000 + (hour as i64) * 3_600_000 + (minute as i64) * 60_000;
     let start_ms = local_target - tz * 60_000;
     Ok(clamp(start_ms, now_ms, dur_s))
 }
@@ -180,7 +191,11 @@ pub fn ago(now_ms: i64, ago_min: i64, dur_s: i64) -> Result<StartTime, String> {
 
 /// 默认：30~300 分钟前随机（`r` ∈ [0,1)）。
 pub fn random_ago(now_ms: i64, dur_s: i64, r: f64) -> StartTime {
-    let r = if r.is_finite() { r.clamp(0.0, 1.0) } else { 0.0 };
+    let r = if r.is_finite() {
+        r.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let span_ms = ((DEFAULT_AGO_MAX - DEFAULT_AGO_MIN) * 60_000) as f64;
     let start = now_ms - DEFAULT_AGO_MIN * 60_000 - (r * span_ms) as i64;
     clamp(start, now_ms, dur_s)
@@ -189,7 +204,11 @@ pub fn random_ago(now_ms: i64, dur_s: i64, r: f64) -> StartTime {
 /// 指定日期内的随机时刻（7:00~20:00）。`r` ∈ [0,1)。
 pub fn random_in_day(now_ms: i64, days_ago: i64, dur_s: i64, r: f64) -> Result<StartTime, String> {
     let days_ago = check_days_ago(days_ago)?;
-    let r = if r.is_finite() { r.clamp(0.0, 1.0) } else { 0.0 };
+    let r = if r.is_finite() {
+        r.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let tz = default_tz_offset_min();
     let today = (now_ms + tz * 60_000).div_euclid(86_400_000);
     let day = today - days_ago;
@@ -333,7 +352,10 @@ mod tests {
         let st = random_in_day(now(), 2, 600, 0.5).unwrap();
         let hhmm = format_hhmm(st.ms, 480);
         let h: u32 = hhmm[..2].parse().unwrap();
-        assert!((RAND_HOUR_LO..=RAND_HOUR_HI).contains(&h), "落在 {hhmm}，不在 7-20 点");
+        assert!(
+            (RAND_HOUR_LO..=RAND_HOUR_HI).contains(&h),
+            "落在 {hhmm}，不在 7-20 点"
+        );
         assert!(format_ms(st.ms, 480).starts_with("2026-11-04"));
     }
 

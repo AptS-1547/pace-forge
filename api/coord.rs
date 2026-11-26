@@ -23,17 +23,35 @@ fn out_of_china(lat: f64, lng: f64) -> bool {
 
 fn transform_lat(x: f64, y: f64) -> f64 {
     let mut ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * x.abs().sqrt();
-    ret += (20.0 * (6.0 * x * std::f64::consts::PI).sin() + 20.0 * (2.0 * x * std::f64::consts::PI).sin()) * 2.0 / 3.0;
-    ret += (20.0 * (y * std::f64::consts::PI).sin() + 40.0 * (y / 3.0 * std::f64::consts::PI).sin()) * 2.0 / 3.0;
-    ret += (160.0 * (y / 12.0 * std::f64::consts::PI).sin() + 320.0 * (y * std::f64::consts::PI / 30.0).sin()) * 2.0 / 3.0;
+    ret += (20.0 * (6.0 * x * std::f64::consts::PI).sin()
+        + 20.0 * (2.0 * x * std::f64::consts::PI).sin())
+        * 2.0
+        / 3.0;
+    ret += (20.0 * (y * std::f64::consts::PI).sin()
+        + 40.0 * (y / 3.0 * std::f64::consts::PI).sin())
+        * 2.0
+        / 3.0;
+    ret += (160.0 * (y / 12.0 * std::f64::consts::PI).sin()
+        + 320.0 * (y * std::f64::consts::PI / 30.0).sin())
+        * 2.0
+        / 3.0;
     ret
 }
 
 fn transform_lng(x: f64, y: f64) -> f64 {
     let mut ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * x.abs().sqrt();
-    ret += (20.0 * (6.0 * x * std::f64::consts::PI).sin() + 20.0 * (2.0 * x * std::f64::consts::PI).sin()) * 2.0 / 3.0;
-    ret += (20.0 * (x * std::f64::consts::PI).sin() + 40.0 * (x / 3.0 * std::f64::consts::PI).sin()) * 2.0 / 3.0;
-    ret += (150.0 * (x / 12.0 * std::f64::consts::PI).sin() + 300.0 * (x / 30.0 * std::f64::consts::PI).sin()) * 2.0 / 3.0;
+    ret += (20.0 * (6.0 * x * std::f64::consts::PI).sin()
+        + 20.0 * (2.0 * x * std::f64::consts::PI).sin())
+        * 2.0
+        / 3.0;
+    ret += (20.0 * (x * std::f64::consts::PI).sin()
+        + 40.0 * (x / 3.0 * std::f64::consts::PI).sin())
+        * 2.0
+        / 3.0;
+    ret += (150.0 * (x / 12.0 * std::f64::consts::PI).sin()
+        + 300.0 * (x / 30.0 * std::f64::consts::PI).sin())
+        * 2.0
+        / 3.0;
     ret
 }
 
@@ -80,10 +98,7 @@ pub fn bd09_to_wgs84(bd_lat: f64, bd_lng: f64) -> (f64, f64) {
     let (g_lat, g_lng) = bd09_to_gcj02(bd_lat, bd_lng);
     // 逆变换用一次迭代逼近
     let (d_lat, d_lng) = wgs84_to_gcj02(g_lat, g_lng);
-    (
-        g_lat - (d_lat - g_lat),
-        g_lng - (d_lng - g_lng),
-    )
+    (g_lat - (d_lat - g_lat), g_lng - (d_lng - g_lng))
 }
 
 #[cfg(test)]
@@ -97,16 +112,26 @@ mod tests {
         let (g_lat, g_lng) = wgs84_to_gcj02(lat, lng);
         // GCJ 相对 WGS 在北京偏移约 500m 量级
         let d = ((g_lat - lat).powi(2) + (g_lng - lng).powi(2)).sqrt() * 111_000.0;
-        assert!((100.0..1200.0).contains(&d), "GCJ 偏移 {d:.0}m 不在预期量级");
+        assert!(
+            (100.0..1200.0).contains(&d),
+            "GCJ 偏移 {d:.0}m 不在预期量级"
+        );
 
         let (b_lat, b_lng) = gcj02_to_bd09(g_lat, g_lng);
         let d2 = ((b_lat - g_lat).powi(2) + (b_lng - g_lng).powi(2)).sqrt() * 111_000.0;
-        assert!((100.0..1200.0).contains(&d2), "BD 偏移 {d2:.0}m 不在预期量级");
+        assert!(
+            (100.0..1200.0).contains(&d2),
+            "BD 偏移 {d2:.0}m 不在预期量级"
+        );
     }
 
     #[test]
     fn bd09_roundtrip() {
-        for (lat, lng) in [(39.9087, 116.3975), (30.5728, 104.0668), (22.5431, 114.0579)] {
+        for (lat, lng) in [
+            (39.9087, 116.3975),
+            (30.5728, 104.0668),
+            (22.5431, 114.0579),
+        ] {
             let (b_lat, b_lng) = wgs84_to_bd09(lat, lng);
             let (r_lat, r_lng) = bd09_to_wgs84(b_lat, b_lng);
             let err = ((r_lat - lat).powi(2) + (r_lng - lng).powi(2)).sqrt() * 111_000.0;

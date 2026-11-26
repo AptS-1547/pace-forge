@@ -241,7 +241,10 @@ pub fn findings(m: &Metrics) -> Vec<Finding> {
         out.push(Finding {
             code: "AUDIT_OVERLAP",
             level: Level::Warn,
-            text: format!("另有 {} 对同向高重合未逐条列出，用 `tracks` 看全表。", total - 5),
+            text: format!(
+                "另有 {} 对同向高重合未逐条列出，用 `tracks` 看全表。",
+                total - 5
+            ),
         });
     }
     if let Some((i, j, ov)) = m.reversed {
@@ -284,9 +287,7 @@ pub fn parse_tracks_args(args: &[String]) -> Result<(Option<String>, Option<usiz
         match a.as_str() {
             "--top" => {
                 let v = it.next().ok_or("--top 缺少次数，例如 --top 20")?;
-                let n: usize = v
-                    .parse()
-                    .map_err(|_| format!("--top 不是整数：「{v}」"))?;
+                let n: usize = v.parse().map_err(|_| format!("--top 不是整数：「{v}」"))?;
                 if !(1..=5000).contains(&n) {
                     return Err(format!("--top 需在 1..5000 之间，收到 {n}"));
                 }
@@ -326,7 +327,11 @@ pub fn suggestions(m: &Metrics, found: &[Finding]) -> Vec<String> {
         out.push("下一条换方向或换一条线：反着跑、或者选另一侧的路，重合度自然掉下去。".into());
     }
     if has("AUDIT_DIST_FLAT") {
-        let base = if m.dist_mean > 0.0 { m.dist_mean } else { 2000.0 };
+        let base = if m.dist_mean > 0.0 {
+            m.dist_mean
+        } else {
+            2000.0
+        };
         out.push(format!(
             "里程按 {:.0}m ± 15% 走（比如 {:.0}m / {:.0}m 交替），别每条一模一样。",
             base,
@@ -391,7 +396,10 @@ mod tests {
         let m = metrics(&records);
         let f = findings(&m);
         let codes: Vec<&str> = f.iter().map(|x| x.code).collect();
-        assert!(codes.contains(&"AUDIT_STREAK"), "连续 5 天该命中: {codes:?}");
+        assert!(
+            codes.contains(&"AUDIT_STREAK"),
+            "连续 5 天该命中: {codes:?}"
+        );
         assert!(codes.contains(&"AUDIT_HOUR"), "起跑点全在 07 点: {codes:?}");
         assert!(codes.contains(&"AUDIT_DIST_FLAT"), "里程无差异: {codes:?}");
         assert!(codes.contains(&"AUDIT_OVERLAP"), "轨迹完全相同: {codes:?}");
@@ -419,10 +427,7 @@ mod tests {
     fn reversed_run_is_info_not_warn() {
         let a = line(0.0, 40);
         let b = line_rev(0.0, 40);
-        let records = vec![
-            rec(0, 7, 2000.0, 700, a),
-            rec(3, 17, 2600.0, 900, b),
-        ];
+        let records = vec![rec(0, 7, 2000.0, 700, a), rec(3, 17, 2600.0, 900, b)];
         let m = metrics(&records);
         let f = findings(&m);
         assert!(f.iter().any(|x| x.code == "AUDIT_REVERSE"), "{f:?}");
@@ -494,7 +499,10 @@ mod tests {
         let m = metrics(&records);
         let f = findings(&m);
         assert!(f.iter().any(|x| x.code == "AUDIT_REVERSE"), "{f:?}");
-        assert!(!f.iter().any(|x| x.code == "AUDIT_OVERLAP"), "反向不算复制: {f:?}");
+        assert!(
+            !f.iter().any(|x| x.code == "AUDIT_OVERLAP"),
+            "反向不算复制: {f:?}"
+        );
     }
 
     #[test]
@@ -506,7 +514,10 @@ mod tests {
         let s = suggestions(&m, &findings(&m));
         assert!(s.iter().any(|x| x.contains("隔一天")), "{s:?}");
         // 不能把 format! 写漏成字面量（#14 抓到的）
-        assert!(!s.iter().any(|x| x.contains("{}")), "冒出了未填充的占位符: {s:?}");
+        assert!(
+            !s.iter().any(|x| x.contains("{}")),
+            "冒出了未填充的占位符: {s:?}"
+        );
         assert!(s.iter().any(|x| x.contains("换方向")), "{s:?}");
         assert!(s.iter().any(|x| x.contains("里程按")), "{s:?}");
         // 出口那条无论配没配代理都要给（这是三个风控维度里唯一能当场查的）
@@ -542,12 +553,30 @@ mod tests {
     #[test]
     fn tracks_args_reject_bad_values() {
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert!(parse_tracks_args(&args(&["rec.json", "--top"])).is_err(), "缺值");
-        assert!(parse_tracks_args(&args(&["rec.json", "--top", "abc"])).is_err(), "非整数");
-        assert!(parse_tracks_args(&args(&["rec.json", "--top", "0"])).is_err(), "下界");
-        assert!(parse_tracks_args(&args(&["rec.json", "--top", "99999"])).is_err(), "上界");
-        assert!(parse_tracks_args(&args(&["--bogus", "rec.json"])).is_err(), "未知参数");
-        assert!(parse_tracks_args(&args(&["a.json", "b.json"])).is_err(), "多余文件");
+        assert!(
+            parse_tracks_args(&args(&["rec.json", "--top"])).is_err(),
+            "缺值"
+        );
+        assert!(
+            parse_tracks_args(&args(&["rec.json", "--top", "abc"])).is_err(),
+            "非整数"
+        );
+        assert!(
+            parse_tracks_args(&args(&["rec.json", "--top", "0"])).is_err(),
+            "下界"
+        );
+        assert!(
+            parse_tracks_args(&args(&["rec.json", "--top", "99999"])).is_err(),
+            "上界"
+        );
+        assert!(
+            parse_tracks_args(&args(&["--bogus", "rec.json"])).is_err(),
+            "未知参数"
+        );
+        assert!(
+            parse_tracks_args(&args(&["a.json", "b.json"])).is_err(),
+            "多余文件"
+        );
     }
 
     #[test]

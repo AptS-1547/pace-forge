@@ -16,7 +16,8 @@ fn probe_tile_raw(lat: f64, lng: f64) {
     let n = (1u32 << zoom) as f64;
     let x = ((lng + 180.0) / 360.0 * n).floor() as i32;
     let r = lat.to_radians();
-    let y = ((1.0 - (r.tan() + 1.0 / r.cos()).ln() / std::f64::consts::PI) / 2.0 * n).floor() as i32;
+    let y =
+        ((1.0 - (r.tan() + 1.0 / r.cos()).ln() / std::f64::consts::PI) / 2.0 * n).floor() as i32;
     println!("[裸测] 中心 tile z={zoom} x={x} y={y}");
     let hosts = [
         "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8",
@@ -44,7 +45,11 @@ fn probe_tile_raw(lat: f64, lng: f64) {
                     image::load_from_memory(&buf).is_ok()
                 );
             }
-            Err(e) => println!("  {:<40} {:.2}s FAIL {e}", &host[8..40], t.elapsed().as_secs_f64()),
+            Err(e) => println!(
+                "  {:<40} {:.2}s FAIL {e}",
+                &host[8..40],
+                t.elapsed().as_secs_f64()
+            ),
         }
     }
 }

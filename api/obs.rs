@@ -38,7 +38,8 @@ pub fn sign_url(client: &Client, method: &str, key: &str) -> Result<String, Stri
     let signed = if let Some(s) = data.get("signedUrl").and_then(|x| x.as_str()) {
         s.to_string()
     } else if let Some(s) = data.as_str() {
-        let parsed: Value = serde_json::from_str(s).map_err(|e| format!("签名响应解析失败: {e}"))?;
+        let parsed: Value =
+            serde_json::from_str(s).map_err(|e| format!("签名响应解析失败: {e}"))?;
         parsed
             .get("signedUrl")
             .and_then(|x| x.as_str())
@@ -88,11 +89,7 @@ pub fn put_object(signed_url: &str, payload: &[u8]) -> Result<(), String> {
 /// - `runData/{uid}/{sportType}/{startTime}_{uuid}.txt`（兜底）
 ///
 /// 两个都传一遍最稳。
-pub fn upload_keys(
-    client: &Client,
-    keys: &[String],
-    payload: &[u8],
-) -> (usize, Vec<String>) {
+pub fn upload_keys(client: &Client, keys: &[String], payload: &[u8]) -> (usize, Vec<String>) {
     let mut ok = 0;
     let mut errs = Vec::new();
     for key in keys {
@@ -137,8 +134,7 @@ pub fn fetch_object(client: &Client, key: &str) -> Result<Value, String> {
                 let text = resp
                     .into_string()
                     .map_err(|e| format!("OBS 读取失败: {e}"))?;
-                return serde_json::from_str(&text)
-                    .map_err(|e| format!("OBS 对象解析失败: {e}"));
+                return serde_json::from_str(&text).map_err(|e| format!("OBS 对象解析失败: {e}"));
             }
             Err(e @ ureq::Error::Status(..)) => return Err(format!("OBS GET 失败: {e}")),
             Err(e) => last = format!("OBS GET 失败: {e}"),

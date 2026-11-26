@@ -55,7 +55,11 @@ pub fn gait(v: f64, fatigue: f64) -> Gait {
     if v >= GAIT_REGRESSION_FLOOR_MPS {
         let target_cad = (34.4 + 44.5 * v) * (1.0 - 0.05 * fatigue);
         let mut cadence = target_cad.clamp(100.0, 210.0);
-        let mut stride = if cadence > 0.0 { v * 60.0 / cadence } else { 0.0 };
+        let mut stride = if cadence > 0.0 {
+            v * 60.0 / cadence
+        } else {
+            0.0
+        };
 
         // 步幅越界时反解步频，保持等式成立
         if stride > 1.7 {
@@ -82,7 +86,11 @@ pub fn gait(v: f64, fatigue: f64) -> Gait {
         if cadence < 60.0 {
             cadence = 60.0;
         }
-        let stride = if cadence > 0.0 { v * 60.0 / cadence } else { 0.0 };
+        let stride = if cadence > 0.0 {
+            v * 60.0 / cadence
+        } else {
+            0.0
+        };
         Gait { cadence, stride }
     }
 }
@@ -152,7 +160,12 @@ mod tests {
     /// 步频必须匹配真实记录，而不是旧的 `150 + 12v`。
     #[test]
     fn cadence_matches_real_records() {
-        for (pace_s, want) in [(331.0, 170.0), (400.0, 144.0), (422.0, 139.0), (499.0, 125.0)] {
+        for (pace_s, want) in [
+            (331.0, 170.0),
+            (400.0, 144.0),
+            (422.0, 139.0),
+            (499.0, 125.0),
+        ] {
             let v = 1000.0 / pace_s;
             let g = gait(v, 0.0);
             assert!(
@@ -258,8 +271,8 @@ mod tests {
         let s = ou_cadence_series(&targets, &dts, 7, 0.12, 0.8, 100.0, 220.0);
         let diffs: Vec<f64> = s.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
         let mean_diff = diffs.iter().sum::<f64>() / diffs.len() as f64;
-        let spread = s.iter().cloned().fold(f64::MIN, f64::max)
-            - s.iter().cloned().fold(f64::MAX, f64::min);
+        let spread =
+            s.iter().cloned().fold(f64::MIN, f64::max) - s.iter().cloned().fold(f64::MAX, f64::min);
         assert!(
             mean_diff < spread * 0.5,
             "相邻差值 {mean_diff:.3} 相对整体波动 {spread:.3} 过大，不像均值回归"

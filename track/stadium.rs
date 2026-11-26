@@ -18,7 +18,7 @@
 //! 真实跑者还会**换道**：外道内道距不同，第 n 道半径 = 36.5 + 1.22×(n−1)。
 //! 这里支持指定道次，并按道次换算圈长。
 
-use super::geo::{M_PER_DEG_LAT, m_per_deg_lng};
+use super::geo::{m_per_deg_lng, M_PER_DEG_LAT};
 
 /// 标准 400m 跑道的几何常数（米）。
 pub mod spec {
@@ -71,7 +71,12 @@ pub struct StadiumSpec {
 
 impl StadiumSpec {
     pub fn new(lat: f64, lng: f64) -> Self {
-        Self { center_lat: lat, center_lng: lng, heading_rad: 0.0, lane: 1 }
+        Self {
+            center_lat: lat,
+            center_lng: lng,
+            heading_rad: 0.0,
+            lane: 1,
+        }
     }
 
     pub fn with_lane(mut self, lane: u8) -> Self {
@@ -172,7 +177,12 @@ pub fn random_oval(distance_m: f64, seed: u64) -> OvalSpec {
     let heading = (90.0_f64 + rng.gen_range(-8.0_f64..8.0)).to_radians();
     let lap = 2.0 * straight + 2.0 * std::f64::consts::PI * radius;
     let laps = (distance_m / lap).max(1.0);
-    OvalSpec { straight, radius, heading, laps }
+    OvalSpec {
+        straight,
+        radius,
+        heading,
+        laps,
+    }
 }
 
 /// 校园操场多圈轨迹：可变尺寸 + 入场尾巴 + 每圈 GPS 抖动。
@@ -186,7 +196,12 @@ pub fn campus_oval_track(
     seed: u64,
 ) -> Vec<(f64, f64)> {
     use rand::{Rng, SeedableRng};
-    let OvalSpec { straight, radius, heading, laps } = *spec;
+    let OvalSpec {
+        straight,
+        radius,
+        heading,
+        laps,
+    } = *spec;
     let lap = 2.0 * straight + 2.0 * std::f64::consts::PI * radius;
     let total = lap * laps;
     let n = ((total / sample_step_m).ceil() as usize).max(16) + 1;
@@ -244,11 +259,7 @@ pub fn campus_oval_track(
 /// 生成绕 `laps` 圈的轨迹（经纬度）。
 ///
 /// `sample_step_m` 是采样间距（米），保证直道和弯道都有足够采样点。
-pub fn stadium_track(
-    spec_in: &StadiumSpec,
-    laps: f64,
-    sample_step_m: f64,
-) -> Vec<(f64, f64)> {
+pub fn stadium_track(spec_in: &StadiumSpec, laps: f64, sample_step_m: f64) -> Vec<(f64, f64)> {
     let r = lane_radius(spec_in.lane);
     let per_lap = 2.0 * spec::STRAIGHT + 2.0 * std::f64::consts::PI * r;
     let total = per_lap * laps;
@@ -301,10 +312,7 @@ mod tests {
     fn standard_lap_is_400m() {
         // 内突沿一圈：2×84.39 + 2×π×36.5 = 398.12（含内突沿外 0.3 后 400.00）
         let l1 = lap_length(1);
-        assert!(
-            (l1 - 400.0).abs() < 1.5,
-            "第 1 道一圈 {l1:.2}m 应接近 400m"
-        );
+        assert!((l1 - 400.0).abs() < 1.5, "第 1 道一圈 {l1:.2}m 应接近 400m");
     }
 
     #[test]
@@ -312,7 +320,12 @@ mod tests {
         for lane in 1u8..8 {
             let a = lap_length(lane);
             let b = lap_length(lane + 1);
-            assert!(b > a, "第 {} 道 {a:.2} 应短于第 {} 道 {b:.2}", lane, lane + 1);
+            assert!(
+                b > a,
+                "第 {} 道 {a:.2} 应短于第 {} 道 {b:.2}",
+                lane,
+                lane + 1
+            );
             assert!((b - a - 2.0 * std::f64::consts::PI * spec::LANE_WIDTH).abs() < 1.0);
         }
     }
@@ -367,9 +380,7 @@ mod tests {
     #[test]
     fn rejects_non_stadium() {
         // 一条直线不该被认成操场
-        let pts: Vec<(f64, f64)> = (0..100)
-            .map(|i| (30.5, 104.0 + i as f64 * 2e-4))
-            .collect();
+        let pts: Vec<(f64, f64)> = (0..100).map(|i| (30.5, 104.0 + i as f64 * 2e-4)).collect();
         assert!(!looks_like_stadium(&pts, 20.0));
     }
 }

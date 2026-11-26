@@ -176,10 +176,7 @@ pub(crate) fn write_file_private(path: &Path, data: &[u8]) -> Result<(), String>
 
 /// 目标文件同目录下的临时文件名（带 pid，避免并发写互相覆盖）。
 fn temp_sibling(path: &Path) -> std::path::PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("pf");
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("pf");
     let mut p = path.to_path_buf();
     p.set_file_name(format!("{name}.tmp{}", std::process::id()));
     p

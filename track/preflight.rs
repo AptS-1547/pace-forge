@@ -36,13 +36,25 @@ pub struct Issue {
 
 impl Issue {
     fn fatal(code: &'static str, message: impl Into<String>) -> Self {
-        Self { level: Level::Fatal, code, message: message.into() }
+        Self {
+            level: Level::Fatal,
+            code,
+            message: message.into(),
+        }
     }
     fn warn(code: &'static str, message: impl Into<String>) -> Self {
-        Self { level: Level::Warn, code, message: message.into() }
+        Self {
+            level: Level::Warn,
+            code,
+            message: message.into(),
+        }
     }
     fn info(code: &'static str, message: impl Into<String>) -> Self {
-        Self { level: Level::Info, code, message: message.into() }
+        Self {
+            level: Level::Info,
+            code,
+            message: message.into(),
+        }
     }
 }
 
@@ -59,11 +71,17 @@ impl Report {
     }
 
     pub fn fatal_count(&self) -> usize {
-        self.issues.iter().filter(|i| i.level == Level::Fatal).count()
+        self.issues
+            .iter()
+            .filter(|i| i.level == Level::Fatal)
+            .count()
     }
 
     pub fn warn_count(&self) -> usize {
-        self.issues.iter().filter(|i| i.level == Level::Warn).count()
+        self.issues
+            .iter()
+            .filter(|i| i.level == Level::Warn)
+            .count()
     }
 
     /// 一句话摘要。
@@ -159,7 +177,10 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
     } else if c.stop_time_ms <= c.start_time_ms {
         issues.push(Issue::fatal(
             "TIME_ORDER",
-            format!("stopTime({}) 不晚于 startTime({})", c.stop_time_ms, c.start_time_ms),
+            format!(
+                "stopTime({}) 不晚于 startTime({})",
+                c.stop_time_ms, c.start_time_ms
+            ),
         ));
     } else {
         let span = (c.stop_time_ms - c.start_time_ms) / 1000;
@@ -324,12 +345,20 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
     }
 
     // 分桶自相关过低的提示（白噪声特征）
-    let counts: Vec<f64> = c.sim.step_buckets.iter().map(|b| b.steps_num as f64).collect();
+    let counts: Vec<f64> = c
+        .sim
+        .step_buckets
+        .iter()
+        .map(|b| b.steps_num as f64)
+        .collect();
     if counts.len() >= 8 {
         let mean = counts.iter().sum::<f64>() / counts.len() as f64;
         let den: f64 = counts.iter().map(|x| (x - mean).powi(2)).sum();
         if den > 1e-9 {
-            let num: f64 = counts.windows(2).map(|w| (w[0] - mean) * (w[1] - mean)).sum();
+            let num: f64 = counts
+                .windows(2)
+                .map(|w| (w[0] - mean) * (w[1] - mean))
+                .sum();
             let ac = num / den;
             if ac < 0.1 {
                 issues.push(Issue::info(
@@ -374,7 +403,9 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
                 if min < 3.0 {
                     issues.push(Issue::fatal(
                         "SAMPLE_RATE_SHORT",
-                        format!("出现 {min:.1}s 的上报间隔，真机最短非零间隔是 3s（→ 采样轴插点过密）"),
+                        format!(
+                            "出现 {min:.1}s 的上报间隔，真机最短非零间隔是 3s（→ 采样轴插点过密）"
+                        ),
                     ));
                 }
             }
@@ -536,7 +567,11 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
     }
 
     // 步幅
-    let stride = if implied > 0.0 { avg_v * 60.0 / implied } else { 0.0 };
+    let stride = if implied > 0.0 {
+        avg_v * 60.0 / implied
+    } else {
+        0.0
+    };
     if !(0.4..=1.8).contains(&stride) {
         issues.push(Issue::warn(
             "STRIDE_OUT",
@@ -560,7 +595,6 @@ pub fn inspect_at(c: &Check, now_ms: Option<i64>) -> Report {
             ),
         ));
     }
-
 
     // ── 起步窗口的外推范围 ──
     //
@@ -595,8 +629,20 @@ mod tests {
             center_lat: 30.5,
             center_lng: 104.0,
             checkpoints: vec![
-                Checkpoint { lat: 30.5008, lng: 104.0008, glat: 30.5008, glon: 104.0008, name: "A".into() },
-                Checkpoint { lat: 30.5008, lng: 104.0024, glat: 30.5008, glon: 104.0024, name: "B".into() },
+                Checkpoint {
+                    lat: 30.5008,
+                    lng: 104.0008,
+                    glat: 30.5008,
+                    glon: 104.0008,
+                    name: "A".into(),
+                },
+                Checkpoint {
+                    lat: 30.5008,
+                    lng: 104.0024,
+                    glat: 30.5008,
+                    glon: 104.0024,
+                    name: "B".into(),
+                },
             ],
             total_distance_m: 2000.0,
             total_sec: 720,
@@ -633,7 +679,10 @@ mod tests {
         let (base, sim, sp) = sample();
         let start = base[0].time_ms;
         // 步频 70：在服务端 60~250 内，在旧的 (100,230) 外
-        let sim70 = SimResult { avg_cadence: 70.0, ..sim.clone() };
+        let sim70 = SimResult {
+            avg_cadence: 70.0,
+            ..sim.clone()
+        };
         let c = Check {
             points: &base,
             sim: &sim70,
@@ -649,7 +698,10 @@ mod tests {
             expected_interval_sec: None,
         };
         let txt = inspect_at(&c, None).lines().join("\n");
-        assert!(!txt.contains("CADENCE"), "步频 70 在服务端口径内，不该被拦：{txt}");
+        assert!(
+            !txt.contains("CADENCE"),
+            "步频 70 在服务端口径内，不该被拦：{txt}"
+        );
     }
 
     /// 逐点 / 桶级配速越界要各出一条提示（服务端可能按点或桶判，不按平均）。
@@ -675,12 +727,22 @@ mod tests {
             expected_interval_sec: None,
         };
         // 正常：2km/12min ⇒ 6'00"/km，放在 [4'00", 9'00"] 内不该报
-        let ok = inspect_at(&mk(Some((4.0, 9.0)), Some((60, 250))), None).lines().join("\n");
-        assert!(!ok.contains("PACE_OUT_BODY"), "正常区间不该报逐点越界：{ok}");
-        assert!(!ok.contains("BUCKET_PACE_OUT"), "正常区间不该报桶级越界：{ok}");
+        let ok = inspect_at(&mk(Some((4.0, 9.0)), Some((60, 250))), None)
+            .lines()
+            .join("\n");
+        assert!(
+            !ok.contains("PACE_OUT_BODY"),
+            "正常区间不该报逐点越界：{ok}"
+        );
+        assert!(
+            !ok.contains("BUCKET_PACE_OUT"),
+            "正常区间不该报桶级越界：{ok}"
+        );
 
         // 窄带：整个主体段都在区间外，两种口径都要报
-        let bad = inspect_at(&mk(Some((2.0, 3.0)), Some((60, 250))), None).lines().join("\n");
+        let bad = inspect_at(&mk(Some((2.0, 3.0)), Some((60, 250))), None)
+            .lines()
+            .join("\n");
         assert!(bad.contains("PACE_OUT_BODY"), "逐点越界没报：{bad}");
         assert!(bad.contains("BUCKET_PACE_OUT"), "桶级越界没报：{bad}");
     }
@@ -775,10 +837,7 @@ mod tests {
         for p in pts.iter_mut().skip(41) {
             p.time_ms -= 4000;
         }
-        let c = Check {
-            points: &pts,
-            ..c
-        };
+        let c = Check { points: &pts, ..c };
         let r = inspect(&c);
         assert!(
             r.issues
@@ -902,7 +961,10 @@ mod tests {
         let mut c = check(&pts, &sim, &sp, &[]);
         c.total_time_sec = 555;
         assert!(
-            !inspect(&c).issues.iter().any(|i| i.code == "STARTUP_EXTRAPOLATED"),
+            !inspect(&c)
+                .issues
+                .iter()
+                .any(|i| i.code == "STARTUP_EXTRAPOLATED"),
             "555 秒正好是样本本身的时长，不该提示外推"
         );
         c.total_time_sec = 1800;
