@@ -103,7 +103,7 @@ fn get_pow_nonce(
         let mut hasher = Sha256::new();
         hasher.update(pow_msg_base.as_bytes());
         hasher.update(nonce.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = bytes_to_hex(&hasher.finalize());
         attempts += 1;
         if hash.starts_with("00") {
             log(&format!("[gt4] PoW 找到 nonce（尝试 {attempts} 次）"));
@@ -136,7 +136,7 @@ fn get_pow_msg(
 fn get_pow_sign(pow_msg: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(pow_msg.as_bytes());
-    format!("{:x}", hasher.finalize())
+    bytes_to_hex(&hasher.finalize())
 }
 
 /// AES-128-CBC(key=str16, IV 为 ASCII "0"x16, PKCS7) → hex。
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(sign.len(), 64);
         let mut h = Sha256::new();
         h.update(msg.as_bytes());
-        assert_eq!(format!("{:x}", h.finalize()), sign);
+        assert_eq!(bytes_to_hex(&h.finalize()), sign);
     }
 
     #[test]
