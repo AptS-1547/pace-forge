@@ -673,26 +673,71 @@ fn point_type_scheme(has_fixed: bool) -> PointTypeScheme {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// 逐点构造报文时的**整场不变量**（#38 收参）：同一条链上的每个采样点共享，
+/// 放一个结构体里，而不是在调用链上散成十几个位置参数。
+#[derive(Debug, Clone, Copy)]
+pub struct PointRunCtx {
+    pub start_ms: i64,
+    pub n: usize,
+    /// 起步窗口点数（按时间戳数，与 `startup_point_count` 同口径）。
+    pub startup: usize,
+    pub seed: u64,
+    pub scheme: PointTypeScheme,
+    pub alt_range: Option<(f64, f64)>,
+    /// 海拔噪声的点距缩放（1.0 = 真机标定点距）。
+    pub alt_scale: f64,
+}
+
+/// 逐点推进的**游标状态**（#38 收参）：原来以 4 个 `&mut` 隐式穿过调用链，
+/// 现在收成一个对象，「三条链共享同一 startup 窗口」从注释约定变成类型保证。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PointCursor {
+    pub prev: (f64, f64),
+    /// 累计 `(位移 m, 时长 s, 步数)`。
+    pub cum: (f64, i64, i64),
+    pub prev_time: i64,
+    pub prev_v: f64,
+}
+
+impl PointCursor {
+    /// 以首点初始化游标（首点没有「前一点」，累计从 0 起）。
+    pub fn new(first: &TrackPoint) -> Self {
+        PointCursor {
+            prev: (first.lat, first.lon),
+            ..Default::default()
+        }
+    }
+}
+
 pub fn point_json_full(
     p: &TrackPoint,
     idx: usize,
-    n: usize,
-    startup: usize,
-    start_ms: i64,
-    _start_pt: (f64, f64),
-    prev: &mut (f64, f64),
-    cum: &mut (f64, i64, i64),
-    prev_time: &mut i64,
-    prev_v: &mut f64,
-    _total_steps: i64,
-    seed: u64,
-    scheme: PointTypeScheme,
+    ctx: &PointRunCtx,
+    cur: &mut PointCursor,
     checkpoint_idxs: &[usize],
-    alt_range: Option<(f64, f64)>,
-    // 海拔噪声的点距缩放（1.0 = 真机标定点距，见函数内说明）
-    alt_scale: f64,
 ) -> Value {
+    // #38 收参：整场不变量来自 `ctx`，游标状态来自 `cur`。
+    let PointRunCtx {
+        start_ms,
+        n,
+        startup,
+        seed,
+        scheme,
+        alt_range,
+        alt_scale,
+    } = *ctx;
+    let PointCursor {
+        prev,
+        cum,
+        prev_time,
+        prev_v,
+    } = cur;
+    let (prev, cum, prev_time, prev_v): (
+        &mut (f64, f64),
+        &mut (f64, i64, i64),
+        &mut i64,
+        &mut f64,
+    ) = (prev, cum, prev_time, prev_v);
     // BD-09 → GCJ-02（原点是 BD-09，服务端要 gcj02）
     let (glat, glng) = crate::api::coord::bd09_to_gcj02(p.lat, p.lon);
 
@@ -1704,14 +1749,14 @@ pub fn build_points(
     if track.is_empty() {
         return Err("轨迹为空，无法组装点位".into());
     }
-    // 逐点生成，累计量必须顺序推进
-    let mut prev = (track[0].lat, track[0].lon);
-    let start_pt = prev;
-    let mut cum = (0.0f64, 0i64, 0i64);
+    // 逐点生成，累计量必须顺序推进。游标状态收成一个 `PointCursor`（#38）：
+    // 首点坐标进 prev，prev_time 取首点时间戳，bdS 的上一拍速度从 0 起。
+    let mut cursor = PointCursor {
+        prev: (track[0].lat, track[0].lon),
+        prev_time: track[0].time_ms,
+        ..Default::default()
+    };
     let seed = start_ms as u64 ^ 0x9E3779B97F4A7C15;
-    let mut prev_time = track[0].time_ms;
-    // `bdS` 要「上一拍的点间速度」，逐点状态跟着 prev/precum 一起往前推。
-    let mut prev_v = 0.0f64;
     // 起步窗口的点数：按时间戳数一遍（含末点时间戳），点字段、`queueNum`、
     // `segment_json` 首段、几何压缩共用这一个窗口，不再各自按比例估算。
     let startup = {
@@ -1810,30 +1855,23 @@ pub fn build_points(
     } else {
         1.0
     };
+    // 整场不变量（#38）：同一条链上每个采样点共享，只构造一次。
+    let run_ctx = PointRunCtx {
+        start_ms,
+        n: track.len(),
+        startup,
+        seed,
+        scheme,
+        alt_range,
+        alt_scale,
+    };
     let mut items: Vec<Value> = track
         .iter()
         .enumerate()
         .map(|(i, p)| {
             // `total_steps` 是 `point_json_full` 的历史入参，函数体内已不使用
             // （点位里没有 steps 字段），这里传 0 以免让调用方以为它影响点位。
-            point_json_full(
-                p,
-                i,
-                track.len(),
-                startup,
-                start_ms,
-                start_pt,
-                &mut prev,
-                &mut cum,
-                &mut prev_time,
-                &mut prev_v,
-                0,
-                seed,
-                scheme,
-                &cp_idxs,
-                alt_range,
-                alt_scale,
-            )
+            point_json_full(p, i, &run_ctx, &mut cursor, &cp_idxs)
         })
         .collect();
 
