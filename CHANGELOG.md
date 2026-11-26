@@ -23,14 +23,17 @@
   `crates/pace-forge-config`：21 个开关（含旧清单漏掉的
   `PACE_EXTRA_CA`/`PACE_IGNORE_DAILY_LIMIT`/`PACE_PREFER_STADIUM`/
   `PACE_CENTER_LAT`/`PACE_CENTER_LNG`/`PACE_FIXED_POINT`/
-  `PACE_FORCE_NORMAL_POINT`）一张注册表同时服务 TOML 解析、env 解析和
-  `pace-forge config` 打表，表还会显示每个值来自哪一层。env 名全部保留，
-  老用法不破。**系统性语义变更：非法值从「静默回落默认」改为「启动报错」**
-  ——包括配置文件未知键（防拼写错误）、词汇外的枚举值、缺一半的
-  `PACE_CENTER_LAT/LNG`（旧版静默忽略）。布尔开关词汇统一为
+  `PACE_FORCE_NORMAL_POINT`）一张注册表同时服务 TOML 解析和 env 解析。
+  env 名全部保留，老用法不破。**系统性语义变更：非法值从「静默回落默认」
+  改为「启动报错」**——包括配置文件未知键（防拼写错误）、词汇外的枚举值、
+  缺一半的 `PACE_CENTER_LAT/LNG`（旧版静默忽略）。布尔开关词汇统一为
   0/1、true/false、yes/no（大小写不敏感；旧版各键口径不一，文档里写过的
-  值行为不变）。`pace-forge config` 仍会打表，`PACE_DUMP_POLICY` 为空串不再
-  被当成目录名。`config.example.toml` 进仓库。
+  值行为不变）。`PACE_DUMP_POLICY` 为空串不再被当成目录名。
+  `config.example.toml` 进仓库，键参考以它为准。
+- **[行为变化]** 移除 `pace-forge config` 子命令：那张 21 行的开关表与
+  `config.example.toml` 逐字重复，没人愿意读。键参考归 docs（example.toml +
+  README 配置节）；「哪些开关非默认、来自哪一层」的运行时信息保留在 Web
+  启动日志的「非默认开关」一行。
 - **[行为变化]** 源码整体搬进 `src/`（`api/` `crypto/` `track/` `web/` 及入口文件），`data/`、`tests/`、`docs/` 位置不变；对外行为不变（#38）
 - **[行为变化]** 升到 edition 2024 + rand 0.9，并用 `rust-toolchain.toml` 把工具链钉在 1.99.1。同 seed 下 planner 与配速剖面的输出 hash 与升级前逐字节一致（#38）
 - **[行为变化]** `semester` 在 `goalMethod=2` 的学校（服务端次数恒 0）多打一行本地反算：

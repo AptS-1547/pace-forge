@@ -225,7 +225,6 @@ fn main() {
             let lane = parse_int(&args, 2, 1, "道次") as u8;
             stadium_probe(laps, lane);
         }
-        "config" => pace_forge::config::print_table(),
         "devices" => print!("{}", pace_forge::api::device_table::report()),
         "crosscheck" => do_crosscheck(args.get(1).map(|s| s.as_str())),
         "audit" => do_audit(false, args.get(1).map(|s| s.as_str())),
@@ -266,9 +265,6 @@ fn main() {
             println!("  pace-forge ago <分钟> [km] [min]            补跑：N 分钟前");
             println!("  pace-forge rand [km] [min] [--days N]       补跑：当天 7-20 点随机时刻");
             println!("  pace-forge stadium [圈] [道次] 操场轨迹参数");
-            println!(
-                "  pace-forge config              列出全部开关与当前取值（config.toml / 环境变量）"
-            );
             println!("  pace-forge devices             机型/SoC 表：内容、当前 cpuModel、怎么补表");
             println!(
                 "  pace-forge crosscheck <json>   跨记录自检：连续天数、起跑时刻、离散度、轨迹重合"
@@ -290,7 +286,7 @@ fn main() {
             println!();
             println!("规则：开始 + 用时 + 5s 余量 ≤ 现在，最多往前补 3 天。");
             println!(
-                "配置：--config <路径> 指定配置文件，默认搜索 ./config.toml 和 ~/.pace-forge/config.toml；\n环境变量 PACE_* 覆盖配置文件，详见 config.example.toml 与 `pace-forge config`。"
+                "配置：--config <路径> 指定配置文件，默认搜索 ./config.toml 和 ~/.pace-forge/config.toml；\n环境变量 PACE_* 覆盖配置文件，全部键见 config.example.toml。"
             );
             println!(
                 "run/dry/at/ago/rand 需要已保存的登录会话（$HOME/.pace-forge/session.json）。"

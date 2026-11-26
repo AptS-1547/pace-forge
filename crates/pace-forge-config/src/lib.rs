@@ -12,8 +12,9 @@
 //! 仍归各自模块的 runtime 槽位管。
 //!
 //! 所有开关的键名、环境变量名、取值词汇表、默认值、影响说明都集中在
-//! [`TABLE`] 一张注册表里：TOML 解析、env 解析、`pace-forge config` 打表
-//! 用的是同一份定义，不存在「文档表」和「实际读取」两套东西对不上的问题。
+//! [`TABLE`] 一张注册表里：TOML 解析和 env 解析用同一份定义，不存在
+//! 「文档表」和「实际读取」两套东西对不上的问题。键的参考文档在仓库根的
+//! `config.example.toml`（带注释），与这张表一一对应。
 //!
 //! 与旧实现（`src/config.rs` 手写 ENTRIES 清单 + 各处散读 `env::var`）的
 //! 兼容关系：
@@ -512,7 +513,8 @@ fn parse_run_area(raw: &str) -> Result<Value, String> {
 /// 单键解析器：`原文 → 类型化值`，TOML 和 env 两个来源共用同一份。
 type RawParser = fn(&str) -> Result<Value, String>;
 
-/// 一个开关的完整定义：键名、env 名、解析器、默认显示、影响说明。
+/// 一个开关的完整定义：键名、env 名、解析器。键的参考文档（默认值、
+/// 影响说明、TOML 写法）只在仓库根的 config.example.toml 一处。
 struct EntryDef {
     /// TOML 键路径，如 `run.bulge_max`。
     key: &'static str,
@@ -522,185 +524,66 @@ struct EntryDef {
     env_legacy: Option<&'static str>,
     parse: RawParser,
     parse_legacy: Option<RawParser>,
-    /// 打表时显示的默认值（描述性文本）。
-    default_display: &'static str,
-    effect: &'static str,
 }
 
 macro_rules! entry {
-    ($key:literal, $env:literal, $parse:ident, $default:literal, $effect:literal) => {
+    ($key:literal, $env:literal, $parse:ident) => {
         EntryDef {
             key: $key,
             env: $env,
             env_legacy: None,
             parse: $parse,
             parse_legacy: None,
-            default_display: $default,
-            effect: $effect,
         }
     };
 }
 
 /// 清单。新增开关 = 这里加一条 + [`Config`] 加字段 + [`Config::key_values`]
 /// 加一行显示——三处少一处，`registry_matches_config_keys` 测试直接红。
-/// 口令类的打码在 [`Config::key_values`] 的对应分支里做（原值不进显示）。
+/// 键的参考文档（默认值、影响说明、TOML 写法）只在仓库根的
+/// `config.example.toml` 一处，代码里不再重复一份。口令类的打码在
+/// [`Config::key_values`] 的对应分支里做（原值不进显示）。
 const TABLE: &[EntryDef] = &[
-    entry!(
-        "server.token",
-        "PACE_FORGE_TOKEN",
-        parse_str_raw,
-        "未设置",
-        "控制台口令。不设只接受本机访问；设了才允许同网段访问，并把 X-Pace-Token 当门槛"
-    ),
-    entry!(
-        "server.data_dir",
-        "PACE_FORGE_DATA_DIR",
-        parse_str_raw,
-        "未设置（$HOME/.pace-forge）",
-        "账号库、session、缓存的落盘根目录；设了就不再追加 .pace-forge。设错就会「账号全没了」。不影响 config.toml 的搜索（~ 始终用系统主目录）"
-    ),
-    entry!(
-        "network.egress_proxy",
-        "PACE_EGRESS_PROXY",
-        parse_str_trim,
-        "未设置（直连）",
-        "http://host:port。提交链路走这个出口；优先级：网页保存的 > env > config.toml。格式合法性在启用时校验，非法只报一次并按直连走"
-    ),
-    entry!(
-        "network.extra_ca",
-        "PACE_EXTRA_CA",
-        parse_str_raw,
-        "未设置",
-        "PEM 文件路径。把里面的证书加到公共 CA 根之上（沙箱/企业网关自签 CA）；文件读不到时按默认 CA 走并报一次"
-    ),
+    entry!("server.token", "PACE_FORGE_TOKEN", parse_str_raw),
+    entry!("server.data_dir", "PACE_FORGE_DATA_DIR", parse_str_raw),
+    entry!("network.egress_proxy", "PACE_EGRESS_PROXY", parse_str_trim),
+    entry!("network.extra_ca", "PACE_EXTRA_CA", parse_str_raw),
     entry!(
         "network.tz_offset_sec",
         "PACE_TZ_OFFSET_SEC",
-        parse_tz_offset,
-        "28800（东八区）",
-        "OBS 时间戳的时区偏移（秒），跨时区部署用；±20 小时以内"
+        parse_tz_offset
     ),
-    entry!(
-        "device.app_version",
-        "PACE_APP_VERSION",
-        parse_str_trim,
-        "7.4.20",
-        "上报的 appVersion，默认取真机版本（7.4.20 / code 411）。改它等于自报用别的客户端版本"
-    ),
-    entry!(
-        "device.model",
-        "PACE_DEVICE_MODEL",
-        parse_str_trim,
-        "未设置（cpuModel 发 ABI）",
-        "机型 code 或平台代号。命中 data/devices.json 时 cpuModel 发 SoC 型号（SM8550），未收录仍发 ABI 并提示"
-    ),
+    entry!("device.app_version", "PACE_APP_VERSION", parse_str_trim),
+    entry!("device.model", "PACE_DEVICE_MODEL", parse_str_trim),
     entry!(
         "device.hw_headers",
         "PACE_DEVICE_HW_HEADERS",
-        parse_hw_headers,
-        "empty（发空串）",
-        "五个硬件头（androidId/blMac/wifiMac/IMEI/CustomDeviceId）：derived 发派生假值；默认空串，与 7.4.21 硬编码一致。DeviceId 不受影响"
+        parse_hw_headers
     ),
-    entry!(
-        "run.run_mode",
-        "PACE_RUN_MODE",
-        parse_run_mode,
-        "2",
-        "CLI 刷跑的 runMode：1=计分跑，2=户外跑；任意整数都收（0/2~6 服务端都当自由跑，实验值不设限）"
-    ),
-    entry!(
-        "run.step_m",
-        "PACE_STEP_M",
-        parse_step_m,
-        "5.0",
-        "CLI 的几何采样间距（米，正数），只管形状不管上报节奏；0/负数/inf 这类打错的值启动时报错"
-    ),
-    entry!(
-        "run.bulge_max",
-        "PACE_BULGE_MAX",
-        parse_bulge_max,
-        "60",
-        "几何规划时弧的鼓出上限（米）。设 0 更贴直线"
-    ),
-    entry!(
-        "run.pt_scheme",
-        "PACE_PT_SCHEME",
-        parse_pt_scheme,
-        "自动（按有无必到点分流）",
-        "old / new。强制点位 type 口径，做对照实验用"
-    ),
+    entry!("run.run_mode", "PACE_RUN_MODE", parse_run_mode),
+    entry!("run.step_m", "PACE_STEP_M", parse_step_m),
+    entry!("run.bulge_max", "PACE_BULGE_MAX", parse_bulge_max),
+    entry!("run.pt_scheme", "PACE_PT_SCHEME", parse_pt_scheme),
     EntryDef {
         key: "run.fixed_point",
         env: "PACE_FIXED_POINT",
         env_legacy: Some("PACE_FORCE_NORMAL_POINT"),
         parse: parse_fixed_point,
         parse_legacy: Some(parse_fixed_point_legacy),
-        default_display: "auto",
-        effect: "固定点口径：all0/allnormal=全部发 0，server/follow=跟随服务端。旧变量 PACE_FORCE_NORMAL_POINT 仍认（0→server，1→all0），仅在主变量未设时生效",
     },
-    entry!(
-        "run.fixed_strict",
-        "PACE_FIXED_STRICT",
-        parse_bool,
-        "0",
-        "1 = 必到点只认 10 米内，够不着就报缺失，不自动放开半径"
-    ),
-    entry!(
-        "run.strict_policy",
-        "PACE_STRICT_POLICY",
-        parse_bool,
-        "0",
-        "1 = 策略拉取失败直接报错，不走「policy=0」兜底"
-    ),
-    entry!(
-        "run.fence_full",
-        "PACE_FENCE_FULL",
-        parse_bool,
-        "0",
-        "1 = 围栏对象发完整结构（distance/id/name），默认只发 points"
-    ),
-    entry!(
-        "run.run_area_id",
-        "PACE_RUN_AREA_ID",
-        parse_run_area,
-        "未设置（发真实围栏 id）",
-        "-1 = 提交报文发 runAreaId=-1，退回旧行为做对照实验"
-    ),
-    entry!(
-        "run.center_lat",
-        "PACE_CENTER_LAT",
-        parse_center_lat,
-        "未设置",
-        "围栏锚点纬度。与 center_lng 必须成对出现，缺一半启动时报错（旧行为是静默忽略）"
-    ),
-    entry!(
-        "run.center_lng",
-        "PACE_CENTER_LNG",
-        parse_center_lng,
-        "未设置",
-        "围栏锚点经度。与 center_lat 必须成对出现"
-    ),
-    entry!(
-        "run.prefer_stadium",
-        "PACE_PREFER_STADIUM",
-        parse_bool,
-        "0",
-        "1 = CLI 默认试操场轨迹（issue #37）。web 不读这个，走自己的跑法选择"
-    ),
+    entry!("run.fixed_strict", "PACE_FIXED_STRICT", parse_bool),
+    entry!("run.strict_policy", "PACE_STRICT_POLICY", parse_bool),
+    entry!("run.fence_full", "PACE_FENCE_FULL", parse_bool),
+    entry!("run.run_area_id", "PACE_RUN_AREA_ID", parse_run_area),
+    entry!("run.center_lat", "PACE_CENTER_LAT", parse_center_lat),
+    entry!("run.center_lng", "PACE_CENTER_LNG", parse_center_lng),
+    entry!("run.prefer_stadium", "PACE_PREFER_STADIUM", parse_bool),
     entry!(
         "run.ignore_daily_limit",
         "PACE_IGNORE_DAILY_LIMIT",
-        parse_bool,
-        "0",
-        "1 = 超日上限也继续提交。旧行为是「设了就算」（连 =0 都生效），现在是标准布尔：0 就是关"
+        parse_bool
     ),
-    entry!(
-        "run.dump_policy",
-        "PACE_DUMP_POLICY",
-        parse_str_raw,
-        "未设置（不落盘）",
-        "目录路径。策略响应落到该目录排查用；策略响应里有考生身份字段，默认不落盘"
-    ),
+    entry!("run.dump_policy", "PACE_DUMP_POLICY", parse_str_raw),
 ];
 
 fn find_entry(key: &str) -> Option<&'static EntryDef> {
@@ -753,7 +636,7 @@ pub(crate) fn load_from(
         for (key, raw) in flat {
             let Some(entry) = find_entry(&key) else {
                 errs.push(format!(
-                    "{}: 未知键 {key:?}。可用键见 config.example.toml 或 `pace-forge config`",
+                    "{}: 未知键 {key:?}。可用键见 config.example.toml",
                     path.display()
                 ));
                 continue;
@@ -989,29 +872,12 @@ impl Drop for Guard {
 use std::sync::MutexGuard;
 
 // ---------------------------------------------------------------------------
-// 打表与启动摘要
+// 启动摘要
 // ---------------------------------------------------------------------------
 
-/// `pace-forge config`：整张表。值显示走 [`Config::key_values`]，来源看
-/// [`Config::sources`]，口令只显示「已设置」。
-pub fn print_table() {
-    let cfg = global();
-    let kv = cfg.key_values();
-    let values: HashMap<&str, &str> = kv.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    println!("开关清单（优先级：env > config.toml > 默认）\n");
-    for e in TABLE {
-        let value = values[e.key];
-        let src = cfg.sources.get(e.key).copied().unwrap_or(Source::Default);
-        println!("{:>24}（{}）= {}  ← {}", e.key, e.env, value, src.label());
-        println!("    默认 {}：{}", e.default_display, e.effect);
-    }
-    println!(
-        "\n以上为全部开关。TOML 写法见 config.example.toml；配置文件里的未知键会在启动时报错，环境变量不受此限。"
-    );
-    println!("（PACE_OUT、PACE_FAST 这类是 preflight 检查码，不是配置，别混。）");
-}
-
-/// 启动时的「非默认项」一行。全默认返回 `None`。
+/// 启动时的「非默认项」一行。全默认返回 `None`。值显示走
+/// [`Config::key_values`]（口令打码），来源看 [`Config::sources`]。
+/// 完整键参考在 `config.example.toml`，不放 CLI 命令。
 pub fn non_default_line() -> Option<String> {
     let cfg = global();
     let kv = cfg.key_values();

@@ -3,8 +3,9 @@
 # 搜索顺序：--config <路径> > PACE_CONFIG > ./config.toml > ~/.pace-forge/config.toml
 # 优先级：  环境变量 PACE_* > 本文件 > 内置默认值
 #
-# 全部键和当前生效值跑 `pace-forge config` 能看到（带来源标注）。
+# 当前哪些开关非默认、来自哪一层（env / config.toml），Web 启动日志会打一行汇总。
 # 本文件里出现的键必须是下面这些——未知键会在启动时报错，这是特性（防拼写错误）。
+# 注意 PACE_OUT、PACE_FAST 这类是 preflight 检查码，不是配置，别写进来。
 # 拿去用的时候记得改名成 config.toml。
 
 [server]

@@ -287,8 +287,8 @@ pace-forge web --config /etc/pace-forge/config.toml   # 显式指定
 # 不指定时依次找 ./config.toml 和 ~/.pace-forge/config.toml，都没有就全默认
 ```
 
-- 全部键见仓库根的 `config.example.toml`（带注释）；`pace-forge config` 列出
-  每个开关的当前值、默认值、来自哪一层（env / config.toml / 默认）；
+- 全部键见仓库根的 `config.example.toml`（带注释）；当前哪些开关非默认、
+  来自哪一层（env / config.toml），Web 启动日志会打一行「非默认开关」；
 - 配置文件里的**未知键、非法值、缺一半的锚点**（`center_lat`/`center_lng`
   只写一个）都在启动时报错退出——不再静默回落默认值；
 - 环境变量仍然全量支持（老用法不变），非法值同样启动报错；
