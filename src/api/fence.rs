@@ -157,12 +157,14 @@ pub struct FencePick {
 /// **可能返回空数组**：`geoFences` 显式为 null（学校没配围栏）。调用方取
 /// 中心点走 [`center_from_fences`] / [`fetch_center`]，别直接索引 `[0]`。
 pub fn fetch_fences(client: &Client) -> Result<Vec<Fence>, String> {
-    let raw = client.request(
-        "POST",
-        &format!("{}{}", hosts::RUN, FENCE_PATH),
-        Some(&json!({ "geoFenceUpdateTime": 0 })),
-    )?;
-    let v = expect_ok(&raw)?;
+    let raw = client
+        .request(
+            "POST",
+            &format!("{}{}", hosts::RUN, FENCE_PATH),
+            Some(&json!({ "geoFenceUpdateTime": 0 })),
+        )
+        .map_err(|e| e.to_string())?;
+    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
     // `geoFences` 显式为 null：服务端**没有配置围栏**，不是解析失败。
     //
     // 这是一次真实的降级：service 端判定项里没有「围栏」这一条（reasonList

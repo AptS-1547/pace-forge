@@ -3,7 +3,7 @@
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{LoginOutcome, login};
 use crate::api::session;
-use crate::web::http::{json_err, json_ok};
+use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::routes::parse_alt_range;
 use crate::web::state::{AccountSessionAction, Shared, lock_state, remote_logout};
 use serde_json::{Value, json};
@@ -93,7 +93,7 @@ pub(crate) fn handle_add_account(
         Ok(LoginOutcome::NeedCaptcha { uuid, message }) => {
             json_err(request, &format!("{message}（uuid={uuid}）"))
         }
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -232,7 +232,7 @@ pub(crate) fn handle_login_one(
             )
         }
         Ok(LoginOutcome::NeedCaptcha { message, .. }) => json_err(request, &message),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -272,7 +272,12 @@ pub(crate) fn handle_login_all(request: tiny_http::Request, state: Shared) -> Re
             Ok(LoginOutcome::NeedCaptcha { message, .. }) => {
                 results.push(json!({"id": id, "ok": false, "error": message}));
             }
-            Err(e) => results.push(json!({"id": id, "ok": false, "error": e})),
+            Err(e) => results.push(json!({
+                "id": id,
+                "ok": false,
+                "error": e.to_string(),
+                "kind": e.kind_name(),
+            })),
         }
     }
 

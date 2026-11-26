@@ -274,12 +274,14 @@ pub fn fetch_policy_for(client: &Client, run_mode: i64) -> Result<PolicyInfo, St
         "operateType": 0,
     });
 
-    let raw = client.request(
-        "POST",
-        &format!("{}{}", hosts::RUN, POLICY_PATH),
-        Some(&body),
-    )?;
-    let v = expect_ok(&raw)?;
+    let raw = client
+        .request(
+            "POST",
+            &format!("{}{}", hosts::RUN, POLICY_PATH),
+            Some(&body),
+        )
+        .map_err(|e| e.to_string())?;
+    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
     // 策略响应里可能有点位判定相关的字段，我们只解析了四个。
     // 把原始 JSON 落盘，逐字段比对 runMode=1 与 runMode=2 的差异。
     dump_policy_in(dump_dir().as_deref(), run_mode, &v);
@@ -385,12 +387,14 @@ pub fn in_window(now_hms: &str, start: &str, end: &str) -> bool {
 /// 依据：Nyx4 探测报告 §四.1（「每月随机核验」= 支付宝信用分，接口
 /// `creditscore/v70390/popup`，返回 `{needPopup: bool}`）。
 pub fn monthly_verify_needed(client: &Client) -> Result<bool, String> {
-    let raw = client.request(
-        "GET",
-        &format!("{}/api/creditscore/v70390/popup?taskType=1", hosts::RUN),
-        None,
-    )?;
-    let v = expect_ok(&raw)?;
+    let raw = client
+        .request(
+            "GET",
+            &format!("{}/api/creditscore/v70390/popup?taskType=1", hosts::RUN),
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
     Ok(v.get("data")
         .and_then(|d| d.get("needPopup"))
         .and_then(|x| x.as_bool())

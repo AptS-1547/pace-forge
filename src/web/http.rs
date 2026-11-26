@@ -120,6 +120,23 @@ pub(super) fn json_err(request: tiny_http::Request, msg: &str) -> Result<(), Str
     respond_json(request, 200, json!({"ok": false, "error": msg}))
 }
 
+/// 类型化错误 → HTTP 响应(#62):状态码按 `ErrorKind`,不再一律 400;
+/// 响应体带 `kind` 字段与厂商业务码 `vendor_code`,脚本按结构分流。
+pub(super) fn json_err_kind(
+    request: tiny_http::Request,
+    e: &crate::error::Error,
+) -> Result<(), String> {
+    let mut body = serde_json::json!({
+        "ok": false,
+        "error": e.to_string(),
+        "kind": e.kind_name(),
+    });
+    if let crate::error::ErrorKind::Protocol { code: Some(c), .. } = e {
+        body["vendor_code"] = serde_json::json!(c);
+    }
+    respond_json(request, e.http_status(), body)
+}
+
 pub(super) fn json_err_code(
     request: tiny_http::Request,
     code: u16,

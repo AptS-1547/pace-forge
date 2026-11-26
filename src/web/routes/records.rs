@@ -1,6 +1,7 @@
 //! 记录列表与详情、OBS 轨迹回读、审核/违规状态，以及 `/api/raw` 透传。
 
 use crate::api::records;
+use crate::web::http::json_err_kind;
 use crate::web::http::{json_err, json_ok, query_param};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
@@ -26,6 +27,7 @@ pub(crate) fn handle_obs_fetch(
     };
     match crate::api::obs::fetch_object(&client, &key) {
         Ok(v) => json_ok(request, v),
+        // TODO(#62): obs 转换后改走 json_err_kind
         Err(e) => json_err(request, &e),
     }
 }
@@ -95,7 +97,7 @@ pub(crate) fn handle_raw(
             );
             json_ok(request, v)
         }
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -150,7 +152,7 @@ pub(crate) fn handle_cheat(
                 }),
             )
         }
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -184,7 +186,7 @@ pub(crate) fn handle_records(
     };
     match records::list_records(&client, page, size, sport) {
         Ok(data) => json_ok(request, data),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -208,7 +210,7 @@ pub(crate) fn handle_record_detail(
     };
     match records::get_record(&client, rrid) {
         Ok(data) => json_ok(request, data),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 

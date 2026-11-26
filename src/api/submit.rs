@@ -2503,7 +2503,8 @@ pub fn save_record_detailed(
             &[("runes", runes), ("runef", runef)],
         )
         .map_err(|e| SubmitFailure {
-            message: e,
+            // TODO(#62): submit 转换后直接携带 ErrorKind
+            message: e.to_string(),
             rejected: false,
         })?;
     // 业务层：`expect_ok` 只放行 10000，失败时直接给 Err。为了同时拿到
@@ -2522,7 +2523,8 @@ pub fn save_record_detailed(
             };
             return Err(SubmitFailure {
                 message: if hint.is_empty() {
-                    e
+                    // TODO(#62): submit 转换后直接携带 ErrorKind
+                    e.to_string()
                 } else {
                     format!("{e}{hint}")
                 },

@@ -58,11 +58,13 @@ pub fn parse(raw: &str) -> Result<i64, String> {
 /// `offset_ms = 服务器时间（含单程补偿）− 本机时间`，直接加到本机时间上即可。
 pub fn fetch(client: &Client) -> Result<(i64, i64), String> {
     let t0 = crate::crypto::envelope::now_ms() as i64;
-    let raw = client.request(
-        "GET",
-        &format!("{}{}", crate::crypto::consts::hosts::RUN, PATH),
-        None,
-    )?;
+    let raw = client
+        .request(
+            "GET",
+            &format!("{}{}", crate::crypto::consts::hosts::RUN, PATH),
+            None,
+        )
+        .map_err(|e| e.to_string())?;
     let t1 = crate::crypto::envelope::now_ms() as i64;
     let server = parse(&raw)?;
     let rtt = (t1 - t0).max(0);

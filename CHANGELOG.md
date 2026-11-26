@@ -17,6 +17,18 @@
 
 ### 变更
 
+- **[行为变化]** 类型化错误第一步（#62）：新增 `src/error.rs` 的 `ErrorKind`
+  （Auth / Protocol{厂商码,说明} / Network / RateLimit / Fence / Client /
+  Storage / Json），`client.rs` 作为唯一分类点：厂商业务码在此归类
+  （`10121`→Auth、`10603`→RateLimit、其余→Protocol），传输失败归 Network。
+  本批转换 client + login / records / semester / cheat / ai 五个模块及
+  `expect_ok`；flow/submit/fence/points/policy/obs 的边界暂以 `to_string()`
+  过渡（下个 PR 转换）。**Web 控制台错误响应变化（对着控制台 API 写脚本的话
+  看这里）**：这些端点的厂商错误从一律 400 变为 401（认证）/ 429（限流）/
+  502（上游拒绝/网络），响应体新增 `kind` 字段（auth/protocol/network/
+  rate_limit/fence/client/storage/json）和 `vendor_code`（有厂商码时）；
+  厂商错误文案从「业务错误 error=…」变为结构化中文（如
+  「不在有效时段(vendor code 11016)」）。CLI 打印文本随之微调，退出码不变。
 - **[行为变化]** 配置系统重写（#53）：新增 `config.toml`（搜索 `./config.toml` →
   `~/.pace-forge/config.toml`，或 `--config <路径>` / `PACE_CONFIG` 指定），
   优先级 `PACE_* 环境变量 > config.toml > 默认值`。配置拆进独立 crate

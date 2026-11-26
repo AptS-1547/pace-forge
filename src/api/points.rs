@@ -128,8 +128,10 @@ pub fn fetch_points_at_distance(
         body["runAreaId"] = json!(area);
     }
 
-    let raw = client.request("POST", &url, Some(&body))?;
-    let v = expect_ok(&raw)?;
+    let raw = client
+        .request("POST", &url, Some(&body))
+        .map_err(|e| e.to_string())?;
+    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
     parse_points(&v)
 }
 

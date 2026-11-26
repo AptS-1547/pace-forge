@@ -2,7 +2,7 @@
 
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{LoginOutcome, login};
-use crate::web::http::{json_err, json_ok};
+use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
 
@@ -74,6 +74,6 @@ pub(crate) fn handle_login(
         Ok(LoginOutcome::NeedCaptcha { uuid, message }) => {
             json_err(request, &format!("{message}（uuid={uuid}）"))
         }
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }

@@ -49,6 +49,8 @@ name = "pace-forge"
 [dependencies]
 # --- 配置层 ---
 pace-forge-config = { path = "crates/pace-forge-config" }
+# --- 错误层 ---
+thiserror = "2"
 # --- 协议层 ---
 serde.workspace = true
 serde_json.workspace = true
