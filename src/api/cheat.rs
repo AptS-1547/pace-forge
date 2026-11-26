@@ -15,6 +15,7 @@
 //! 2. **检查结果会过期**。名单是服务端跑批出来的，本地缓存超过
 //!    [`FRESH_MS`] 就只是「上次查过」，不能当现在的状态。
 
+use crate::error::Error;
 use serde_json::Value;
 
 /// 自查结果的有效期：5 分钟。
@@ -63,9 +64,12 @@ pub struct CheatReport {
 impl CheatReport {
     /// 从接口的 `data` 构造。`data` 不是对象就是格式异常——直接报错，
     /// 不要退回空报告（空报告会被读成「没有违规」）。
-    pub fn from_data(data: &Value, checked_at_ms: i64) -> Result<Self, String> {
+    pub fn from_data(data: &Value, checked_at_ms: i64) -> Result<Self, Error> {
         if !data.is_object() {
-            return Err("违规接口数据格式异常，无法判断".into());
+            return Err(Error::Protocol {
+                code: None,
+                msg: "违规接口数据格式异常，无法判断".into(),
+            });
         }
         Ok(Self {
             self_info: data.get("self").cloned().unwrap_or(Value::Null),
@@ -200,7 +204,7 @@ pub fn query(
     client: &crate::api::Client,
     page: i64,
     log: &mut dyn FnMut(&str),
-) -> Result<CheatReport, String> {
+) -> Result<CheatReport, Error> {
     let unid: i64 = client
         .credentials()
         .and_then(|c| c.unid.as_ref())

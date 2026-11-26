@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::client::{Client, expect_ok, uuid_v4};
 use crate::crypto::consts::hosts;
+use crate::error::Error;
 
 pub const AI_LIST_PATH: &str = "/api/v1/sport/ai/list";
 pub const AI_UPLOAD_PATH: &str = "/api/v65/sport/ai/record/upload";
@@ -46,7 +47,7 @@ pub struct SportInfo {
 }
 
 /// 拉项目列表。
-pub fn fetch_list(client: &Client) -> Result<Vec<AiSport>, String> {
+pub fn fetch_list(client: &Client) -> Result<Vec<AiSport>, Error> {
     let raw = client.request(
         "GET",
         &format!("{}{}", hosts::RUN, AI_LIST_PATH),
@@ -154,7 +155,7 @@ pub fn upload(
     sport_id: i64,
     mode: AiMode,
     at: Option<i64>,
-) -> Result<Value, String> {
+) -> Result<Value, Error> {
     use rand::Rng;
     let info = fetch_info(client, sport_id);
     let now = crate::crypto::envelope::now_ms() as i64;
@@ -169,7 +170,7 @@ pub fn upload(
 }
 
 /// 拉某项目的记录（按天分组），返回 data 原样供 CLI 展示。
-pub fn fetch_records(client: &Client, sport_id: i64, page_size: i64) -> Result<Value, String> {
+pub fn fetch_records(client: &Client, sport_id: i64, page_size: i64) -> Result<Value, Error> {
     let path = format!(
         "{}{}?sportId={sport_id}&pageSize={page_size}&pageNum=1",
         hosts::RUN,

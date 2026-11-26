@@ -14,6 +14,7 @@
 use serde_json::{Map, Value, json};
 
 use super::client::{Client, expect_ok};
+use crate::error::Error;
 
 /// 服务端字段名 → 统一字段名的别名表。
 ///
@@ -156,7 +157,7 @@ pub fn list_records(
     page_num: u32,
     page_size: u32,
     sport_type: u32,
-) -> Result<Value, String> {
+) -> Result<Value, Error> {
     let raw = client.request(
         "POST",
         &format!("{}/api/v70230/runnings/records", crate::crypto::hosts::RUN),
@@ -173,7 +174,7 @@ pub fn list_records(
 }
 
 /// 拉取单条记录详情（含服务端给的原始字段）。
-pub fn get_record(client: &Client, rrid: i64) -> Result<Value, String> {
+pub fn get_record(client: &Client, rrid: i64) -> Result<Value, Error> {
     let raw = client.request(
         "POST",
         &format!(
@@ -190,7 +191,7 @@ pub fn get_record(client: &Client, rrid: i64) -> Result<Value, String> {
 }
 
 /// 打卡日历（含每月出勤标记）。
-pub fn calendar(client: &Client, year: i32, month: i32) -> Result<Value, String> {
+pub fn calendar(client: &Client, year: i32, month: i32) -> Result<Value, Error> {
     let raw = client.request(
         "POST",
         &format!(

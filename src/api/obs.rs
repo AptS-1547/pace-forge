@@ -26,12 +26,14 @@ pub fn sign_url(client: &Client, method: &str, key: &str) -> Result<String, Stri
         "method": method,
         "contentType": "application/json",
     });
-    let raw = client.request(
-        "POST",
-        &format!("{}{}", hosts::RUN, OBS_SIGN_PATH),
-        Some(&body),
-    )?;
-    let v = expect_ok(&raw)?;
+    let raw = client
+        .request(
+            "POST",
+            &format!("{}{}", hosts::RUN, OBS_SIGN_PATH),
+            Some(&body),
+        )
+        .map_err(|e| e.to_string())?;
+    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
     let data = v.get("data").unwrap_or(&v);
 
     // data 可能是对象，也可能是字符串化的 JSON

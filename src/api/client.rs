@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::crypto::envelope::{SessionKeys, seal};
 use crate::crypto::{SignFields, decrypt, sign::token_sign};
+use crate::error::{Error, ErrorKind};
 use sha2::{Digest, Sha256};
 
 /// 可选硬件标识头的开关。
@@ -500,26 +501,30 @@ impl Client {
     ///
     /// 返回业务 JSON 字符串（已解密）。HTTP 非 2xx 也会尝试解密，
     /// 因为服务端有时在错误响应里同样使用加密信封。
-    pub fn request(&self, method: &str, url: &str, body: Option<&Value>) -> Result<String, String> {
+    pub fn request(&self, method: &str, url: &str, body: Option<&Value>) -> Result<String, Error> {
         self.request_with_headers(method, url, body, &[])
     }
 
     /// 带额外请求头的版本。登录需要 `Authorization: Basic ...`，
     /// 这类头不参与 `headerSign` 的计算（服务端只对设备头做信封）。
+    ///
+    /// 错误在此处一次性分类（#62）：厂商业务码走
+    /// [`ErrorKind::classify_vendor`]，传输层失败归 `Network`，本地构造失败
+    /// 归 `Client`，响应体损坏归 `Protocol`/`Json`。
     pub fn request_with_headers(
         &self,
         method: &str,
         url: &str,
         body: Option<&Value>,
         extra_headers: &[(&str, &str)],
-    ) -> Result<String, String> {
-        let (headers, session) = self.build_headers()?;
+    ) -> Result<String, Error> {
+        let (headers, session) = self.build_headers().map_err(ErrorKind::Client)?;
 
         let mut req = match method.to_uppercase().as_str() {
             "GET" => self.agent.get(url),
             "POST" => self.agent.post(url),
             "PUT" => self.agent.put(url),
-            m => return Err(format!("不支持的 method: {m}")),
+            m => return Err(ErrorKind::Client(format!("不支持的 method: {m}"))),
         };
         for (k, v) in &headers {
             req = req.set(k, v);
@@ -532,22 +537,28 @@ impl Client {
         // 所以 body 信封派生出的 key 直接丢弃——服务端不用它加密响应。
         let resp = match body {
             Some(b) => {
-                let plain =
-                    serde_json::to_string(b).map_err(|e| format!("body 序列化失败: {e}"))?;
-                let body_env = seal(&plain)?;
+                let plain = serde_json::to_string(b).map_err(ErrorKind::Json)?;
+                let body_env = seal(&plain).map_err(ErrorKind::Client)?;
                 req.send_string(&body_env.wire)
             }
             None => req.call(),
         };
 
         let (status, text) = match resp {
-            Ok(r) => (r.status(), r.into_string().map_err(|e| e.to_string())?),
+            Ok(r) => (
+                r.status(),
+                r.into_string()
+                    .map_err(|e| ErrorKind::Network(e.to_string()))?,
+            ),
             Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap_or_default()),
-            Err(e) => return Err(format!("网络错误: {e}")),
+            Err(e) => return Err(ErrorKind::Network(e.to_string())),
         };
 
         if text.trim().is_empty() {
-            return Err(format!("HTTP {status} 响应为空"));
+            return Err(ErrorKind::Protocol {
+                code: None,
+                msg: format!("HTTP {status} 响应为空"),
+            });
         }
         // 服务端集群故障的**第一道拦截**。
         //
@@ -558,11 +569,17 @@ impl Client {
         // 只剩「解密失败」「HTTP 500」，然后又去换网络重装（issue #3 那位
         // 折腾了两天说的就是这个）。所以在这里按原始文本先认一次。
         if let Some(msg) = server_fault_hint(&text, status) {
-            return Err(msg);
+            return Err(ErrorKind::Protocol {
+                code: Some(crate::crypto::CODE_SERVER_FAULT),
+                msg,
+            });
         }
         // 网关级错误（如 Spring 的 404 页）是明文且无加密信封，直接透出原文
         if text.contains("\"status\":404") || text.contains("No message available") {
-            return Err(format!("HTTP {status} 网关错误: {}", truncate(&text, 200)));
+            return Err(ErrorKind::Protocol {
+                code: None,
+                msg: format!("HTTP {status} 网关错误: {}", truncate(&text, 200)),
+            });
         }
 
         // 有些接口 decryptResponse=false，直接返回业务 JSON。探测：无 r 字段即明文。
@@ -573,10 +590,13 @@ impl Client {
 
         match decrypt::open(&text, &session, self.require_signature) {
             Ok(d) => Ok(d.body),
-            Err(e) => Err(format!(
-                "HTTP {status} 解密失败: {e}；原文 {} ",
-                truncate(&text, 120)
-            )),
+            Err(e) => Err(ErrorKind::Protocol {
+                code: None,
+                msg: format!(
+                    "HTTP {status} 解密失败: {e}；原文 {} ",
+                    truncate(&text, 120)
+                ),
+            }),
         }
     }
 }
@@ -615,8 +635,11 @@ pub fn server_fault_hint(text: &str, status: u16) -> Option<String> {
 }
 
 /// 便捷方法：解析业务 JSON 并检查 `error` 字段。
-pub fn expect_ok(body: &str) -> Result<Value, String> {
-    let v: Value = serde_json::from_str(body).map_err(|e| format!("业务响应不是 JSON: {e}"))?;
+///
+/// 厂商业务码在此分类（#62）：`-10000` 集群故障保留长说明并归 `Protocol`，
+/// 其余走 [`ErrorKind::classify_vendor`]。
+pub fn expect_ok(body: &str) -> Result<Value, Error> {
+    let v: Value = serde_json::from_str(body)?;
     let code = v.get("error").and_then(|x| x.as_i64());
     if code == Some(crate::crypto::CODE_OK) {
         return Ok(v);
@@ -630,20 +653,32 @@ pub fn expect_ok(body: &str) -> Result<Value, String> {
     // 不点明的话，用户会去换网络、重装、换账号、挂代理，全白费
     // （issue #3 里那位折腾了整整两天）。
     if code == Some(crate::crypto::CODE_SERVER_FAULT) {
-        return Err(format!(
-            "服务端集群故障（error=-10000），跟你这边无关，别折腾本地环境：{msg}\n\n\
-             这条错误是对方后端内部服务调用被拦（日志里通常带 \n\
-             `Forbid consumer x.x.x.x access service ... from registry ...:2181`），\n\
-             登录、查记录、拉策略会一起失败。\n\
-             换网络、换账号、重装、重新编译都没有用——等后端恢复即可。"
-        ));
+        return Err(ErrorKind::Protocol {
+            code: Some(crate::crypto::CODE_SERVER_FAULT),
+            msg: format!(
+                "服务端集群故障（error=-10000），跟你这边无关，别折腾本地环境：{msg}\n\n\
+                 这条错误是对方后端内部服务调用被拦（日志里通常带 \n\
+                 `Forbid consumer x.x.x.x access service ... from registry ...:2181`），\n\
+                 登录、查记录、拉策略会一起失败。\n\
+                 换网络、换账号、重装、重新编译都没有用——等后端恢复即可。"
+            ),
+        });
     }
     // 有的接口把 -10000 包在别的字段里（`r` / `data` / 纯文本 message），
     // 走到这儿 code 认不出来，但原始文本认得出来，别再给「业务错误」了。
     if let Some(hint) = server_fault_hint(msg, 200) {
-        return Err(hint);
+        return Err(ErrorKind::Protocol {
+            code: Some(crate::crypto::CODE_SERVER_FAULT),
+            msg: hint,
+        });
     }
-    Err(format!("业务错误 error={code:?} message={msg}"))
+    Err(match code {
+        Some(c) => ErrorKind::classify_vendor(c, msg),
+        None => ErrorKind::Protocol {
+            code: None,
+            msg: format!("业务错误 message={msg}"),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -856,17 +891,29 @@ mod tests {
     fn server_fault_is_explained_not_just_reported() {
         let body = r#"{"error":-10000,"message":"Forbid consumer 10.0.50.83 access service com.iydsj.server.basicuser.service.UserBasicService from registry 10.0.30.34:2181. Please check registry access list (whitelist/blacklist)"}"#;
         let e = expect_ok(body).unwrap_err();
-        assert!(e.contains("-10000"), "要带上原始错误码，方便搜：{e}");
-        assert!(e.contains("服务端"), "要说明是服务端的问题：{e}");
+        let text = e.to_string();
+        assert!(text.contains("-10000"), "要带上原始错误码，方便搜：{text}");
+        assert!(text.contains("服务端"), "要说明是服务端的问题：{text}");
         assert!(
-            e.contains("无关") && e.contains("没有用"),
-            "必须明确劝阻换网络/换账号/重装：{e}"
+            text.contains("无关") && text.contains("没有用"),
+            "必须明确劝阻换网络/换账号/重装：{text}"
         );
-        // 别的非零码仍然走原来的「业务错误」，不要被这条吞掉
+        // 集群故障是厂商侧问题，归类为 Protocol 并带上厂商码
+        assert!(
+            matches!(
+                e,
+                ErrorKind::Protocol {
+                    code: Some(-10000),
+                    ..
+                }
+            ),
+            "归类: {e:?}"
+        );
+        // 别的非零码仍然走分类：10121 归认证问题，不被集群故障吞掉
         let e2 = expect_ok(r#"{"error":10121,"message":"设备异常"}"#).unwrap_err();
         assert!(
-            e2.starts_with("业务错误"),
-            "10121 不该被当成服务端故障：{e2}"
+            matches!(e2, ErrorKind::Auth(_)),
+            "10121 应归类为认证问题：{e2}"
         );
     }
 

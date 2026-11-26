@@ -73,7 +73,7 @@ pub enum LoginOutcome {
 }
 
 /// 执行登录。成功时直接修改 `client.creds`。
-pub fn login(client: &mut Client, username: &str, password: &str) -> Result<LoginOutcome, String> {
+pub fn login(client: &mut Client, username: &str, password: &str) -> Result<LoginOutcome, Error> {
     let uuid = uuid_v4();
 
     // 1. 安全初审
@@ -143,7 +143,10 @@ pub fn login(client: &mut Client, username: &str, password: &str) -> Result<Logi
         &[("Authorization", auth_header.as_str())],
     )?;
     let v = expect_ok(&raw)?;
-    let data = v.get("data").ok_or("登录响应缺 data")?;
+    let data = v.get("data").ok_or_else(|| Error::Protocol {
+        code: None,
+        msg: "登录响应缺 data".into(),
+    })?;
     let profile = UserProfile::from_data(data);
 
     client.creds = Credentials {
@@ -175,6 +178,7 @@ pub fn login(client: &mut Client, username: &str, password: &str) -> Result<Logi
 }
 
 use super::client::uuid_v4;
+use crate::error::Error;
 
 /// 调服务端登出接口，让当前 token 失效。
 ///
@@ -183,7 +187,7 @@ use super::client::uuid_v4;
 /// `10121 此账号已在其他设备登录，请过一小时后登录或原设备退出后再登录`。
 ///
 /// 返回 `Ok(true)` 表示服务端确认登出。
-pub fn logout(client: &mut Client) -> Result<bool, String> {
+pub fn logout(client: &mut Client) -> Result<bool, Error> {
     let token = match &client.creds.token {
         Some(t) if !t.is_empty() => t.clone(),
         _ => return Ok(false), // 本来就没登录，不用通知

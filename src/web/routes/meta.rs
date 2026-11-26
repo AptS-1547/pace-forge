@@ -134,7 +134,7 @@ pub(crate) fn handle_semester(request: tiny_http::Request, state: Shared) -> Res
             );
         }
         Err(e) => {
-            out.insert("summaryError".into(), json!(e));
+            out.insert("summaryError".into(), json!(e.to_string()));
         }
     }
     if let Ok(raw) = client.request(
@@ -170,7 +170,7 @@ pub(crate) fn handle_semester(request: tiny_http::Request, state: Shared) -> Res
             );
         }
         Err(e) => {
-            out.insert("goalError".into(), json!(e));
+            out.insert("goalError".into(), json!(e.to_string()));
         }
     }
     json_ok(request, Value::Object(out))
