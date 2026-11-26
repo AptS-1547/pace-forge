@@ -55,3 +55,5 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+          # 这个 action 默认塞 --all-features，会把 deny.toml 的 [graph] 盖掉；清空让它听配置的。
+          arguments: ''
