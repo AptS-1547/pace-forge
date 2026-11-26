@@ -621,46 +621,47 @@ if report.blocked() {
 
 ```
 .
-├── lib.rs / main.rs / test_support.rs   crate 入口、CLI、测试夹具
-├── crypto/          NetSecKit 4.2.4 加解密
-│   ├── kdf.rs       三段式 KDF（byte_hash → feistel → final_mix）
-│   ├── envelope.rs  RSA-1024 + AES-128-CBC(零 IV) 信封
-│   ├── decrypt.rs   响应解密
-│   ├── sign.rs      MD5 盐签名
-│   ├── geetoken.rs  极验 token 组装
-│   └── consts.rs    硬编码常量（版本号等）
-├── api/             协议层
-│   ├── client.rs    设备指纹 + 请求组装
-│   ├── coord.rs     BD-09 / GCJ-02 / WGS-84 互转
-│   ├── login.rs     登录（含单设备冲突处理）
-│   ├── gt4.rs       极验 v4 全本地求解
-│   ├── gt4image.rs  Canny + 归一化互相关
-│   ├── policy.rs    规则
-│   ├── fence.rs     多校区围栏选择（环统一为 BD-09）
-│   ├── points.rs    打卡点
-│   ├── records.rs   跑步记录列表 / 详情
-│   ├── semester.rs  学期进度
-│   ├── start_time.rs 有效时段
-│   ├── obs.rs       对象存储上传 + 回读校验
-│   ├── submit.rs    报文组装 + 提交
-│   ├── flow.rs      十步编排
-│   ├── gmttime.rs   设备时间对齐
-│   ├── accounts.rs  多账号
-│   └── session.rs   会话持久化
-├── track/           轨迹合成
-│   ├── geo.rs       球面几何
-│   ├── planner.rs   闭环规划 + 打卡点命中
-│   ├── fence_route.rs 围栏内铺路
-│   ├── roadnet.rs   路网建图
-│   ├── tileroad.rs  瓦片道路识别
-│   ├── biomech.rs   步态模型
-│   ├── kinematics.rs 速度剖面（OU + 弯道预判刹车）
-│   ├── stadium.rs   田径场几何
-│   ├── simulate.rs  数据合成 + 一致性校验
-│   ├── buckets.rs   10 秒分桶
-│   ├── detect.rs    反检测自查
-│   └── preflight.rs 提交自检
-├── web/             控制台（index.html 编进二进制）
+├── src/            crate 源码（Rust 惯例：代码都在 src/ 下）
+│   ├── lib.rs / main.rs / test_support.rs   crate 入口、CLI、测试夹具
+│   ├── crypto/          NetSecKit 4.2.4 加解密
+│   │   ├── kdf.rs       三段式 KDF（byte_hash → feistel → final_mix）
+│   │   ├── envelope.rs  RSA-1024 + AES-128-CBC(零 IV) 信封
+│   │   ├── decrypt.rs   响应解密
+│   │   ├── sign.rs      MD5 盐签名
+│   │   ├── geetoken.rs  极验 token 组装
+│   │   └── consts.rs    硬编码常量（版本号等）
+│   ├── api/             协议层
+│   │   ├── client.rs    设备指纹 + 请求组装
+│   │   ├── coord.rs     BD-09 / GCJ-02 / WGS-84 互转
+│   │   ├── login.rs     登录（含单设备冲突处理）
+│   │   ├── gt4.rs       极验 v4 全本地求解
+│   │   ├── gt4image.rs  Canny + 归一化互相关
+│   │   ├── policy.rs    规则
+│   │   ├── fence.rs     多校区围栏选择（环统一为 BD-09）
+│   │   ├── points.rs    打卡点
+│   │   ├── records.rs   跑步记录列表 / 详情
+│   │   ├── semester.rs  学期进度
+│   │   ├── start_time.rs 有效时段
+│   │   ├── obs.rs       对象存储上传 + 回读校验
+│   │   ├── submit.rs    报文组装 + 提交
+│   │   ├── flow.rs      十步编排
+│   │   ├── gmttime.rs   设备时间对齐
+│   │   ├── accounts.rs  多账号
+│   │   └── session.rs   会话持久化
+│   ├── track/           轨迹合成
+│   │   ├── geo.rs       球面几何
+│   │   ├── planner.rs   闭环规划 + 打卡点命中
+│   │   ├── fence_route.rs 围栏内铺路
+│   │   ├── roadnet.rs   路网建图
+│   │   ├── tileroad.rs  瓦片道路识别
+│   │   ├── biomech.rs   步态模型
+│   │   ├── kinematics.rs 速度剖面（OU + 弯道预判刹车）
+│   │   ├── stadium.rs   田径场几何
+│   │   ├── simulate.rs  数据合成 + 一致性校验
+│   │   ├── buckets.rs   10 秒分桶
+│   │   ├── detect.rs    反检测自查
+│   │   └── preflight.rs 提交自检
+│   ├── web/             控制台（index.html 编进二进制）
 ├── docs/            审计、修复记录、笔记（见 docs/README.md）
 ├── evidence/        可复核的数据底稿
 └── tools/           辅助脚本

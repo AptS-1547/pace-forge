@@ -17,14 +17,17 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// 编译进二进制的人工表（平台 + 带出处的机型 SoC）。
-const RAW: &str = include_str!("../data/devices.json");
+const RAW: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/devices.json"));
 
 /// 编译进二进制的官方目录（model code → codename / 营销名 / 品牌）。
 ///
 /// 它**只用来认设备，不用来推 SoC**：官方目录里没有芯片字段，硬从 codename
 /// 猜平台就是编。作用有两个——校验手填的 model code 是否真实存在、
 /// 在 `devices` 里把 `2211133C` 显示成「Xiaomi 13 (fuxi)」。
-const CATALOG: &str = include_str!("../data/device_catalog.json");
+const CATALOG: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/data/device_catalog.json"
+));
 
 /// 查不到表时发出去的 `cpuModel` 值。与历史行为一致（ABI），换设备字段
 /// 不影响已有账号的 `DeviceId`。

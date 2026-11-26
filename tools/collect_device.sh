@@ -6,7 +6,7 @@
 #
 # 只读两个属性，不改手机任何东西。把输出的那一行贴进 data/devices.json 的
 # "models" 里，并把 src 换成你的出处（截图/日期/getprop 输出），因为
-# models 层只收有出处的条目（见 api/device_table.rs 顶部说明）。
+# models 层只收有出处的条目（见 src/api/device_table.rs 顶部说明）。
 set -euo pipefail
 
 model=$(adb shell getprop ro.product.model | tr -d '\r')
