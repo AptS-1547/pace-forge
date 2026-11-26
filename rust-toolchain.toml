@@ -1,0 +1,7 @@
+# 钉死工具链（#38 / Nakf 建议）：fmt 硬门要跨贡献者稳定，rustfmt 输出就得
+# 可复现，`channel = "stable"` 等于没钉。升版本时只改这一行，CI / release /
+# 本地三处同步。`rust-version = "1.88"` 仍是从源码编译的 MSRV 下限，不冲突。
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

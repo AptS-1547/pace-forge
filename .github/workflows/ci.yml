@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # 工具链由仓库根的 rust-toolchain.toml 钉死（rustup 代理会读它），
+      # 这里只负责装 rustup；stable 漂移不会改变 fmt/clippy 的判定。
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
