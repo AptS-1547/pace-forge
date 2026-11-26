@@ -36,7 +36,7 @@ rsa = { version = "0.9", features = ["sha2"] }
 # 安全哈希走 sha2。审计时勿将这两个依赖误判为安全弱点。
 md-5 = "0.10"
 sha1 = "0.11"
-sha2 = "0.10"
+sha2 = "0.11"
 # 极验缺口识别（只编 PNG，避免拖入整套图片编解码）
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
