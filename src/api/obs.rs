@@ -63,7 +63,9 @@ pub fn put_object(signed_url: &str, payload: &[u8]) -> Result<(), Error> {
     let mut last: Option<Error> = None;
     for attempt in 0..4 {
         if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(300 * attempt as u64));
+            std::thread::sleep(std::time::Duration::from_millis(
+                300 * u64::try_from(attempt).unwrap_or(0),
+            ));
         }
         let agent = crate::api::egress::with_extra_ca(
             ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)),
@@ -126,7 +128,9 @@ pub fn fetch_object(client: &Client, key: &str) -> Result<Value, Error> {
     let mut last: Option<Error> = None;
     for attempt in 0..4 {
         if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(300 * attempt as u64));
+            std::thread::sleep(std::time::Duration::from_millis(
+                300 * u64::try_from(attempt).unwrap_or(0),
+            ));
         }
         let agent = crate::api::egress::with_extra_ca(
             ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)),
@@ -198,13 +202,13 @@ pub fn fallback_key(uid: &str, sport_type: i32, start_sec: i64, uuid: &str) -> S
 pub(crate) fn civil_from_days(days: i64, hour: i64) -> (i64, u32, u32, i64) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
+    let doe = crate::number::i64_to_u64(z - era * 146_097).unwrap_or(0);
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
+    let y = crate::number::u64_to_i64(yoe).unwrap_or(0) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let d = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let m = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
     (if m <= 2 { y + 1 } else { y }, m, d, hour)
 }
 

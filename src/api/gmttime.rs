@@ -61,13 +61,13 @@ pub fn parse(raw: &str) -> Result<i64, Error> {
 ///
 /// `offset_ms = 服务器时间（含单程补偿）− 本机时间`，直接加到本机时间上即可。
 pub fn fetch(client: &Client) -> Result<(i64, i64), Error> {
-    let t0 = crate::crypto::envelope::now_ms() as i64;
+    let t0 = crate::crypto::envelope::now_ms();
     let raw = client.request(
         "GET",
         &format!("{}{}", crate::crypto::consts::hosts::RUN, PATH),
         None,
     )?;
-    let t1 = crate::crypto::envelope::now_ms() as i64;
+    let t1 = crate::crypto::envelope::now_ms();
     let server = parse(&raw)?;
     let rtt = (t1 - t0).max(0);
     let server_at_t1 = server + rtt / 2;
@@ -77,8 +77,8 @@ pub fn fetch(client: &Client) -> Result<(i64, i64), Error> {
 /// 校准后的「现在」（毫秒）。失败时退回本机时钟，由调用方决定是否提示。
 pub fn server_now_ms(client: &Client) -> (i64, Option<i64>) {
     match fetch(client) {
-        Ok((_, off)) => (crate::crypto::envelope::now_ms() as i64 + off, Some(off)),
-        Err(_) => (crate::crypto::envelope::now_ms() as i64, None),
+        Ok((_, off)) => (crate::crypto::envelope::now_ms() + off, Some(off)),
+        Err(_) => (crate::crypto::envelope::now_ms(), None),
     }
 }
 

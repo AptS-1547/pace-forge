@@ -212,17 +212,23 @@ pub fn parse_goal(v: &Value) -> SemesterGoal {
             "semesterTargetDis",
             "selDistance",
         ]),
-        target_count: num(&["targetCount", "semesterTargetCount", "selCount"]) as i64,
-        begin_ms: num(&["startDate", "beginTime", "startTime"]) as i64,
-        end_ms: num(&["endDate", "endTime", "stopTime"]) as i64,
+        target_count: crate::number::f64_to_i64(num(&[
+            "targetCount",
+            "semesterTargetCount",
+            "selCount",
+        ]))
+        .unwrap_or(0),
+        begin_ms: crate::number::f64_to_i64(num(&["startDate", "beginTime", "startTime"]))
+            .unwrap_or(0),
+        end_ms: crate::number::f64_to_i64(num(&["endDate", "endTime", "stopTime"])).unwrap_or(0),
         sname: d
             .get("sname")
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string(),
         valid_dis: num(&["semesterValid"]),
-        goal_method: num(&["goalMethod"]) as i64,
-        sid: num(&["sid"]) as i64,
+        goal_method: crate::number::f64_to_i64(num(&["goalMethod"])).unwrap_or(0),
+        sid: crate::number::f64_to_i64(num(&["sid"])).unwrap_or(0),
         raw: d.clone(),
     }
 }

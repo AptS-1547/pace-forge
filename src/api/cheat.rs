@@ -119,7 +119,7 @@ impl CheatReport {
 
     /// 依据当前时钟的状态。
     pub fn status(&self) -> Status {
-        self.status_at(crate::crypto::envelope::now_ms() as i64)
+        self.status_at(crate::crypto::envelope::now_ms())
     }
 
     /// 服务端给的原因（字段名在不同版本里不一样，逐个试）。
@@ -170,7 +170,7 @@ impl CheatReport {
         let at = if self.checked_at_ms > 0 {
             self.checked_at_ms
         } else {
-            crate::crypto::envelope::now_ms() as i64
+            crate::crypto::envelope::now_ms()
         };
         let mut parts = vec![format!("状态：{}", self.status_at(at).label())];
         if let Some(n) = self.count() {
@@ -219,7 +219,7 @@ pub fn query(
     )?;
     let v = crate::api::client::expect_ok(&raw)?;
     let data = v.get("data").cloned().unwrap_or(Value::Null);
-    let report = CheatReport::from_data(&data, crate::crypto::envelope::now_ms() as i64)?;
+    let report = CheatReport::from_data(&data, crate::crypto::envelope::now_ms())?;
     log(&format!("[cheat] {}", report.summary()));
     Ok(report)
 }

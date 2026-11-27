@@ -81,7 +81,10 @@ pub fn normalize_record(r: &mut Value) {
         && let Some(d) = pick_num(obj, DIST_ALIASES)
     {
         let m = to_meters(d);
-        add.push(("totalDistance".into(), json!(m.round() as i64)));
+        add.push((
+            "totalDistance".into(),
+            json!(crate::number::round_to_i64(m).unwrap_or(0)),
+        ));
         add.push((
             "distanceKm".into(),
             json!((m / 1000.0 * 100.0).round() / 100.0),
@@ -90,22 +93,34 @@ pub fn normalize_record(r: &mut Value) {
     if !has_num(obj, "validDistance")
         && let Some(d) = pick_num(obj, VALID_DIST_ALIASES)
     {
-        add.push(("validDistance".into(), json!(to_meters(d).round() as i64)));
+        add.push((
+            "validDistance".into(),
+            json!(crate::number::round_to_i64(to_meters(d)).unwrap_or(0)),
+        ));
     }
     if !has_num(obj, "totalTime")
         && let Some(t) = pick_num(obj, TIME_ALIASES)
     {
-        add.push(("totalTime".into(), json!(t.round() as i64)));
+        add.push((
+            "totalTime".into(),
+            json!(crate::number::round_to_i64(t).unwrap_or(0)),
+        ));
     }
     if !has_num(obj, "validTime")
         && let Some(t) = pick_num(obj, VALID_TIME_ALIASES)
     {
-        add.push(("validTime".into(), json!(t.round() as i64)));
+        add.push((
+            "validTime".into(),
+            json!(crate::number::round_to_i64(t).unwrap_or(0)),
+        ));
     }
     if !has_num(obj, "avgStepFreq")
         && let Some(f) = pick_num(obj, &["avgStepFreq", "avg_step_freq", "stepFreq"])
     {
-        add.push(("avgStepFreq".into(), json!(f.round() as i64)));
+        add.push((
+            "avgStepFreq".into(),
+            json!(crate::number::round_to_i64(f).unwrap_or(0)),
+        ));
     }
 
     // 列表里的「是否达标」是 complete（bool）。前端曾经读 isValid/status，

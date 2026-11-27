@@ -147,7 +147,7 @@ pub fn metrics(records: &[RunRecord]) -> Metrics {
     }
     let first = records.iter().map(|r| r.start_ms).min().unwrap_or(0);
     let last = records.iter().map(|r| r.start_ms).max().unwrap_or(0);
-    m.span_days = ((last - first) / 86_400_000 + 1) as usize;
+    m.span_days = crate::number::i64_to_usize((last - first) / 86_400_000 + 1).unwrap_or(0);
     let (best, cur) = cc::streak_days(records, tz);
     m.streak_best = best;
     m.streak_cur = cur;

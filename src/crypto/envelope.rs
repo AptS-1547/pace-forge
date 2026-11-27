@@ -173,12 +173,13 @@ pub fn seal_full(
     Ok(Envelope { wire, session })
 }
 
-/// 当前毫秒时间戳。
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
+/// 当前毫秒时间戳。系统时钟早于 1970 时按 0 处理。
+pub fn now_ms() -> i64 {
+    let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    crate::number::u128_to_i64_saturating(millis)
 }
 
 /// 带自定义 IV 的 AES-128-CBC 加密（PKCS#7）。

@@ -2403,7 +2403,7 @@ pub fn run_full(
     // 跑步冻结：`freezeRunTime > 现在` 就别提交，冻结期提交等于自己往名单里加条。
     {
         let freeze = out.policy.freeze_run_time;
-        let now = crate::crypto::envelope::now_ms() as i64;
+        let now = crate::crypto::envelope::now_ms();
         if freeze > now {
             let left = (freeze - now) / 1000;
             return Err(ErrorKind::client(format!(

@@ -1472,7 +1472,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
             std::process::exit(exit_code_for(&e));
         }
     };
-    let now = pace_forge::crypto::envelope::now_ms() as i64;
+    let now = pace_forge::crypto::envelope::now_ms();
     let dur_s = (dur_min * 60.0).round() as i64;
     let st = match st_mod::specified(now, days, h, m, dur_s) {
         Ok(v) => v,
@@ -1487,7 +1487,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
 
 fn do_ago(mins: i64, dist_km: f64, dur_min: f64, yes: bool) {
     use pace_forge::api::start_time as st_mod;
-    let now = pace_forge::crypto::envelope::now_ms() as i64;
+    let now = pace_forge::crypto::envelope::now_ms();
     let dur_s = (dur_min * 60.0).round() as i64;
     let st = match st_mod::ago(now, mins, dur_s) {
         Ok(v) => v,
@@ -1503,7 +1503,7 @@ fn do_ago(mins: i64, dist_km: f64, dur_min: f64, yes: bool) {
 fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
     use pace_forge::api::start_time as st_mod;
     use rand::Rng;
-    let now = pace_forge::crypto::envelope::now_ms() as i64;
+    let now = pace_forge::crypto::envelope::now_ms();
     let dur_s = (dur_min * 60.0).round() as i64;
     let r: f64 = rand::rng().random();
     let st = match st_mod::random_in_day(now, days, dur_s, r) {
@@ -1588,7 +1588,7 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
         Some(d) => {
             use pace_forge::api::start_time as st_mod;
             use rand::Rng;
-            let now = pace_forge::crypto::envelope::now_ms() as i64;
+            let now = pace_forge::crypto::envelope::now_ms();
             let dur_s = if minutes {
                 score * 60
             } else {

@@ -299,7 +299,10 @@ pub(crate) fn handle_batch(
     let duration_min = body["duration"].as_f64().unwrap_or(12.0);
     let run_mode = body["runMode"].as_i64().unwrap_or(1);
     let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
-    let sport_type = body["sportType"].as_i64().unwrap_or(1) as i32;
+    let sport_type = body["sportType"]
+        .as_i64()
+        .and_then(crate::number::i64_to_i32)
+        .unwrap_or(1);
     // 跑之前必须确认「当前会话是谁」。
     //
     // 出过事：中途登录过另一个号做对比，回来忘了切，三条记录落到别人账号下，
@@ -372,7 +375,7 @@ pub(crate) fn handle_batch(
             let st = lock_state(&state);
             st.book
                 .get(id)
-                .map(|a| a.since_submit_sec(crate::crypto::envelope::now_ms() as i64))
+                .map(|a| a.since_submit_sec(crate::crypto::envelope::now_ms()))
                 .unwrap_or(i64::MAX)
         };
         if !dry && since < crate::api::flow::SILENCE_SEC {
@@ -385,7 +388,7 @@ pub(crate) fn handle_batch(
 
         let p = crate::api::flow::RunParams {
             distance_m: distance_km * 1000.0,
-            duration_sec: (duration_min * 60.0).round() as i64,
+            duration_sec: crate::number::round_to_i64(duration_min * 60.0).unwrap_or(0),
             sport_type,
             run_mode,
             free_run: sport_type != 1,
@@ -413,7 +416,7 @@ pub(crate) fn handle_batch(
                 if o.submitted {
                     let mut st = lock_state(&state);
                     if let Some(a) = st.book.get_mut(id) {
-                        a.last_submit_ms = crate::crypto::envelope::now_ms() as i64;
+                        a.last_submit_ms = crate::crypto::envelope::now_ms();
                     }
                     st.persist();
                 }

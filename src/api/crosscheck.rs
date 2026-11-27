@@ -156,7 +156,9 @@ pub fn parse_records(v: &Value) -> Vec<RunRecord> {
                 start *= 1000.0;
             }
             let distance_m = num(r, &["totalDis", "distance", "totalDistance", "dis"])?;
-            let duration_sec = num(r, &["totalTime", "duration", "useTime"]).unwrap_or(0.0) as i64;
+            let duration_sec = num(r, &["totalTime", "duration", "useTime"])
+                .and_then(crate::number::f64_to_i64)
+                .unwrap_or(0);
             let track = r
                 .get("points")
                 .or_else(|| r.get("allLocJson"))
@@ -164,7 +166,7 @@ pub fn parse_records(v: &Value) -> Vec<RunRecord> {
                 .map(parse_track)
                 .unwrap_or_default();
             Some(RunRecord {
-                start_ms: start as i64,
+                start_ms: crate::number::f64_to_i64(start).unwrap_or(0),
                 distance_m,
                 duration_sec,
                 track,
@@ -240,7 +242,9 @@ pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, Error> {
             continue;
         };
         let duration_sec = match num(row, &["totalTime", "duration", "useTime"]) {
-            Some(duration) if (1.0..i64::MAX as f64).contains(&duration) => duration as i64,
+            Some(duration) if (1.0..i64::MAX as f64).contains(&duration) => {
+                crate::number::f64_to_i64(duration).unwrap_or(0)
+            }
             _ => {
                 issue("用时缺失或无效，此条不参加配速统计");
                 0
@@ -262,7 +266,7 @@ pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, Error> {
             None => Vec::new(),
         };
         result.records.push(RunRecord {
-            start_ms: start_ms as i64,
+            start_ms: crate::number::f64_to_i64(start_ms).unwrap_or(0),
             distance_m,
             duration_sec,
             track,
@@ -310,7 +314,7 @@ pub fn start_hour_concentration(records: &[RunRecord], tz_offset_sec: i64) -> (u
     for r in records {
         let hour = (r.start_ms.div_euclid(1000) + tz_offset_sec)
             .div_euclid(3600)
-            .rem_euclid(24) as usize;
+            .rem_euclid(24) as usize; // 0..24 by construction
         bins[hour] += 1;
     }
     let (idx, &max) = bins
@@ -318,7 +322,10 @@ pub fn start_hour_concentration(records: &[RunRecord], tz_offset_sec: i64) -> (u
         .enumerate()
         .max_by_key(|&(_, c)| c)
         .unwrap_or((0, &0));
-    (idx as u32, max as f64 / records.len() as f64)
+    (
+        u32::try_from(idx).unwrap_or(u32::MAX),
+        max as f64 / records.len() as f64,
+    )
 }
 
 /// 离散度：`(均值, 变异系数)`。变异系数 = 标准差 / 均值。

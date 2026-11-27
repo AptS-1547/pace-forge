@@ -113,7 +113,7 @@ impl State {
             a.unid = p.unid.clone();
             a.name = p.name.clone();
             a.school = p.campus_name.clone();
-            a.last_login_ms = crate::crypto::envelope::now_ms() as i64;
+            a.last_login_ms = crate::crypto::envelope::now_ms();
             // 能登录成功就说明凭据有效，标记启用；否则 login-all 会一直跳过它
             a.enabled = true;
         }

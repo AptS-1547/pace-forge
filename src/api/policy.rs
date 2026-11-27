@@ -118,7 +118,7 @@ fn parse_daily_cap(rule: &Value) -> i64 {
         if let Some(v) = rule.get(key).and_then(num_of)
             && v > 0.0
         {
-            return v.round() as i64;
+            return crate::number::round_to_i64(v).unwrap_or(0);
         }
     }
     0
@@ -152,7 +152,10 @@ pub fn daily_cap_m(client: &Client, run_mode: i64) -> (i64, String) {
 fn parse_steo_range(rule: &Value) -> Option<(i64, i64)> {
     let top = rule.get("stepTop").and_then(|v| v.as_f64())?;
     let bottom = rule.get("stepBottom").and_then(|v| v.as_f64())?;
-    let (a, b) = (bottom.round() as i64, top.round() as i64);
+    let (a, b) = (
+        crate::number::round_to_i64(bottom)?,
+        crate::number::round_to_i64(top)?,
+    );
     if a <= 0 || b <= 0 {
         return None;
     }
@@ -333,7 +336,7 @@ fn dump_policy_in(dir: Option<&std::path::Path>, run_mode: i64, v: &Value) {
 /// 走的是独立的 `/api/points` 接口，不依赖策略。
 pub fn fallback_policy() -> PolicyInfo {
     PolicyInfo {
-        timestamp: crate::crypto::envelope::now_ms() as i64,
+        timestamp: crate::crypto::envelope::now_ms(),
         policy: 0,
         min_distance: 1500,
         valid_time: 55_800,

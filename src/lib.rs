@@ -18,11 +18,13 @@
 //! - [`api`]     请求组装与业务接口
 //! - [`web`]     Web 控制台（登录 / 记录 / 轨迹地图）
 //! - [`track`]   轨迹生成与 10 秒分桶
+//! - [`number`] 数字转换约定（外部数据走检查函数，不用 `as`）
 //! - `cli`       命令行入口（`pace-forge help`，见 `main.rs`）
 
 pub mod api;
 pub mod crypto;
 pub mod error;
+pub mod number;
 pub mod track;
 pub mod web;
 

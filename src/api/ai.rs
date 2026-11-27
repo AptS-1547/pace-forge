@@ -117,23 +117,31 @@ pub fn record_fields(
         // 计时类：score=用时毫秒；个数只用来推 speed/时长
         (2, AiMode::Minutes(mins)) => {
             let ms = mins * 60_000;
-            let reps = (REPS_PER_MIN * mins as f64 * jitter).round() as i64;
-            let speed = (reps as f64 / (ms as f64 / 1000.0) * 60.0).round() as i64;
+            let reps =
+                crate::number::round_to_i64(REPS_PER_MIN * mins as f64 * jitter).unwrap_or(0);
+            let speed =
+                crate::number::round_to_i64(reps as f64 / (ms as f64 / 1000.0) * 60.0).unwrap_or(0);
             (2, ms.to_string(), ms, speed, (ms / 1000) as f64 * 0.2)
         }
         (2, AiMode::Count(reps)) => {
-            let ms = ((reps as f64 * MS_PER_REP * jitter) as i64).max(MIN_DURATION_MS);
-            let speed = (reps as f64 / (ms as f64 / 1000.0) * 60.0).round() as i64;
+            let ms = crate::number::f64_to_i64(reps as f64 * MS_PER_REP * jitter)
+                .unwrap_or(0)
+                .max(MIN_DURATION_MS);
+            let speed =
+                crate::number::round_to_i64(reps as f64 / (ms as f64 / 1000.0) * 60.0).unwrap_or(0);
             (2, ms.to_string(), ms, speed, (ms / 1000) as f64 * 0.2)
         }
         // 计次类：score=个数；speed 固定 0
         (_, AiMode::Minutes(mins)) => {
-            let reps = (REPS_PER_MIN * mins as f64 * jitter).round() as i64;
+            let reps =
+                crate::number::round_to_i64(REPS_PER_MIN * mins as f64 * jitter).unwrap_or(0);
             let ms = mins * 60_000;
             (1, reps.to_string(), ms, 0, reps as f64 * 0.07)
         }
         (_, AiMode::Count(reps)) => {
-            let ms = (((reps as f64 / REPS_PER_MIN) * 60_000.0) as i64).max(MIN_DURATION_MS);
+            let ms = crate::number::trunc_to_i64(reps as f64 / REPS_PER_MIN * 60_000.0)
+                .unwrap_or(0)
+                .max(MIN_DURATION_MS);
             (1, reps.to_string(), ms, 0, reps as f64 * 0.07)
         }
     };
@@ -166,7 +174,7 @@ pub fn upload(
 ) -> Result<Value, Error> {
     use rand::Rng;
     let info = fetch_info(client, sport_id);
-    let now = crate::crypto::envelope::now_ms() as i64;
+    let now = crate::crypto::envelope::now_ms();
     let jitter = 0.9 + rand::rng().random::<f64>() * 0.2;
     let body = record_fields(info.sport_type, mode, sport_id, jitter, now, at, &uuid_v4());
     let raw = client.request(

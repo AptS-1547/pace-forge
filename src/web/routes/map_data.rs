@@ -74,7 +74,7 @@ pub(crate) fn handle_points(
     };
     let distance_m: i64 = query_param(query, "distance")
         .and_then(|v| v.parse::<f64>().ok())
-        .map(|km| (km * 1000.0).round() as i64)
+        .map(|km| crate::number::round_to_i64(km * 1000.0).unwrap_or(0))
         .unwrap_or(2000);
 
     match crate::api::points::fetch_points_at_distance(

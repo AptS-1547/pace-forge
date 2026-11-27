@@ -54,8 +54,14 @@ pub(crate) fn handle_plan(
     // 0 或缺失都表示「没指定」，交给模型按配速推算。
     // 手填步数很容易和配速对不上——12 分钟 2300 步 = 192 步/分，
     // 而 2.78 m/s 的典型步频只有 158，差 34 步会被自检判 GAIT_MISMATCH。
-    let steps = body["steps"].as_i64().filter(|v| *v > 0).map(|v| v as i32);
-    let sport_type = body["sportType"].as_i64().unwrap_or(1) as i32;
+    let steps = body["steps"]
+        .as_i64()
+        .filter(|v| *v > 0)
+        .and_then(crate::number::i64_to_i32);
+    let sport_type = body["sportType"]
+        .as_i64()
+        .and_then(crate::number::i64_to_i32)
+        .unwrap_or(1);
     let run_mode = body["runMode"].as_i64().unwrap_or(1);
     let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
 
@@ -115,7 +121,7 @@ pub(crate) fn handle_plan(
                 center_lat: lat,
                 center_lng: lng,
                 distance_m: distance_km * 1000.0,
-                duration_sec: (duration_min * 60.0).round() as i64,
+                duration_sec: crate::number::round_to_i64(duration_min * 60.0).unwrap_or(0),
                 sport_type,
                 run_mode,
                 free_run: sport_type != 1,
@@ -273,15 +279,16 @@ pub(crate) fn handle_plan(
     }
 
     let total_m = distance_km * 1000.0;
-    let total_sec = (duration_min * 60.0).round() as i64;
+    let total_sec = crate::number::round_to_i64(duration_min * 60.0).unwrap_or(0);
     let start_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| crate::number::u128_to_i64_saturating(d.as_millis()))
         .unwrap_or(0);
 
     // ── 模式：自由路线 or 操场绕圈 ──
     let mode = body["mode"].as_str().unwrap_or("free");
-    let lane = body["lane"].as_i64().unwrap_or(1).clamp(1, 8) as u8;
+    let lane =
+        crate::number::i64_to_u8(body["lane"].as_i64().unwrap_or(1).clamp(1, 8)).unwrap_or(1);
 
     // 离线预览用的是**固定尺寸**的标准跑道（`STRAIGHT` + `lane_radius`），
     // 而以你填的坐标当圆心。真正提交时走的是 `try_stadium_track`——拿打卡点
@@ -310,7 +317,8 @@ pub(crate) fn handle_plan(
             end: None,
         };
         use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(start_ms as u64);
+        let mut rng =
+            rand::rngs::StdRng::seed_from_u64(crate::number::i64_to_u64(start_ms).unwrap_or(0));
         let t = match crate::track::plan(&req, &mut rng) {
             Ok(t) => t,
             Err(e) => return json_err_kind(request, &e),
@@ -332,7 +340,7 @@ pub(crate) fn handle_plan(
     let track_points: Vec<crate::track::TrackPoint> = crate::track::sample_by_time(
         &xy,
         &times,
-        start_ms as u64,
+        crate::number::i64_to_u64(start_ms).unwrap_or(0),
         &crate::track::KinParams::default(),
         1.0,
         8.0,
@@ -360,7 +368,7 @@ pub(crate) fn handle_plan(
         total_sec,
         start_ms,
         target_steps: steps,
-        seed: start_ms as u64,
+        seed: crate::number::i64_to_u64(start_ms).unwrap_or(0),
         ..Default::default()
     };
     let sim = match crate::track::simulate(&pts3, &sim_params) {
@@ -402,8 +410,8 @@ pub(crate) fn handle_plan(
         total_steps: steps,
         start_time_ms: start_ms,
         stop_time_ms: start_ms + total_sec * 1000,
-        sel_distance_m: (real_len as f64 * 0.9) as i64,
-        sel_run_time_sec: (total_sec as f64 * 0.9) as i64,
+        sel_distance_m: crate::number::f64_to_i64(real_len as f64 * 0.9).unwrap_or(0),
+        sel_run_time_sec: crate::number::f64_to_i64(total_sec as f64 * 0.9).unwrap_or(0),
         policy: "preview".into(),
         run_area_id: 0,
         alt_range: None,
@@ -536,7 +544,10 @@ pub(crate) fn handle_run(
     let lng = body["lng"].as_f64();
     let run_mode = body["runMode"].as_i64().unwrap_or(1);
     let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
-    let sport_type = body["sportType"].as_i64().unwrap_or(1) as i32;
+    let sport_type = body["sportType"]
+        .as_i64()
+        .and_then(crate::number::i64_to_i32)
+        .unwrap_or(1);
 
     // 提交前核对当前会话账号。
     //
@@ -609,7 +620,7 @@ pub(crate) fn handle_run(
         center_lat: clat,
         center_lng: clng,
         distance_m: distance_km * 1000.0,
-        duration_sec: (duration_min * 60.0).round() as i64,
+        duration_sec: crate::number::round_to_i64(duration_min * 60.0).unwrap_or(0),
         sport_type,
         run_mode,
         free_run: sport_type != 1,
@@ -643,7 +654,7 @@ pub(crate) fn handle_run(
                 {
                     let mut st = lock_state(&state);
                     if let Some(id) = st.current.clone() {
-                        let now = crate::crypto::envelope::now_ms() as i64;
+                        let now = crate::crypto::envelope::now_ms();
                         if let Some(a) = st.book.get_mut(&id) {
                             a.last_submit_ms = now;
                         }

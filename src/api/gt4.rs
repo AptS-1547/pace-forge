@@ -63,7 +63,9 @@ fn gee_rsa_public_key() -> rsa::RsaPublicKey {
 
 /// 4 个随机 hex 字符。
 fn four_random_chart(rng: &mut impl Rng) -> String {
-    let v = (65536.0 * (1.0 + rng.random::<f64>())) as u32;
+    let v = crate::number::f64_to_i64((65536.0 * (1.0 + rng.random::<f64>())).trunc())
+        .and_then(crate::number::i64_to_u32)
+        .unwrap_or(65_536);
     let s = format!("{v:x}");
     s[1..5].to_string()
 }

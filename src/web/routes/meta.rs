@@ -26,7 +26,7 @@ pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), Error
     let mode = get("mode").unwrap_or_else(|| "now".into());
     let dur_s: i64 = get("dur").and_then(|v| v.parse().ok()).unwrap_or(720);
     let days: i64 = get("days").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let now = crate::crypto::envelope::now_ms() as i64;
+    let now = crate::crypto::envelope::now_ms();
     let tz = st::default_tz_offset_min();
 
     let result = match mode.as_str() {
@@ -156,7 +156,7 @@ pub(crate) fn handle_semester(request: tiny_http::Request, state: Shared) -> Res
         Ok(g) => {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
+                .map(|d| crate::number::u128_to_i64_saturating(d.as_millis()))
                 .unwrap_or(0);
             out.insert(
                 "goal".into(),
@@ -379,7 +379,7 @@ pub(crate) fn handle_netcheck(request: tiny_http::Request) -> Result<(), Error> 
         items.push(json!({
             "name": format!("Overpass {}", host_short(host)),
             "ok": ok,
-            "ms": t0.elapsed().as_millis() as u64,
+            "ms": crate::number::u128_to_u64_saturating(t0.elapsed().as_millis()),
             "detail": detail
         }));
     }
@@ -408,7 +408,7 @@ pub(crate) fn handle_netcheck(request: tiny_http::Request) -> Result<(), Error> 
     items.push(json!({
         "name": "高德瓦片 webrd01",
         "ok": ok,
-        "ms": t0.elapsed().as_millis() as u64,
+        "ms": crate::number::u128_to_u64_saturating(t0.elapsed().as_millis()),
         "detail": detail
     }));
 
