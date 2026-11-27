@@ -237,11 +237,11 @@ mod tests {
     #[test]
     fn add_account_form_keeps_raw_username() {
         use super::accounts::AddAccountForm;
-        let f = AddAccountForm::parse(&json!({"username": " 13800138000 ", "password": ""}));
-        assert_eq!(f.username.as_deref(), Some(" 13800138000 "));
+        let f = AddAccountForm::parse(&json!({"username": " user_01 ", "password": ""}));
+        assert_eq!(f.username.as_deref(), Some(" user_01 "));
         assert_eq!(f.password(), "");
         // 新增账号那条要求 trim 后非空，这正是 `username()` 的差别
-        assert_eq!(f.username(), "13800138000");
+        assert_eq!(f.username(), "user_01");
         let f = AddAccountForm::parse(&json!({"username": 1, "password": null}));
         assert_eq!(f.username(), "");
         assert_eq!(f.password(), "");
