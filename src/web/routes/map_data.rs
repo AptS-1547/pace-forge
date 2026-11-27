@@ -1,6 +1,7 @@
 //! `/api/points` `/api/fences` `/api/blockers`：点位、围栏与手绘禁区。
 
-use crate::web::http::{json_err, json_ok, query_param};
+use crate::error::Error;
+use crate::web::http::{json_err, json_err_kind, json_ok, query_param};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
 
@@ -17,7 +18,7 @@ pub(crate) fn handle_points(
     request: tiny_http::Request,
     state: Shared,
     query: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let client = {
         let st = lock_state(&state);
         if !st.logged_in() {
@@ -115,7 +116,7 @@ pub(crate) fn handle_points(
                 }),
             )
         }
-        Err(e) => json_err(request, &format!("拉点位失败: {e}")),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
@@ -123,7 +124,7 @@ pub(crate) fn handle_fences(
     request: tiny_http::Request,
     state: Shared,
     _query: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     // 先把 client 克隆出来再放锁。Client 是 Clone，网络请求几十秒，
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
@@ -162,13 +163,13 @@ pub(crate) fn handle_fences(
                 .collect();
             json_ok(request, json!({"count": list.len(), "fences": list}))
         }
-        Err(e) => json_err(request, &format!("拉围栏失败: {e}")),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
 // ---------- 真跑：提交 ----------
 
-pub(crate) fn handle_blockers_get(request: tiny_http::Request) -> Result<(), String> {
+pub(crate) fn handle_blockers_get(request: tiny_http::Request) -> Result<(), Error> {
     let polys = crate::track::roadnet::load_local_blockers();
     json_ok(
         request,
@@ -186,7 +187,7 @@ pub(crate) fn handle_blockers_get(request: tiny_http::Request) -> Result<(), Str
 ///
 /// 用法：OSM 在国内校园没有建筑轮廓，规划出来的轨迹会从楼里穿过去。
 /// 在地图上把楼圈成矩形，存一份，之后所有规划都会绕开。
-pub(crate) fn handle_blockers_put(request: tiny_http::Request, body: &Value) -> Result<(), String> {
+pub(crate) fn handle_blockers_put(request: tiny_http::Request, body: &Value) -> Result<(), Error> {
     let Some(arr) = body.get("polys").and_then(|v| v.as_array()) else {
         return json_err(request, "polys 必须是数组");
     };
@@ -217,6 +218,6 @@ pub(crate) fn handle_blockers_put(request: tiny_http::Request, body: &Value) -> 
     }
     match crate::track::roadnet::save_local_blockers(&polys) {
         Ok(()) => json_ok(request, json!({"saved": polys.len()})),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }

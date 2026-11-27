@@ -1,6 +1,7 @@
 //! `/api/plan` 与 `/api/run`：参数解析、轨迹规划、预演与提交。
 
-use crate::web::http::{json_err, json_ok};
+use crate::error::{Error, ErrorKind};
+use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
 
@@ -26,12 +27,14 @@ pub(crate) fn parse_end(body: &Value) -> Option<(f64, f64)> {
     input_to_bd09(la, ln, cs).ok()
 }
 
-pub(crate) fn input_to_bd09(lat: f64, lng: f64, sys: &str) -> Result<(f64, f64), String> {
+pub(crate) fn input_to_bd09(lat: f64, lng: f64, sys: &str) -> Result<(f64, f64), Error> {
     if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lng) {
-        return Err(format!("经纬度超出范围: ({lat}, {lng})"));
+        return Err(ErrorKind::fence(format!("经纬度超出范围: ({lat}, {lng})")));
     }
     if lat.abs() < 1e-9 && lng.abs() < 1e-9 {
-        return Err("(0, 0) 不是有效位置；请填校区经纬度，或点「在地图上点选」".into());
+        return Err(ErrorKind::fence(
+            "(0, 0) 不是有效位置；请填校区经纬度，或点「在地图上点选」".into(),
+        ));
     }
     Ok(match sys {
         "wgs84" => crate::api::coord::wgs84_to_bd09(lat, lng),
@@ -45,7 +48,7 @@ pub(crate) fn handle_plan(
     request: tiny_http::Request,
     state: Shared,
     body: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let distance_km = body["distance"].as_f64().unwrap_or(2.0);
     let duration_min = body["duration"].as_f64().unwrap_or(12.0);
     // 0 或缺失都表示「没指定」，交给模型按配速推算。
@@ -68,7 +71,7 @@ pub(crate) fn handle_plan(
     let (lat, lng) = match (body["lat"].as_f64(), body["lng"].as_f64()) {
         (Some(a), Some(b)) => match input_to_bd09(a, b, coord_sys) {
             Ok(c) => c,
-            Err(e) => return json_err(request, &e),
+            Err(e) => return json_err_kind(request, &e),
         },
         _ => {
             let client = {
@@ -85,7 +88,7 @@ pub(crate) fn handle_plan(
                 .and_then(|fs| crate::api::fence::center_from_fences(&fs))
             {
                 Ok(c) => c,
-                Err(e) => return json_err(request, &format!("无法确定校区位置: {e}")),
+                Err(e) => return json_err_kind(request, &e),
             }
         }
     };
@@ -310,7 +313,7 @@ pub(crate) fn handle_plan(
         let mut rng = rand::rngs::StdRng::seed_from_u64(start_ms as u64);
         let t = match crate::track::plan(&req, &mut rng) {
             Ok(t) => t,
-            Err(e) => return json_err(request, &format!("轨迹规划失败: {e}")),
+            Err(e) => return json_err_kind(request, &e),
         };
         let pts: Vec<(f64, f64)> = t.points.iter().map(|p| (p.lat, p.lon)).collect();
         (pts, t.actual_length_m)
@@ -362,7 +365,7 @@ pub(crate) fn handle_plan(
     };
     let sim = match crate::track::simulate(&pts3, &sim_params) {
         Ok(s) => s,
-        Err(e) => return json_err(request, &format!("数据合成失败: {e}")),
+        Err(e) => return json_err_kind(request, &e),
     };
     let steps = sim.total_steps;
 
@@ -410,7 +413,7 @@ pub(crate) fn handle_plan(
 
     let sub = match crate::api::submit::build(&params, &track_points, &[], &sim) {
         Ok(s) => s,
-        Err(e) => return json_err(request, &format!("报文组装失败: {e}")),
+        Err(e) => return json_err_kind(request, &e),
     };
     let track = crate::track::PlanResult {
         points: track_points.clone(),
@@ -526,7 +529,7 @@ pub(crate) fn handle_run(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let distance_km = body["distance"].as_f64().unwrap_or(2.0);
     let duration_min = body["duration"].as_f64().unwrap_or(12.0);
     let lat = body["lat"].as_f64();
@@ -584,7 +587,7 @@ pub(crate) fn handle_run(
     let (clat, clng) = match (lat, lng) {
         (Some(a), Some(b)) => match input_to_bd09(a, b, coord_sys) {
             Ok(c) => c,
-            Err(e) => return json_err(request, &e),
+            Err(e) => return json_err_kind(request, &e),
         },
         _ => match crate::api::fence::fetch_fences(&client)
             .and_then(|fs| crate::api::fence::center_from_fences(&fs))
@@ -595,7 +598,7 @@ pub(crate) fn handle_run(
             // 错误信息自带诊断（geoFences 个数、各围栏点数、字段名），
             // 用户直接贴过来就能判断是「服务端没数据」还是「字段改名了」。
             Err(e) => {
-                return json_err(request, &format!("无法确定校区位置: {e}"));
+                return json_err_kind(request, &e);
             }
         },
     };

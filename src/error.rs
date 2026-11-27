@@ -101,6 +101,19 @@ impl ErrorKind {
         }
     }
 
+    /// 不带类别前缀的原始文案，给已经自带上下文的提示用（例如「第 5 条：…」）。
+    pub fn message(&self) -> String {
+        match self {
+            ErrorKind::Auth(m)
+            | ErrorKind::Network(m)
+            | ErrorKind::RateLimit(m)
+            | ErrorKind::Fence(m)
+            | ErrorKind::Client(m) => m.clone(),
+            ErrorKind::Protocol { msg, .. } => msg.clone(),
+            other => other.to_string(),
+        }
+    }
+
     /// Web 响应体里的 `kind` 字段取值。脚本按这个字段分流,不再解析中文。
     pub fn kind_name(&self) -> &'static str {
         match self {

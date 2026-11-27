@@ -3,6 +3,7 @@
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::UserProfile;
 use crate::api::{accounts, session};
+use crate::error::{Error, ErrorKind};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -161,18 +162,20 @@ impl State {
         dir: &Path,
         id: &str,
         action: AccountSessionAction,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let mut book = self.book.clone();
         match action {
             AccountSessionAction::Logout => {
-                let account = book.get_mut(id).ok_or("账号不存在")?;
+                let account = book
+                    .get_mut(id)
+                    .ok_or_else(|| ErrorKind::client("账号不存在".into()))?;
                 account.token.clear();
                 account.uid.clear();
                 account.unid.clear();
             }
             AccountSessionAction::Delete => {
                 if !book.remove(id) {
-                    return Err("账号不存在".into());
+                    return Err(ErrorKind::client("账号不存在".into()));
                 }
             }
         }

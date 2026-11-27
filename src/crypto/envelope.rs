@@ -18,6 +18,7 @@
 //! - AES key 每次请求随机，用 RSA-1024 公钥按 PKCS#1 v1.5 加密后放在 `k`
 //! - 内层 JSON 字段顺序和末尾换行都不能改，否则 MD5 对不上
 
+use crate::error::{Error, ErrorKind};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use md5::{Digest, Md5};
@@ -92,17 +93,17 @@ pub struct Envelope {
 /// 把业务明文打成信封。
 ///
 /// `plaintext` 应该已经是 JSON 字符串（调用方负责序列化）。
-pub fn seal(plaintext: &str) -> Result<Envelope, String> {
+pub fn seal(plaintext: &str) -> Result<Envelope, Error> {
     seal_with_session(plaintext, SessionKeys::generate())
 }
 
 /// 指定外层字段顺序打信封。
-pub fn seal_with_order(plaintext: &str, order: OuterOrder) -> Result<Envelope, String> {
+pub fn seal_with_order(plaintext: &str, order: OuterOrder) -> Result<Envelope, Error> {
     seal_full(plaintext, SessionKeys::generate(), order)
 }
 
 /// 用指定会话打信封（测试用；生产中每次新建会话）。
-pub fn seal_with_session(plaintext: &str, session: SessionKeys) -> Result<Envelope, String> {
+pub fn seal_with_session(plaintext: &str, session: SessionKeys) -> Result<Envelope, Error> {
     seal_full(plaintext, session, OuterOrder::Insert)
 }
 
@@ -111,14 +112,14 @@ pub fn seal_full(
     plaintext: &str,
     session: SessionKeys,
     order: OuterOrder,
-) -> Result<Envelope, String> {
+) -> Result<Envelope, Error> {
     // 1. 业务明文 → base64
     let b64_data = B64.encode(plaintext.as_bytes());
 
     // 2. 内层 JSON（顺序固定，末尾加换行）
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("系统时间异常: {e}"))?
+        .map_err(|e| ErrorKind::client(format!("系统时间异常: {e}")))?
         .as_secs();
     let inner = format!(
         "{{\"data\":\"{b64_data}\",\"keyDataFour\":\"{}\",\"keyDataOne\":\"{}\",\
@@ -140,18 +141,19 @@ pub fn seal_full(
 
     // 5. AES-128-CBC，IV 全零
     let ciphertext = Aes128CbcEnc::new_from_slices(&req_key, &[0u8; 16])
-        .map_err(|e| format!("AES 初始化失败: {e}"))?
+        .map_err(|e| ErrorKind::client(format!("AES 初始化失败: {e}")))?
         .encrypt_padded_vec_mut::<Pkcs7>(inner_bytes);
     let d = B64.encode(&ciphertext);
 
     // 6. RSA PKCS#1 v1.5 加密 AES key
     let der = B64
         .decode(REQ_RSA_PKCS1_B64)
-        .map_err(|e| format!("公钥 base64 解码失败: {e}"))?;
-    let pubkey = RsaPublicKey::from_pkcs1_der(&der).map_err(|e| format!("公钥解析失败: {e}"))?;
+        .map_err(|e| ErrorKind::client(format!("公钥 base64 解码失败: {e}")))?;
+    let pubkey = RsaPublicKey::from_pkcs1_der(&der)
+        .map_err(|e| ErrorKind::client(format!("公钥解析失败: {e}")))?;
     let enc_key = pubkey
         .encrypt(&mut rsa::rand_core::OsRng, Pkcs1v15Encrypt, &req_key)
-        .map_err(|e| format!("RSA 加密失败: {e}"))?;
+        .map_err(|e| ErrorKind::client(format!("RSA 加密失败: {e}")))?;
     let k = B64.encode(&enc_key);
 
     let wire = match order {
@@ -178,9 +180,9 @@ pub fn now_ms() -> u64 {
 ///
 /// 业务信封固定用全零 IV，但极验的 `w` 参数要求 IV 为 ASCII `"0000000000000000"`，
 /// 所以单独暴露一个通用入口，别把两种用途混在一起。
-pub fn aes128_cbc_encrypt_iv(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub fn aes128_cbc_encrypt_iv(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     Aes128CbcEnc::new_from_slices(key, iv)
-        .map_err(|e| format!("AES 初始化失败: {e}"))
+        .map_err(|e| ErrorKind::client(format!("AES 初始化失败: {e}")))
         .map(|c| c.encrypt_padded_vec_mut::<Pkcs7>(plaintext))
 }
 

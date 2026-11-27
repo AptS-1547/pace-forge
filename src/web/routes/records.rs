@@ -1,6 +1,7 @@
 //! 记录列表与详情、OBS 轨迹回读、审核/违规状态，以及 `/api/raw` 透传。
 
 use crate::api::records;
+use crate::error::Error;
 use crate::web::http::json_err_kind;
 use crate::web::http::{json_err, json_ok, query_param};
 use crate::web::state::{Shared, lock_state};
@@ -10,7 +11,7 @@ pub(crate) fn handle_obs_fetch(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let key = match body.get("key").and_then(|v| v.as_str()) {
         Some(k) if k.starts_with("run_data/") || k.starts_with("runData/") => k.to_string(),
         _ => return json_err(request, "key 参数缺失或格式不对"),
@@ -38,7 +39,7 @@ pub(crate) fn handle_raw(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
     if !path.starts_with("/api/") {
         return json_err(request, "path 必须是 /api/ 开头");
@@ -109,7 +110,7 @@ pub(crate) fn handle_cheat(
     request: tiny_http::Request,
     state: Shared,
     query: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let page = query_param(query, "page")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1i64);
@@ -159,7 +160,7 @@ pub(crate) fn handle_records(
     request: tiny_http::Request,
     state: Shared,
     query: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let page = query_param(query, "page")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1u32);
@@ -193,7 +194,7 @@ pub(crate) fn handle_record_detail(
     request: tiny_http::Request,
     state: Shared,
     rrid: i64,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     // 先把 client 克隆出来再放锁。Client 是 Clone，网络请求几十秒，
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。

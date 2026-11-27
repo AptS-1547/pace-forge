@@ -18,6 +18,7 @@
 //! 注意显示侧（web/index.html）拿到的 `ip` 字符串来自外部接口，渲染必须
 //! 走 `textContent`，不许拼 `innerHTML`。
 
+use crate::error::{Error, ErrorKind};
 use serde_json::{Value, json};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -50,7 +51,7 @@ fn load_config_once() -> Option<String> {
 }
 
 /// 保存出口配置。`None` / 空串表示清掉（回到直连）。
-pub fn save_proxy(spec: Option<&str>) -> Result<(), String> {
+pub fn save_proxy(spec: Option<&str>) -> Result<(), Error> {
     match spec.map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => {
             let clean = parse_proxy(raw)?; // 先校验再落盘，坏值不写进去
@@ -63,7 +64,7 @@ pub fn save_proxy(spec: Option<&str>) -> Result<(), String> {
             match std::fs::remove_file(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("清出口配置失败: {e}")),
+                Err(e) => return Err(ErrorKind::client(format!("清出口配置失败: {e}"))),
             }
             *runtime_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         }
@@ -96,22 +97,26 @@ const TTL: Duration = Duration::from_secs(300);
 ///
 /// 只认 `http://host:port`：ureq 2 的 `Proxy` 走 HTTP CONNECT，`socks5://`
 /// 需要额外 feature，这里先不给一个「写上了却不生效」的选项。
-pub fn parse_proxy(spec: &str) -> Result<String, String> {
+pub fn parse_proxy(spec: &str) -> Result<String, Error> {
     let spec = spec.trim();
-    let rest = spec
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("只支持 http:// 前缀的 CONNECT 代理，收到：{spec}"))?;
+    let rest = spec.strip_prefix("http://").ok_or_else(|| {
+        ErrorKind::client(format!("只支持 http:// 前缀的 CONNECT 代理，收到：{spec}"))
+    })?;
     // 去掉 user:pass@
     let host_port = rest.rsplit('@').next().unwrap_or(rest);
-    let (host, port) = host_port
-        .rsplit_once(':')
-        .ok_or_else(|| format!("代理要带端口，例如 http://10.0.0.2:7890，收到：{host_port}"))?;
+    let (host, port) = host_port.rsplit_once(':').ok_or_else(|| {
+        ErrorKind::client(format!(
+            "代理要带端口，例如 http://10.0.0.2:7890，收到：{host_port}"
+        ))
+    })?;
     if host.is_empty() {
-        return Err("代理主机为空".into());
+        return Err(ErrorKind::client("代理主机为空".into()));
     }
     match port.parse::<u16>() {
         Ok(p) if p > 0 => Ok(format!("http://{host}:{p}")),
-        _ => Err(format!("代理端口不是 1..65535 的整数：{port}")),
+        _ => Err(ErrorKind::client(format!(
+            "代理端口不是 1..65535 的整数：{port}"
+        ))),
     }
 }
 

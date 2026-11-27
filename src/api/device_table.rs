@@ -12,6 +12,7 @@
 //!
 //! 表是编译进二进制的（`include_str!`），不依赖运行目录，也不需要网络。
 
+use crate::error::{Error, ErrorKind};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -326,14 +327,14 @@ fn user_models() -> BTreeMap<String, String> {
 }
 
 /// 记一条用户级映射并刷缓存。`platform` 必须在内置 `platforms` 里。
-pub fn set_user_model(model: &str, platform: &str) -> Result<(), String> {
+pub fn set_user_model(model: &str, platform: &str) -> Result<(), Error> {
     let model = model.trim();
     let platform = platform.trim();
     if model.is_empty() || platform.is_empty() {
-        return Err("机型 code 和平台代号都要填".into());
+        return Err(ErrorKind::client("机型 code 和平台代号都要填".into()));
     }
     if soc_for_platform(platform).is_none() {
-        return Err(format!(
+        return Err(ErrorKind::client(format!(
             "平台代号 `{platform}` 不在内置表里（可选：{}）",
             table()
                 .platforms
@@ -341,7 +342,7 @@ pub fn set_user_model(model: &str, platform: &str) -> Result<(), String> {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(" / ")
-        ));
+        )));
     }
     let path = user_models_path();
     let mut all: Value = std::fs::read_to_string(&path)
@@ -349,7 +350,7 @@ pub fn set_user_model(model: &str, platform: &str) -> Result<(), String> {
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_else(|| serde_json::json!({ "models": {} }));
     all["models"][model] = serde_json::json!({ "platform": platform, "src": "web" });
-    let text = serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&all)?;
     crate::api::session::write_file_private(&path, text.as_bytes())?;
     // 刷新缓存（与读取侧共用 user_cache()）
     {

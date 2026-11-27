@@ -9,6 +9,7 @@
 //! 数组，也可以是 `{"records":[...]}`；每条记录的字段名按常见别名挑，
 //! 轨迹可选（没有轨迹就算不了重合度）。
 
+use crate::error::{Error, ErrorKind};
 use serde_json::Value;
 
 /// 本地时区偏移（秒），复用 OBS key 与时间戳那一套口径。
@@ -177,15 +178,18 @@ pub struct LocalRecordImport {
     pub issues: Vec<String>,
 }
 
-fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, String> {
+fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, Error> {
     let decoded;
     let value = if let Some(raw) = value.as_str() {
-        decoded = serde_json::from_str::<Value>(raw).map_err(|_| "轨迹字符串不是合法 JSON")?;
+        decoded = serde_json::from_str::<Value>(raw)
+            .map_err(|_| ErrorKind::client("轨迹字符串不是合法 JSON".into()))?;
         &decoded
     } else {
         value
     };
-    let points = value.as_array().ok_or("轨迹应为坐标数组")?;
+    let points = value
+        .as_array()
+        .ok_or_else(|| ErrorKind::client("轨迹应为坐标数组".into()))?;
     points
         .iter()
         .enumerate()
@@ -195,14 +199,18 @@ fn checked_local_track(value: &Value) -> Result<Vec<(f64, f64)>, String> {
             {
                 Ok((lat, lon))
             }
-            _ => Err(format!("轨迹第 {} 点的经纬度无效", index + 1)),
+            _ => Err(ErrorKind::client(format!(
+                "轨迹第 {} 点的经纬度无效",
+                index + 1
+            ))),
         })
         .collect()
 }
 
 /// 检查导入的记录，记录无法参与统计的原始行号和原因。
-pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, &'static str> {
-    let rows = record_rows(value).ok_or("需要记录数组，或包含 records/list 数组的对象")?;
+pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, Error> {
+    let rows = record_rows(value)
+        .ok_or_else(|| ErrorKind::client("需要记录数组，或包含 records/list 数组的对象".into()))?;
     let mut result = LocalRecordImport {
         records: Vec::with_capacity(rows.len()),
         row_numbers: Vec::with_capacity(rows.len()),
@@ -243,7 +251,7 @@ pub fn parse_local_records(value: &Value) -> Result<LocalRecordImport, &'static 
         {
             Some(Ok(track)) => track,
             Some(Err(detail)) => {
-                issue(&format!("{detail}，此条轨迹不参加统计"));
+                issue(&format!("{}，此条轨迹不参加统计", detail.message()));
                 Vec::new()
             }
             None => Vec::new(),
@@ -598,7 +606,9 @@ mod tests {
         assert!(imported.issues[0].starts_with("第 2 条"));
         assert!(imported.issues[1].starts_with("第 3 条"));
         assert!(imported.issues[2].contains("第 4 条：用时"));
-        assert!(imported.issues[3].contains("第 4 条：轨迹第 2 点"));
+        assert!(
+            imported.issues[3].contains("第 4 条") && imported.issues[3].contains("轨迹第 2 点")
+        );
         assert!(imported.issues[4].starts_with("第 5 条"));
     }
 

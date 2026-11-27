@@ -1353,14 +1353,12 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
                         p.distance_m,
                         25.0,
                         &must,
-                    )
-                    .map_err(ErrorKind::client)?
+                    )?
                 }
             }
         } else {
             log("[track] 没有打卡点，沿围栏内缩 25m 跑");
-            crate::track::fence_route::route_along_fence(&fence_ring, p.distance_m, 25.0, &must)
-                .map_err(ErrorKind::fence)?
+            crate::track::fence_route::route_along_fence(&fence_ring, p.distance_m, 25.0, &must)?
         };
         // 沿边界是贴着围墙的稀疏折线，拐角磨圆 + 轻微摆动，别像尺子画的。
         //
@@ -1506,7 +1504,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         let mut rng =
             rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });
         let _ = &mut rng;
-        plan(&req, &mut rng).map_err(ErrorKind::fence)?
+        plan(&req, &mut rng)?
     };
     // 指定了终点就核对一下末点：planner 里已经钉住了，但 flow 后面还有
     // 避让/采样/吸附几道处理，任何一道都可能把末点挪开。这里的日志是给
@@ -1818,7 +1816,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         seed: if p.seed != 0 { p.seed } else { start_ms as u64 },
         ..Default::default()
     };
-    let sim = simulate(&timed, &sp).map_err(ErrorKind::fence)?;
+    let sim = simulate(&timed, &sp)?;
     log(&format!(
         "√ [simulate] {} 步，平均步频 {:.1} 步/分，{} 个分桶",
         sim.total_steps,
@@ -2541,8 +2539,7 @@ pub fn run_full(
     //
     // 三道拦截见 `guard::Guard::check`：上次结果未知 → 拦；时间段重叠 →
     // 拦；不同账号 → 各记各的。
-    let mut guard =
-        super::guard::Guard::open(&super::session::data_dir(), &uid).map_err(ErrorKind::client)?;
+    let mut guard = super::guard::Guard::open(&super::session::data_dir(), &uid)?;
     // 有别的时段的未知结果时放行（它不影响这一段的判重），但要说一声：
     // 那条记录可能已经在服务端，用户该去核对。
     if let Some((ps, pe)) = guard.pending_range() {
@@ -2553,9 +2550,7 @@ pub fn run_full(
             super::guard::fmt_ms(pe)
         ));
     }
-    guard
-        .begin(&uuid, start_ms, stop_ms)
-        .map_err(ErrorKind::client)?;
+    guard.begin(&uuid, start_ms, stop_ms)?;
     log(&format!(
         "[guard] 台账已记 pending（{} ~ {}），提交中…",
         start_ms, stop_ms
@@ -2705,7 +2700,7 @@ pub fn run_full(
             // 响应解析失败一律留着 pending —— 请求可能已经入账，只是我们
             // 没看到回执。这条区分是整套台账的立足点。
             if f.rejected {
-                guard.rejected(&uuid).map_err(ErrorKind::client)?;
+                guard.rejected(&uuid)?;
                 log("[guard] 服务端明确驳回，已释放该时间段");
             } else {
                 log("[guard] 提交结果未知，台账保留 pending（不会自动重试）");

@@ -1714,6 +1714,7 @@ mod checkpoint_hit_tests {
 
     use super::*;
     use crate::api::submit::{SubmitParams, build, verify_view};
+    use crate::error::Error;
     use crate::track::preflight::{Check, inspect};
     use rand::SeedableRng;
 
@@ -1751,7 +1752,7 @@ mod checkpoint_hit_tests {
         dur: i64,
         seed: u64,
         snap: bool,
-    ) -> Result<(Vec<TrackPoint>, i64, SnapReport), String> {
+    ) -> Result<(Vec<TrackPoint>, i64, SnapReport), Error> {
         let req = PlanRequest {
             center_lat: 47.3801,
             center_lng: 103.9521,
@@ -2153,7 +2154,7 @@ mod checkpoint_hit_tests {
                         // 只允许「装不下」这一种：闭环最短 2109m，1000/1683 两组
                         // 本来就塞不进 5 个点位。若哪天变成别的错，这里会失败。
                         assert!(
-                            e.contains("装不下"),
+                            e.to_string().contains("装不下"),
                             "planner dist={dist} dur={dur} seed={seed} 出现预期外的错误：{e}"
                         );
                     }

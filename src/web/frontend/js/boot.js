@@ -20,7 +20,10 @@ async function boot(candidate) {
   try {
     me = await api('/api/me', candidate ? { headers: { 'X-Pace-Token': candidate } } : undefined);
   } catch (e) {
-    if (e.status === 401) {
+    // Only the console password failure is 401 + console_auth; a vendor session
+    // expiring is 401 + auth and must show its message instead of the unlock box.
+ {
+    if (e.status === 401 && e.kind === 'console_auth') {
       showConsoleUnlock(candidate || consoleToken);
       return;
     }
@@ -50,7 +53,7 @@ async function boot(candidate) {
     const usable = (r.accounts || []).filter(a => a.hasPassword);
     if (usable.length) showPicker(usable, r);
   } catch (e) {
-    if (e.status === 401) showConsoleUnlock(consoleToken);
+    if (e.status === 401 && e.kind === 'console_auth') showConsoleUnlock(consoleToken);
     else setMsg(e.message, 'err');
   }
 }

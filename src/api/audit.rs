@@ -12,6 +12,7 @@
 //! 数据来自 `pace-forge export-records`，不联网、不读账号。
 
 use crate::api::crosscheck::{self as cc, RunRecord};
+use crate::error::{Error, ErrorKind};
 
 /// 连续天数到多少算「值得看一眼」。学校层面一般按周看，5 天已经能画出一根直线。
 pub const STREAK_WARN_DAYS: usize = 5;
@@ -279,24 +280,32 @@ pub fn findings(m: &Metrics) -> Vec<Finding> {
 ///
 /// 放在 lib 里而不是 `main.rs`：CI 跑的是 `cargo test --lib`，写在 main 里
 /// 的测试不会被执行。
-pub fn parse_tracks_args(args: &[String]) -> Result<(Option<String>, Option<usize>), String> {
+pub fn parse_tracks_args(args: &[String]) -> Result<(Option<String>, Option<usize>), Error> {
     let mut file: Option<String> = None;
     let mut top: Option<usize> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--top" => {
-                let v = it.next().ok_or("--top 缺少次数，例如 --top 20")?;
-                let n: usize = v.parse().map_err(|_| format!("--top 不是整数：「{v}」"))?;
+                let v = it
+                    .next()
+                    .ok_or_else(|| ErrorKind::client("--top 缺少次数，例如 --top 20".into()))?;
+                let n: usize = v
+                    .parse()
+                    .map_err(|_| ErrorKind::client(format!("--top 不是整数：「{v}」")))?;
                 if !(1..=5000).contains(&n) {
-                    return Err(format!("--top 需在 1..5000 之间，收到 {n}"));
+                    return Err(ErrorKind::client(format!(
+                        "--top 需在 1..5000 之间，收到 {n}"
+                    )));
                 }
                 top = Some(n);
             }
-            s if s.starts_with("--") => return Err(format!("未知参数：{s}")),
+            s if s.starts_with("--") => return Err(ErrorKind::client(format!("未知参数：{s}"))),
             s => {
                 if file.is_some() {
-                    return Err(format!("多余的参数：{s}（只接一个记录文件）"));
+                    return Err(ErrorKind::client(format!(
+                        "多余的参数：{s}（只接一个记录文件）"
+                    )));
                 }
                 file = Some(s.to_string());
             }

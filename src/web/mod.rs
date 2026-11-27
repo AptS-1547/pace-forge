@@ -21,10 +21,12 @@ use serde_json::json;
 use tiny_http::{Method, Response, Server};
 
 use crate::api::session;
+use crate::error::{Error, ErrorKind};
 use crate::web::assets::{INDEX_HTML, STATIC_ASSETS};
 use crate::web::console_auth::{auth_token, check_auth, origin_matches_host};
 use crate::web::http::{
-    header, json_err, json_err_code, json_ok, query_param, read_json, respond_static,
+    header, json_err, json_err_code, json_err_kind, json_ok, query_param, read_json, respond_json,
+    respond_static,
 };
 use crate::web::state::{AccountSessionAction, Shared, State, lock_state};
 use routes::*;
@@ -57,8 +59,9 @@ fn try_admit() -> Option<InflightGuard> {
     }
 }
 
-pub fn serve(addr: &str) -> Result<(), String> {
-    let server = Server::http(addr).map_err(|e| format!("监听 {addr} 失败: {e}"))?;
+pub fn serve(addr: &str) -> Result<(), Error> {
+    let server =
+        Server::http(addr).map_err(|e| ErrorKind::client(format!("监听 {addr} 失败: {e}")))?;
     let state: Shared = Arc::new(Mutex::new(State::restore()));
 
     println!("Web 控制台已启动: http://{addr}");
@@ -97,7 +100,7 @@ pub fn serve(addr: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> {
+fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), Error> {
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/").to_string();
     let query = url.split('?').nth(1).unwrap_or("").to_string();
@@ -106,6 +109,15 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
     if path.starts_with("/api/") {
         let token = auth_token();
         if let Err((code, msg)) = check_auth(&request, token.as_deref()) {
+            // 401 is shared with vendor-session failures (`kind: "auth"`), so the
+            // console password failure carries its own kind and the frontend keys on it.
+            if code == 401 {
+                return respond_json(
+                    request,
+                    code,
+                    json!({"ok": false, "error": msg, "kind": "console_auth"}),
+                );
+            }
             return json_err_code(request, code, &msg);
         }
         // 没设口令时再挡一层跨站写：任何网页都能盲打 POST /api/run 或删账号，
@@ -144,7 +156,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_login(request, state, &body)
         }
@@ -178,7 +190,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             if let Err(error) =
                 st.end_account_session(&session::data_dir(), &id, AccountSessionAction::Logout)
             {
-                return json_err(request, &error);
+                return json_err_kind(request, &error);
             }
             json_ok(request, json!({"ok": true, "remoteLogout": remote}))
         }
@@ -188,7 +200,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_plan(request, state, &body)
         }
@@ -200,7 +212,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_add_account(request, state, &body)
         }
@@ -211,7 +223,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_batch(request, state, &body)
         }
@@ -222,7 +234,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_run(request, state, &body)
         }
@@ -232,7 +244,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Post, "/api/egress") => {
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_egress_put(request, state, &body)
         }
@@ -240,7 +252,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
         (Method::Post, "/api/device") => {
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_device_put(request, state, &body)
         }
@@ -252,7 +264,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_blockers_put(request, &body)
         }
@@ -262,7 +274,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_obs_fetch(request, state, &body)
         }
@@ -272,7 +284,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), String> 
             // 「请求写错了」和「服务器崩了」。
             let body = match read_json(&mut request) {
                 Ok(v) => v,
-                Err(e) => return json_err_code(request, 400, &e),
+                Err(e) => return json_err_code(request, 400, &e.to_string()),
             };
             handle_raw(request, state, &body)
         }

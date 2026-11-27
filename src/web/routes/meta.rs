@@ -1,13 +1,14 @@
 //! 起跑时段、学期进度、出口设置、设备机型与网络自检。
 
-use crate::web::http::{host_short, json_err, json_ok, percent_encode, query_param};
+use crate::error::Error;
+use crate::web::http::{host_short, json_err, json_err_kind, json_ok, percent_encode, query_param};
 use crate::web::state::{Shared, device_scope, lock_state};
 use serde_json::{Value, json};
 
 /// 算补跑时刻。查询参数：`mode`=at|ago|rand，`hhmm`、`days`、`minutes`、`dur`。
 ///
 /// 只算不跑，前端拿到结果给用户确认；确认后再带着 `startAtMs` 调 `/api/run`。
-pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), String> {
+pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), Error> {
     use crate::api::start_time as st;
 
     let q = request.url().split_once('?').map(|x| x.1).unwrap_or("");
@@ -33,7 +34,7 @@ pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), Strin
             let hhmm = get("hhmm").unwrap_or_else(|| "07:30".into());
             match st::parse_hhmm(&hhmm) {
                 Ok((h, m)) => st::specified(now, days, h, m, dur_s),
-                Err(e) => return json_err(request, &e),
+                Err(e) => return json_err_kind(request, &e),
             }
         }
         "ago" => {
@@ -73,11 +74,11 @@ pub(crate) fn handle_starttimes(request: tiny_http::Request) -> Result<(), Strin
                 },
             }),
         ),
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
-pub(crate) fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), String> {
+pub(crate) fn handle_semester(request: tiny_http::Request, state: Shared) -> Result<(), Error> {
     // 先把 client 克隆出来再放锁。Client 是 Clone，网络请求几十秒，
     // 持着 Mutex 做 IO 会让 /api/accounts 之类的请求全部排队，
     // 页面看起来就是「服务假死」。
@@ -190,14 +191,14 @@ pub(crate) fn handle_egress_put(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     use crate::api::egress;
     let spec = body["proxy"]
         .as_str()
         .map(str::trim)
         .filter(|p| !p.is_empty());
     if let Err(e) = egress::save_proxy(spec) {
-        return json_err(request, &e);
+        return json_err_kind(request, &e);
     }
     let n = {
         let mut st = lock_state(&state);
@@ -223,7 +224,7 @@ pub(crate) fn handle_device_get(
     request: tiny_http::Request,
     state: Shared,
     query: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     use crate::api::{client, device_table};
     let (scope, cur_model) = {
         let st = lock_state(&state);
@@ -297,7 +298,7 @@ pub(crate) fn handle_device_put(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     use crate::api::client;
     let scope = {
         let st = lock_state(&state);
@@ -324,10 +325,10 @@ pub(crate) fn handle_device_put(
             .filter(|p| !p.is_empty()),
     ) && let Err(e) = crate::api::device_table::set_user_model(m, plat)
     {
-        return json_err(request, &e);
+        return json_err_kind(request, &e);
     }
     if let Err(e) = client::save_account_model(&scope, model) {
-        return json_err(request, &e);
+        return json_err_kind(request, &e);
     }
     // 重建当前 client，让新的 cpuModel 立刻生效（下一次请求就是新机型）
     {
@@ -355,7 +356,7 @@ pub(crate) fn handle_device_put(
 /// 生成轨迹卡在「拉路网 / 建筑 / 瓦片」时，最需要回答的是「到底哪条不通」。
 /// 这里只做连通性探测（一个空 bbox 的极小查询、一张瓦片），不参与生成，
 /// 也不写缓存，失败不影响任何功能。
-pub(crate) fn handle_netcheck(request: tiny_http::Request) -> Result<(), String> {
+pub(crate) fn handle_netcheck(request: tiny_http::Request) -> Result<(), Error> {
     use std::time::{Duration, Instant};
     let mut items: Vec<Value> = Vec::new();
 

@@ -114,7 +114,7 @@ pub fn fetch_points_at_distance(
     let url = format!("{}{}", hosts::RUN, points_path(distance_m));
     let start_ms = now_ms() as i64;
     let runec_plain = runec_plain(&uid, lon, lat, start_ms);
-    let env = seal_with_order(&runec_plain, OuterOrder::Observed).map_err(ErrorKind::protocol)?;
+    let env = seal_with_order(&runec_plain, OuterOrder::Observed)?;
 
     let mut body = json!({
         "sportType": 4,

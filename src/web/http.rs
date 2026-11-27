@@ -1,5 +1,6 @@
 //! HTTP 小工具：URL 解码、读请求体、查询参数、JSON 与静态资源响应。
 
+use crate::error::{Error, ErrorKind};
 use serde_json::{Value, json};
 use tiny_http::{Header, Response};
 
@@ -47,18 +48,20 @@ pub(super) fn url_decode(s: &str) -> String {
 /// 就把进程内存打满。
 pub(super) const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
 
-pub(super) fn read_json(request: &mut tiny_http::Request) -> Result<Value, String> {
+pub(super) fn read_json(request: &mut tiny_http::Request) -> Result<Value, Error> {
     // `read_to_string` 原来不带上限：客户端声明 `Content-Length: 1000000000`
     // 却只发一个字节，这行会一直读下去把线程钉住；真发满就直接吃光内存。
     // 用 `take` 卡住上限，超出的明确报错而不是硬读。
     use std::io::Read as _;
     let mut s = String::new();
     let mut r = std::io::Read::take(request.as_reader(), MAX_BODY_BYTES + 1);
-    r.read_to_string(&mut s).map_err(|e| e.to_string())?;
+    r.read_to_string(&mut s)?;
     if s.len() as u64 > MAX_BODY_BYTES {
-        return Err(format!("请求体超过 {MAX_BODY_BYTES} 字节上限"));
+        return Err(ErrorKind::client(format!(
+            "请求体超过 {MAX_BODY_BYTES} 字节上限"
+        )));
     }
-    serde_json::from_str(&s).map_err(|e| format!("请求体不是 JSON: {e}"))
+    serde_json::from_str(&s).map_err(|e| ErrorKind::client(format!("请求体不是 JSON: {e}")))
 }
 
 pub(super) fn query_param(query: &str, key: &str) -> Option<String> {
@@ -83,12 +86,12 @@ pub(super) fn respond_json(
     request: tiny_http::Request,
     status: u16,
     body: Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let s = serde_json::to_string(&body).unwrap_or_else(|_| "{}".into());
     let resp = Response::from_string(s)
         .with_status_code(status)
         .with_header(header("Content-Type", "application/json; charset=utf-8"));
-    request.respond(resp).map_err(|e| e.to_string())
+    request.respond(resp).map_err(ErrorKind::Storage)
 }
 
 /// `application/x-www-form-urlencoded` 的最小百分号编码（只用于自检查询串）。
@@ -114,11 +117,11 @@ pub(super) fn host_short(host: &str) -> String {
         .to_string()
 }
 
-pub(super) fn json_ok(request: tiny_http::Request, body: Value) -> Result<(), String> {
+pub(super) fn json_ok(request: tiny_http::Request, body: Value) -> Result<(), Error> {
     respond_json(request, 200, json!({"ok": true, "data": body}))
 }
 
-pub(super) fn json_err(request: tiny_http::Request, msg: &str) -> Result<(), String> {
+pub(super) fn json_err(request: tiny_http::Request, msg: &str) -> Result<(), Error> {
     respond_json(request, 200, json!({"ok": false, "error": msg}))
 }
 
@@ -127,7 +130,7 @@ pub(super) fn json_err(request: tiny_http::Request, msg: &str) -> Result<(), Str
 pub(super) fn json_err_kind(
     request: tiny_http::Request,
     e: &crate::error::Error,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut body = serde_json::json!({
         "ok": false,
         "error": e.to_string(),
@@ -143,7 +146,7 @@ pub(super) fn json_err_code(
     request: tiny_http::Request,
     code: u16,
     msg: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     respond_json(request, code, json!({"ok": false, "error": msg}))
 }
 
@@ -151,7 +154,7 @@ pub(super) fn respond_static(
     request: tiny_http::Request,
     body: &str,
     content_type: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let resp = Response::from_string(body)
         .with_header(header("Content-Type", content_type))
         .with_header(header("Referrer-Policy", "no-referrer"))
@@ -163,7 +166,7 @@ pub(super) fn respond_static(
         ))
         .with_header(header("Pragma", "no-cache"))
         .with_header(header("Expires", "0"));
-    request.respond(resp).map_err(|e| e.to_string())
+    request.respond(resp).map_err(ErrorKind::Storage)
 }
 
 #[cfg(test)]

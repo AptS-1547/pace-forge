@@ -3,6 +3,7 @@
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{LoginOutcome, login};
 use crate::api::session;
+use crate::error::Error;
 use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::routes::parse_alt_range;
 use crate::web::state::{AccountSessionAction, Shared, lock_state, remote_logout};
@@ -26,7 +27,7 @@ pub(crate) fn account_view(a: &crate::api::accounts::Account, current: bool) -> 
     })
 }
 
-pub(crate) fn handle_accounts(request: tiny_http::Request, state: Shared) -> Result<(), String> {
+pub(crate) fn handle_accounts(request: tiny_http::Request, state: Shared) -> Result<(), Error> {
     let st = lock_state(&state);
     let cur = st.current.clone().unwrap_or_default();
     let list: Vec<Value> = st
@@ -50,7 +51,7 @@ pub(crate) fn handle_add_account(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let username = body["username"].as_str().unwrap_or("").trim().to_string();
     let password = body["password"].as_str().unwrap_or("").to_string();
     if username.is_empty() || password.is_empty() {
@@ -102,7 +103,7 @@ pub(crate) fn handle_del_account(
     state: Shared,
     id: &str,
     force: bool,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     // 先退出登录，再从本地删掉。顺序不能反：直接删只是丢掉本地凭据，服务端
     // 会话还活着，账号仍被标记「已登录」——下次登录触发 10121 并锁一小时，
     // 用户看到的就是「删完就锁我」。
@@ -136,7 +137,7 @@ pub(crate) fn handle_del_account(
     if let Err(error) =
         st.end_account_session(&session::data_dir(), id, AccountSessionAction::Delete)
     {
-        return json_err(request, &error);
+        return json_err_kind(request, &error);
     }
     json_ok(
         request,
@@ -155,13 +156,13 @@ pub(crate) fn handle_logout_one(
     request: tiny_http::Request,
     state: Shared,
     id: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut st = lock_state(&state);
     let remote = remote_logout(&mut st, id);
     let was_current =
         match st.end_account_session(&session::data_dir(), id, AccountSessionAction::Logout) {
             Ok(was_current) => was_current,
-            Err(error) => return json_err(request, &error),
+            Err(error) => return json_err_kind(request, &error),
         };
     json_ok(
         request,
@@ -173,7 +174,7 @@ pub(crate) fn handle_switch(
     request: tiny_http::Request,
     state: Shared,
     id: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut st = lock_state(&state);
     if st.book.get(id).is_none() {
         return json_err(request, "账号不存在");
@@ -186,7 +187,7 @@ pub(crate) fn handle_toggle(
     request: tiny_http::Request,
     state: Shared,
     id: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut st = lock_state(&state);
     let enabled = match st.book.get_mut(id) {
         Some(a) => {
@@ -204,7 +205,7 @@ pub(crate) fn handle_login_one(
     request: tiny_http::Request,
     state: Shared,
     id: &str,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let (username, password) = {
         let st = lock_state(&state);
         match st.book.get(id) {
@@ -214,7 +215,7 @@ pub(crate) fn handle_login_one(
                 }
                 match crate::api::accounts::open_password(&a.password_enc) {
                     Ok(p) => (a.username.clone(), p),
-                    Err(e) => return json_err(request, &e),
+                    Err(e) => return json_err_kind(request, &e),
                 }
             }
             None => return json_err(request, "账号不存在"),
@@ -237,7 +238,7 @@ pub(crate) fn handle_login_one(
 }
 
 /// 批量登录所有账号。
-pub(crate) fn handle_login_all(request: tiny_http::Request, state: Shared) -> Result<(), String> {
+pub(crate) fn handle_login_all(request: tiny_http::Request, state: Shared) -> Result<(), Error> {
     let todo: Vec<(String, String, String)> = {
         let st = lock_state(&state);
         st.book
@@ -293,7 +294,7 @@ pub(crate) fn handle_batch(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let distance_km = body["distance"].as_f64().unwrap_or(2.0);
     let duration_min = body["duration"].as_f64().unwrap_or(12.0);
     let run_mode = body["runMode"].as_i64().unwrap_or(1);

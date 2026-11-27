@@ -2,6 +2,7 @@
 
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{LoginOutcome, login};
+use crate::error::Error;
 use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
@@ -10,7 +11,7 @@ pub(crate) fn handle_login(
     request: tiny_http::Request,
     state: Shared,
     body: &Value,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let username = body
         .get("username")
         .and_then(|x| x.as_str())

@@ -56,6 +56,7 @@ const api = async (url, opt) => {
   if (!r.ok || !j.ok) {
     const error = new Error(j.error || '请求失败');
     error.status = r.status;
+    error.kind = j.kind;
     throw error;
   }
   return j.data;
