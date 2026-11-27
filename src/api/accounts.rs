@@ -173,15 +173,6 @@ impl Book {
 // 落盘
 // ---------------------------------------------------------------------------
 
-/// 给定 HOME 基目录，拼出账号库路径：`<base>/.pace-forge/accounts.json`。
-///
-/// **纯路径计算，不碰磁盘。** 测试用它把路径注入到一次性临时目录，从而完全
-/// 不碰真实 `$HOME/.pace-forge/accounts.json`。
-#[cfg(test)]
-pub(crate) fn book_path_in(base: &std::path::Path) -> std::path::PathBuf {
-    data_dir_in(base).join("accounts.json")
-}
-
 /// 本机密钥：由「机器标识 + 用户名」派生出 16 字节。
 ///
 /// 不是"安全"的密钥管理，目的是**换机器解不开**，而不是防同机攻击。
@@ -452,6 +443,13 @@ mod tests {
     use super::*;
     use crate::test_support::{TestDir, assert_isolated};
 
+    /// 给定 HOME 基目录，拼出账号库路径：`<base>/.pace-forge/accounts.json`。
+    ///
+    /// **纯路径计算，不碰磁盘。** 测试用它把路径注入到一次性临时目录，从而完全
+    /// 不碰真实 `$HOME/.pace-forge/accounts.json`。
+    pub(crate) fn book_path_in(base: &std::path::Path) -> std::path::PathBuf {
+        data_dir_in(base).join("accounts.json")
+    }
     #[test]
     fn password_roundtrip() {
         let p = "myS3cretPass!";

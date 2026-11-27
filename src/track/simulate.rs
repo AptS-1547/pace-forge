@@ -517,6 +517,7 @@ pub fn validate(r: &SimResult, p: &SimParams) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     /// 慢速跑（巡航 <2.0 m/s）的步频不跟瞬时速度扫：真机慢跑步频顶在
     /// 179 一带的稳值上（issue #7），速度起伏全由步幅吸收。
     #[test]
@@ -564,8 +565,6 @@ mod tests {
             "步频 sd {sd:.1} 过大：瞬时速度不该拖着步频来回扫"
         );
     }
-
-    use super::*;
 
     fn straight_track(n: usize, sec: i64) -> Vec<(f64, f64, i64)> {
         let step_t = sec * 1000 / (n as i64 - 1);
@@ -661,11 +660,8 @@ mod tests {
         p.total_sec = 0;
         assert!(simulate(&straight_track(10, 100), &p).is_err());
     }
-}
 
-#[cfg(test)]
-mod time_precision_tests {
-    use super::*;
+    // ---- merged from former `mod time_precision_tests` ----
 
     /// 相邻采样点必须至少相隔 1 秒。
     ///

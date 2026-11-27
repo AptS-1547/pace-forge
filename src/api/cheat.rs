@@ -224,8 +224,9 @@ pub fn query(
 }
 
 #[cfg(test)]
-mod clock_skew_tests {
+mod tests {
     use super::*;
+    use serde_json::json;
 
     fn report(checked: i64) -> CheatReport {
         CheatReport {
@@ -251,12 +252,8 @@ mod clock_skew_tests {
         );
         assert_eq!(report(10_000).status_at(10_000 + FRESH_MS), Status::Stale);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+    // ---- merged from former `mod tests` ----
 
     const T0: i64 = 1_700_000_000_000;
 

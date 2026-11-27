@@ -404,8 +404,9 @@ pub fn fetch_policy(client: &Client) -> Result<PolicyInfo, Error> {
 }
 
 #[cfg(test)]
-mod window_tests {
+mod tests {
     use super::in_window;
+    use super::*;
 
     #[test]
     fn window_is_closed_interval() {
@@ -417,11 +418,8 @@ mod window_tests {
         assert!(!in_window("22:01:00", s, e), "晚于窗口不算");
         assert!(!in_window("03:00:00", s, e));
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    // ---- merged from former `mod tests` ----
 
     #[test]
     fn parses_daily_cap_from_real_payload() {
@@ -569,11 +567,8 @@ mod tests {
             "无转储目录时不该写任何文件"
         );
     }
-}
 
-#[cfg(test)]
-mod pace_range_tests {
-    use super::*;
+    // ---- merged from former `mod pace_range_tests` ----
 
     fn rule(top: Value, bottom: Value) -> Value {
         serde_json::json!({"speedTop": top, "speedBottom": bottom})

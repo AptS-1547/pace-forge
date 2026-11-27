@@ -2265,33 +2265,6 @@ pub(crate) fn day_key_of(ms: i64) -> String {
     format!("{y:04}-{month:02}-{:02}", d + 1)
 }
 
-#[cfg(test)]
-mod day_key_tests {
-    use super::day_key_of;
-
-    #[test]
-    fn epoch_is_1970_01_01() {
-        assert_eq!(day_key_of(0), "1970-01-01");
-    }
-
-    #[test]
-    fn leap_day_is_handled() {
-        // 2020-02-29 12:00 UTC = 东八区 20:00
-        let ms = 1_582_977_600_000i64; // 2020-02-29T12:00:00Z
-        assert_eq!(day_key_of(ms), "2020-02-29");
-        // 2021-02-28T00:00:00Z → 东八区 08:00，仍是 28 日（非闰年没有 29 日）
-        let ms2 = 1_614_499_200_000i64;
-        assert_eq!(day_key_of(ms2), "2021-02-28");
-    }
-
-    #[test]
-    fn ignores_utc_vs_local_but_uses_plus8() {
-        // 2026-11-23T15:30:00Z = 东八区 23:30 → 仍是 23 日
-        let ms = 1_795_447_800_000i64;
-        assert_eq!(day_key_of(ms), "2026-11-23");
-    }
-}
-
 /// 本机当前时间 `HH:MM:SS`（本地时区）。
 fn local_hms() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -3097,8 +3070,38 @@ pub fn upload_detail(
 }
 
 #[cfg(test)]
-mod body_pace_tests {
+mod tests {
     use super::body_pace_note;
+    use super::day_key_of;
+    use super::*;
+    use crate::api::submit::{self, FixedPoint, SubmitParams};
+    use base64::Engine;
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    #[test]
+    fn epoch_is_1970_01_01() {
+        assert_eq!(day_key_of(0), "1970-01-01");
+    }
+
+    #[test]
+    fn leap_day_is_handled() {
+        // 2020-02-29 12:00 UTC = 东八区 20:00
+        let ms = 1_582_977_600_000i64; // 2020-02-29T12:00:00Z
+        assert_eq!(day_key_of(ms), "2020-02-29");
+        // 2021-02-28T00:00:00Z → 东八区 08:00，仍是 28 日（非闰年没有 29 日）
+        let ms2 = 1_614_499_200_000i64;
+        assert_eq!(day_key_of(ms2), "2021-02-28");
+    }
+
+    #[test]
+    fn ignores_utc_vs_local_but_uses_plus8() {
+        // 2026-11-23T15:30:00Z = 东八区 23:30 → 仍是 23 日
+        let ms = 1_795_447_800_000i64;
+        assert_eq!(day_key_of(ms), "2026-11-23");
+    }
+
+    // ---- merged from former `mod body_pace_tests` ----
 
     /// 已经越界：2km/11min 的主体配速约 4'35"，快于 5'00" 下界。
     #[test]
@@ -3151,12 +3154,8 @@ mod body_pace_tests {
         let b = body_pace_note(2000.0, 720, Some((10.0, 5.0))).unwrap();
         assert_eq!(a, b);
     }
-}
 
-#[cfg(test)]
-mod obs_tests {
-    use super::*;
-    use base64::Engine;
+    // ---- merged from former `mod obs_tests` ----
 
     /// OBS 对象必须是 10 个键，且每个值都是 gzip+base64。
     ///
@@ -3222,11 +3221,8 @@ mod obs_tests {
                 .unwrap_or_else(|e| panic!("{k} gzip 解压失败: {e}"));
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    // ---- merged from former `mod tests` ----
 
     /// 回归：只有用户明确选了操场才反推跑道。
     ///
@@ -3590,10 +3586,9 @@ mod tests {
         let pace = 1000.0 / (p.distance_m / p.duration_sec as f64) / 60.0;
         assert!((3.0..=12.0).contains(&pace), "默认配速 {pace:.2} 不合理");
     }
-}
 
-#[cfg(test)]
-mod fixed_point_payload_tests {
+    // ---- merged from former `mod fixed_point_payload_tests` ----
+
     /// OBS 的 fixed_point_json 必须是裸点位数组。
     ///
     /// 之前把主报文那层 envelope（{fivePointJson, useZip, runAreaId, ...}）
@@ -3744,30 +3739,23 @@ mod fixed_point_payload_tests {
             );
         }
     }
-}
 
-#[cfg(test)]
-mod single_point_source_tests {
-    //! A4：**自检那份点位必须就是上传那份**（`docs/fix/FIX-A4-SINGLE-POINT-SOURCE.md`）。
-    //!
-    //! 修复前同一条轨迹被造了两次点位：
-    //!
-    //! - `submit::build` 那份：`seed = start_ms ^ φ`、做过 `smooth_point_speed`、
-    //!   带打卡点（`type=2` / `isFixed`）；
-    //! - `flow::detail_payload_rrid` 那份（**真正进 OBS 的**）：`seed = start_ms`、
-    //!   不平滑、不带打卡点。
-    //!
-    //! 于是 `id` / `count` / `radius` / `type` / `bdA` 逐点不同，`isFixed`、
-    //! `type=2` 只有上传那份才有——自检守着一份没人会看到的报文。
-    //!
-    //! 这组测试拿一条 1683m / 555 秒、5 个打卡点的离线对象（不联网、不提交）
-    //! 逐元素逐字段比对两份，白名单只允许 envelope 级字段。
+    // ---- merged from former `mod single_point_source_tests` ----
 
-    use super::*;
-    use crate::api::submit::{self, FixedPoint, SubmitParams};
-    use base64::Engine;
-    use flate2::read::GzDecoder;
-    use std::io::Read;
+    // A4：**自检那份点位必须就是上传那份**（`docs/fix/FIX-A4-SINGLE-POINT-SOURCE.md`）。
+    //
+    // 修复前同一条轨迹被造了两次点位：
+    //
+    // - `submit::build` 那份：`seed = start_ms ^ φ`、做过 `smooth_point_speed`、
+    //   带打卡点（`type=2` / `isFixed`）；
+    // - `flow::detail_payload_rrid` 那份（**真正进 OBS 的**）：`seed = start_ms`、
+    //   不平滑、不带打卡点。
+    //
+    // 于是 `id` / `count` / `radius` / `type` / `bdA` 逐点不同，`isFixed`、
+    // `type=2` 只有上传那份才有——自检守着一份没人会看到的报文。
+    //
+    // 这组测试拿一条 1683m / 555 秒、5 个打卡点的离线对象（不联网、不提交）
+    // 逐元素逐字段比对两份，白名单只允许 envelope 级字段。
 
     /// 真机 rrid 1328288734 的起始毫秒戳（点位 `flag` 用同一个值）。
     const START_MS: i64 = 1_790_913_882_164;
@@ -4172,11 +4160,8 @@ mod single_point_source_tests {
         }
         assert_points_identical(&probe.points, &uploaded, "自检 vs OBS 上传");
     }
-}
 
-#[cfg(test)]
-mod issue37_tests {
-    use super::*;
+    // ---- merged from former `mod issue37_tests` ----
 
     /// issue #37：操场默认关闭，走路网/按序串点；显式开关才试。
     #[test]

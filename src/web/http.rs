@@ -170,7 +170,7 @@ pub(super) fn respond_static(
 }
 
 #[cfg(test)]
-mod url_decode_tests {
+mod tests {
     use super::url_decode;
 
     #[test]

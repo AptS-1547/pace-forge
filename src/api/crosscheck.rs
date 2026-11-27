@@ -400,7 +400,7 @@ pub fn max_pair_overlap(
 }
 
 #[cfg(test)]
-mod pace_fmt_tests {
+mod tests {
     use super::*;
 
     /// 59.6 秒要进位成 `1'00"`，不是 `0'60"`。
@@ -426,11 +426,8 @@ mod pace_fmt_tests {
         assert_eq!(near_midnight_count(&recs, 28_800), 2);
         assert_eq!(near_midnight_count(&recs[..1], 0), 0);
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    // ---- merged from former `mod tests` ----
 
     /// 配置映射等价性：tz_offset 从配置层来，描述行带来源标注。
     /// Guard 手工构造的 Config 不带来源 → 显示「默认」；注入来源分支在

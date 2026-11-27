@@ -2154,6 +2154,8 @@ pub fn build_from_points(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::track::TrackPoint;
+    use std::collections::HashSet;
 
     /// 四条高频驳回码必须有针对性提示，其余码不能瞎编。
     ///
@@ -2441,130 +2443,10 @@ mod tests {
     fn rejects_empty_track() {
         assert!(build(&params(), &[], &[], &test_sim(&params(), &[])).is_err());
     }
-}
 
-/// 提交成绩：`POST /api/v70260/runnings/save/record`。
-///
-/// 这是整条链路唯一会产生真实记录的请求。失败要区分两类：
-/// - 网络/加密失败 → 可重试
-/// - 业务驳回 → **不能重试**，错误次数会累积
-///
-/// 成功码是 **10000**，不是 0。这一点很容易踩：接口在顶层 `error` 里回
-/// `{"error":10000,"message":"成功"}`，照「err != 0 就是失败」判断就会把
-/// 一次成功的提交当成驳回，用户看到「提交被驳回 error=10000: 成功」。
-/// 高频驳回码对应的引导文案。空串表示没有针对性提示，沿用原错误文案。
-///
-/// 抽成独立函数是为了能单测：这段逻辑早先被 `?` 之后恒假的条件挡在外面，
-/// 四条提示一行都执行不到（`expect_ok` 只放行 10000）。
-fn reject_hint(code: i64) -> &'static str {
-    match code {
-        11016 => "（不在有效跑步时段，记分跑有固定时段限制，等等再来）",
-        10003 => "（签名错误，检查 device_id 是否被重置）",
-        10121 => "（账号已在其他设备登录，先退出或等 1 小时）",
-        10603 => "（请求过于频繁，被限流）",
-        _ => "",
-    }
-}
+    // ---- merged from former `mod point_shape_tests` ----
 
-/// 一次提交的失败，带上「能不能确定没入账」这个关键区分。
-///
-/// 这里没有换成 `ErrorKind`：调用方要的是「明确驳回还是结果未知」，文案可能
-/// 还拼了针对该错误码的提示，类别本身没有消费者。
-#[derive(Debug)]
-pub struct SubmitFailure {
-    pub message: String,
-    /// `true` = 服务端明确驳回（有业务错误码），可以确定没有入账；
-    /// `false` = 网络错误 / HTTP 层异常 / 响应看不懂，**结果未知**。
-    ///
-    /// 这个区分决定了提交台账怎么写：明确驳回可以释放时间段，让用户重来；
-    /// 未知必须留着 pending，因为「查不到」不等于「没入账」。
-    pub rejected: bool,
-}
-
-pub fn save_record(
-    client: &Client,
-    body: &Value,
-    runes: &str,
-    runef: &str,
-) -> Result<Value, Error> {
-    save_record_detailed(client, body, runes, runef).map_err(|f| ErrorKind::protocol(f.message))
-}
-
-/// 同 [`save_record`]，但把「明确驳回」和「结果未知」分开回报。
-pub fn save_record_detailed(
-    client: &Client,
-    body: &Value,
-    runes: &str,
-    runef: &str,
-) -> Result<Value, SubmitFailure> {
-    // 真机提交会额外带 runes / runef 两个关联头：
-    //   runes = 策略时间戳 + uid      （这条记录基于哪一次策略下发）
-    //   runef = 运行 uuid + startTime （这份轨迹属于哪一次运行）
-    // 缺了它们提交照样能成，但风控侧少了把「策略→运行→成绩」串起来的
-    // 线索，关联性更弱。见 Miempire src/api/submit.rs:228-237。
-    // 网络层失败一律算「未知」：请求可能已经到达服务端并入了账，
-    // 只是响应没回来。这种时候自动重试就是制造重复记录。
-    let raw = client
-        .request_with_headers(
-            "POST",
-            &format!(
-                "{}/api/v70260/runnings/save/record",
-                crate::crypto::consts::hosts::RUN
-            ),
-            Some(body),
-            &[("runes", runes), ("runef", runef)],
-        )
-        .map_err(|e| SubmitFailure {
-            message: e.to_string(),
-            rejected: false,
-        })?;
-    // 业务层：`expect_ok` 只放行 10000，失败时直接给 Err。为了同时拿到
-    // 「明确驳回 / 结果未知」这个区分和四条高频驳回提示，这里自己回读原始
-    // 响应取错误码 —— 早先那段 `if err != 0 && err != 10000 { …hint… }`
-    // 在 `?` 之后恒假，提示一行都执行不到，而且明确的业务驳回会被当成「未知」。
-    let v = match crate::api::client::expect_ok(&raw) {
-        Ok(v) => v,
-        Err(e) => {
-            let code = serde_json::from_str::<Value>(&raw)
-                .ok()
-                .and_then(|v| v.get("error").and_then(|x| x.as_i64()));
-            let hint = match code {
-                Some(c) => reject_hint(c),
-                None => "",
-            };
-            return Err(SubmitFailure {
-                message: if hint.is_empty() {
-                    e.to_string()
-                } else {
-                    format!("{e}{hint}")
-                },
-                // 正数业务码 = 服务端明确驳回，可以释放时间段；
-                // -10000 集群故障、解析不出码 = 结果未知，台账留 pending
-                rejected: matches!(code, Some(c) if c > 0),
-            });
-        }
-    };
-    Ok(v.get("data").cloned().unwrap_or(Value::Null))
-}
-
-/// 提交后的记录 id。
-pub fn extract_record_id(data: &Value) -> Option<i64> {
-    data.get("rrid")
-        .or_else(|| data.get("id"))
-        .and_then(|x| x.as_i64())
-        .or_else(|| {
-            data.get("recordId")
-                .and_then(|x| x.as_str())
-                .and_then(|s| s.parse().ok())
-        })
-}
-
-#[cfg(test)]
-mod point_shape_tests {
-    use super::tests::test_sim;
-    use super::*;
-
-    fn params() -> SubmitParams {
+    fn params_point_shape_tests() -> SubmitParams {
         SubmitParams {
             uid: "123456".into(),
             unid: "88".into(),
@@ -2611,16 +2493,16 @@ mod point_shape_tests {
                 )
             })
             .collect();
-        let params = params();
-        let sim = test_sim(&params, &pts);
-        let sub = build(&params, &pts, &[], &sim).unwrap();
+        let params_point_shape_tests = params_point_shape_tests();
+        let sim = test_sim(&params_point_shape_tests, &pts);
+        let sub = build(&params_point_shape_tests, &pts, &[], &sim).unwrap();
         let arr: Vec<serde_json::Value> = sub.points.clone();
 
         let flags: Vec<i64> = arr.iter().map(|p| p["flag"].as_i64().unwrap()).collect();
         let uniq: std::collections::HashSet<i64> = flags.iter().copied().collect();
         assert_eq!(uniq.len(), 1, "flag 只能有一个值，实际 {uniq:?}");
         assert_eq!(
-            flags[0], params.start_time_ms,
+            flags[0], params_point_shape_tests.start_time_ms,
             "flag 必须等于整场起始毫秒戳"
         );
         // 时间维度改由 totalTime 承担，它必须逐点递增
@@ -2657,9 +2539,9 @@ mod point_shape_tests {
                 )
             })
             .collect();
-        let params = params();
-        let sim = test_sim(&params, &pts);
-        let sub = build(&params, &pts, &[], &sim).unwrap();
+        let params_point_shape_tests = params_point_shape_tests();
+        let sim = test_sim(&params_point_shape_tests, &pts);
+        let sub = build(&params_point_shape_tests, &pts, &[], &sim).unwrap();
         let arr: Vec<serde_json::Value> = sub.points.clone();
 
         // ① 卫星数：真机 40~53（众数 46~49），且不是常量
@@ -2760,9 +2642,9 @@ mod point_shape_tests {
                 )
             })
             .collect();
-        let params = params();
-        let sim = test_sim(&params, &pts);
-        let sub = build(&params, &pts, &[], &sim).unwrap();
+        let params_point_shape_tests = params_point_shape_tests();
+        let sim = test_sim(&params_point_shape_tests, &pts);
+        let sub = build(&params_point_shape_tests, &pts, &[], &sim).unwrap();
         let arr: Vec<serde_json::Value> = sub.points.clone();
 
         let alts: Vec<f64> = arr.iter().map(|p| p["bdA"].as_f64().unwrap()).collect();
@@ -2801,11 +2683,11 @@ mod point_shape_tests {
                 )
             })
             .collect();
-        let mut params = params();
+        let mut params_point_shape_tests = params_point_shape_tests();
         // 高原校区：200~260m
-        params.alt_range = Some((200.0, 260.0));
-        let sim = test_sim(&params, &pts);
-        let sub = build(&params, &pts, &[], &sim).unwrap();
+        params_point_shape_tests.alt_range = Some((200.0, 260.0));
+        let sim = test_sim(&params_point_shape_tests, &pts);
+        let sub = build(&params_point_shape_tests, &pts, &[], &sim).unwrap();
         let alts: Vec<f64> = sub
             .points
             .iter()
@@ -2846,11 +2728,11 @@ mod point_shape_tests {
                 )
             })
             .collect();
-        let mut params = params();
+        let mut params_point_shape_tests = params_point_shape_tests();
         // 给反了：应当忽略，退回默认 150±8（真机 bdA 实测 142.4~158.5）
-        params.alt_range = Some((300.0, 100.0));
-        let sim = test_sim(&params, &pts);
-        let sub = build(&params, &pts, &[], &sim).unwrap();
+        params_point_shape_tests.alt_range = Some((300.0, 100.0));
+        let sim = test_sim(&params_point_shape_tests, &pts);
+        let sub = build(&params_point_shape_tests, &pts, &[], &sim).unwrap();
         let mean = sub
             .points
             .iter()
@@ -2870,9 +2752,9 @@ mod point_shape_tests {
             tp(31.2306, 101.4741, 1_790_000_005_000),
             tp(31.2309, 101.4745, 1_790_000_010_000),
         ];
-        let params = params();
-        let sim = test_sim(&params, &pts);
-        let sub = build(&params, &pts, &[], &sim).unwrap();
+        let params_point_shape_tests = params_point_shape_tests();
+        let sim = test_sim(&params_point_shape_tests, &pts);
+        let sub = build(&params_point_shape_tests, &pts, &[], &sim).unwrap();
         let arr: Vec<serde_json::Value> = sub.points.clone();
         assert_eq!(arr.len(), 3);
 
@@ -2991,7 +2873,7 @@ mod point_shape_tests {
                 )
             })
             .collect();
-        let p0 = params();
+        let p0 = params_point_shape_tests();
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &[], &sim).unwrap();
         let arr: Vec<serde_json::Value> = sub.points.clone();
@@ -3050,7 +2932,7 @@ mod point_shape_tests {
                 is_fixed: if k == 4 { 1 } else { 0 },
             })
             .collect();
-        let p0 = params();
+        let p0 = params_point_shape_tests();
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &fixed, &sim).unwrap();
 
@@ -3108,7 +2990,7 @@ mod point_shape_tests {
                 is_fixed: if k == 2 { 1 } else { 0 },
             })
             .collect();
-        let p0 = params();
+        let p0 = params_point_shape_tests();
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &fixed, &sim).unwrap();
         let n2 = sub
@@ -3153,7 +3035,7 @@ mod point_shape_tests {
                 is_fixed: if k == 0 { 1 } else { 0 },
             })
             .collect();
-        let p0 = params();
+        let p0 = params_point_shape_tests();
         let sim = test_sim(&p0, &pts);
         let sub = build(&p0, &pts, &fixed, &sim).unwrap();
 
@@ -3194,15 +3076,10 @@ mod point_shape_tests {
             "内层点位键序变了（App 按位置解析时少画点）"
         );
     }
-}
 
-#[cfg(test)]
-mod single_source_tests {
-    use super::tests::test_sim;
-    use super::*;
-    use crate::track::TrackPoint;
+    // ---- merged from former `mod single_source_tests` ----
 
-    fn params() -> SubmitParams {
+    fn params_single_source_tests() -> SubmitParams {
         SubmitParams {
             uid: "1".into(),
             unid: "1".into(),
@@ -3242,7 +3119,7 @@ mod single_source_tests {
     /// 所有反检测设计都作用在了发不出去的那份数据上。
     #[test]
     fn payload_buckets_equal_sim_buckets() {
-        let p = params();
+        let p = params_single_source_tests();
         let t = track();
         let sim = test_sim(&p, &t);
 
@@ -3284,7 +3161,7 @@ mod single_source_tests {
     /// 报文里不许出现 0 步的桶——10 秒 0 步等于静止，服务端判断点。
     #[test]
     fn payload_has_no_empty_step_bucket() {
-        let p = params();
+        let p = params_single_source_tests();
         let t = track();
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).expect("build");
@@ -3298,14 +3175,10 @@ mod single_source_tests {
             assert!(v > 0, "第 {i} 桶步数是 {v}，会出现静止断点");
         }
     }
-}
 
-#[cfg(test)]
-mod verify_roundtrip_tests {
-    use super::tests::test_sim;
-    use super::*;
+    // ---- merged from former `mod verify_roundtrip_tests` ----
 
-    fn params() -> SubmitParams {
+    fn params_verify_roundtrip_tests() -> SubmitParams {
         SubmitParams {
             uid: "1".into(),
             unid: "1".into(),
@@ -3326,7 +3199,7 @@ mod verify_roundtrip_tests {
         }
     }
 
-    fn track() -> Vec<TrackPoint> {
+    fn track_verify_roundtrip_tests() -> Vec<TrackPoint> {
         (0..400)
             .map(|i| TrackPoint {
                 lat: 31.2304 + i as f64 * 5.0 / 111_320.0,
@@ -3340,8 +3213,8 @@ mod verify_roundtrip_tests {
     /// 这条保证 preflight 校验的对象就是发出去的那份。
     #[test]
     fn verify_view_roundtrips_buckets() {
-        let p = params();
-        let t = track();
+        let p = params_verify_roundtrip_tests();
+        let t = track_verify_roundtrip_tests();
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let v = verify_view(&sub.save_record, &sub.points).unwrap();
@@ -3357,8 +3230,8 @@ mod verify_roundtrip_tests {
     /// 反解出来的坐标必须是 BD-09，并且和原轨迹对得上（±1m）。
     #[test]
     fn verify_view_roundtrips_coords() {
-        let p = params();
-        let t = track();
+        let p = params_verify_roundtrip_tests();
+        let t = track_verify_roundtrip_tests();
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let v = verify_view(&sub.save_record, &sub.points).unwrap();
@@ -3385,20 +3258,16 @@ mod verify_roundtrip_tests {
     /// 时间轴端点必须精确等于报文的 startTime/stopTime。
     #[test]
     fn verify_view_time_matches_payload() {
-        let p = params();
-        let t = track();
+        let p = params_verify_roundtrip_tests();
+        let t = track_verify_roundtrip_tests();
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let v = verify_view(&sub.save_record, &sub.points).unwrap();
         assert_eq!(v.start_time_ms, p.start_time_ms);
         assert!(v.stop_time_ms > v.start_time_ms);
     }
-}
 
-#[cfg(test)]
-mod step_distance_tests {
-    use super::tests::test_sim;
-    use super::*;
+    // ---- merged from former `mod step_distance_tests` ----
 
     /// `stepDistance` 必须与真机同形：**整场一个常量**、起步窗口 0。
     ///
@@ -3676,13 +3545,10 @@ mod step_distance_tests {
         );
         assert!(sub.canonical.contains("avgPower="), "签名串缺 avgPower");
     }
-}
 
-#[cfg(test)]
-mod audit_tests {
-    use super::*;
+    // ---- merged from former `mod audit_tests` ----
 
-    fn params() -> SubmitParams {
+    fn params_audit_tests() -> SubmitParams {
         SubmitParams {
             uid: "1".into(),
             unid: "2".into(),
@@ -3716,7 +3582,7 @@ mod audit_tests {
         }
     }
 
-    fn track() -> Vec<TrackPoint> {
+    fn track_audit_tests() -> Vec<TrackPoint> {
         let n = 300;
         (0..n)
             .map(|i| TrackPoint {
@@ -3734,8 +3600,8 @@ mod audit_tests {
     /// `prizeName` 走 Gson serializeNulls 所以有键无值。
     #[test]
     fn submit_body_matches_unpacked_7420_shape() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let sr = &sub.save_record;
@@ -3757,8 +3623,8 @@ mod audit_tests {
 
     #[test]
     fn audit_passes_on_freshly_built_body() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let probs = audit_derived(&sub.save_record, &sub.points);
@@ -3767,8 +3633,8 @@ mod audit_tests {
 
     #[test]
     fn audit_catches_constant_fallbacks() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let mut body = sub.save_record.clone();
@@ -3784,8 +3650,8 @@ mod audit_tests {
 
     #[test]
     fn audit_catches_wrong_speed_unit() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let mut body = sub.save_record.clone();
@@ -3803,8 +3669,8 @@ mod audit_tests {
     /// body 内部完全自洽，本地 audit 也查不出来，只有真发一次才暴露。
     #[test]
     fn signature_numeric_fields_are_integers() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
 
@@ -3832,8 +3698,8 @@ mod audit_tests {
 
     #[test]
     fn avg_power_is_integer_watt() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).unwrap();
         let v = &sub.save_record["avgPower"];
@@ -3851,8 +3717,8 @@ mod audit_tests {
     /// （「按顺序通过所有点位」）也永远是 false。
     #[test]
     fn five_point_items_carry_device_fields() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         let fixed = vec![
             FixedPoint {
@@ -3926,8 +3792,8 @@ mod audit_tests {
     /// 猜错就变成「五个点位里有一个颜色和位置都不对」。
     #[test]
     fn fixed_points_numbered_like_real_device() {
-        let p = params();
-        let t = track();
+        let p = params_audit_tests();
+        let t = track_audit_tests();
         let sim = sim(&p, &t);
         // 轨迹沿 lat 递增（2000m / 300 点 ≈ 每点 6.7m），所以「首次经过下标」
         // 严格单调。故意把必到点按打乱的顺序传进来（220/30/290/90/150），
@@ -4090,23 +3956,18 @@ mod audit_tests {
             );
         }
     }
-}
 
-/// 与真机样本的回归对拍。
-///
-/// 参照样本：`evidence/obs_real_20261002.json`（rrid 1328288734，1683.83m /
-/// 555s / 114 点 / 25 段 / 55 速度桶 / 55 步频桶 / 2 圈）。这里用同样的
-/// 量级造一条轨迹，把「已经对齐真机」的几条硬约束钉死，防止以后改回去。
-#[cfg(test)]
-mod parity_regression_tests {
-    use super::tests::test_sim;
-    use super::*;
-    use crate::track::TrackPoint;
+    // ---- merged from former `mod parity_regression_tests` ----
+
+    // 与真机样本的回归对拍。
+    // 参照样本：`evidence/obs_real_20261002.json`（rrid 1328288734，1683.83m /
+    // 555s / 114 点 / 25 段 / 55 速度桶 / 55 步频桶 / 2 圈）。这里用同样的
+    // 量级造一条轨迹，把「已经对齐真机」的几条硬约束钉死，防止以后改回去。
 
     /// 真机这条记录的起始毫秒戳，直接拿来当 flag 的期望值。
     const REAL_FLAG: i64 = 1_790_913_882_164;
 
-    fn params() -> SubmitParams {
+    fn params_parity_regression_tests() -> SubmitParams {
         SubmitParams {
             uid: "123456".into(),
             unid: "88".into(),
@@ -4304,7 +4165,7 @@ mod parity_regression_tests {
                 }
             })
             .collect();
-        let p = params();
+        let p = params_parity_regression_tests();
         let sim = test_sim(&p, &pts);
         let sub = build(&p, &pts, &[], &sim).expect("build");
         let ours = &sub.points;
@@ -4466,7 +4327,7 @@ mod parity_regression_tests {
         Vec<Value>,
         Vec<Value>,
     ) {
-        let p = params();
+        let p = params_parity_regression_tests();
         let t = track_555();
         let sim = test_sim(&p, &t);
         let sub = build(&p, &t, &[], &sim).expect("build");
@@ -4650,7 +4511,7 @@ mod parity_regression_tests {
             },
         )
         .expect("合成");
-        let mut p = params();
+        let mut p = params_parity_regression_tests();
         p.total_distance_m = real_len;
         p.total_steps = sim.total_steps;
         let sub = build(&p, &track, &[], &sim).expect("build");
@@ -4937,12 +4798,8 @@ mod parity_regression_tests {
         let sum: i64 = laps.iter().map(|l| l["step"].as_i64().unwrap()).sum();
         assert_eq!(sum, p.total_steps as i64, "圈步数和 != totalSteps");
     }
-}
 
-#[cfg(test)]
-mod mark_match_tests {
-    use super::*;
-    use std::collections::HashSet;
+    // ---- merged from former `mod mark_match_tests` ----
 
     /// 沿经度方向等间距造一条直线轨迹（纬度 0，1 度经度 ≈ 111320m）。
     fn line_track(n: usize, step_m: f64) -> Vec<TrackPoint> {
@@ -5029,11 +4886,8 @@ mod mark_match_tests {
         let m = match_checkpoints(&[], &[(0.0, 0.0)], &HashSet::new(), false);
         assert_eq!(m[0], MarkMatch::Missing(MissReason::EmptyTrack));
     }
-}
 
-#[cfg(test)]
-mod issue37_tests {
-    use super::*;
+    // ---- merged from former `mod issue37_tests` ----
 
     /// auto：服务端标了必经点 → 保留 ≥1 个 1、≥2 个 0。
     #[test]
@@ -5157,11 +5011,8 @@ mod issue37_tests {
         });
         assert!(fixed_strict());
     }
-}
 
-#[cfg(test)]
-mod speed_units_tests {
-    use super::*;
+    // ---- merged from former `mod speed_units_tests` ----
 
     /// #38：配速与 m/s 互为反算，v=0 时两边都是 0（真机口径，不是 ∞）。
     #[test]
@@ -5192,11 +5043,8 @@ mod speed_units_tests {
         assert_eq!(sp.bd_s_json(), 3.17);
         assert_eq!(sp.speed_json(), 5.0);
     }
-}
 
-#[cfg(test)]
-mod fixed_point_serde_tests {
-    use super::*;
+    // ---- merged from former `mod fixed_point_serde_tests` ----
 
     fn item() -> FixedPointItem<'static> {
         FixedPointItem {
@@ -5255,4 +5103,120 @@ mod fixed_point_serde_tests {
             "struct 与手拼 json! 的字节必须完全一致"
         );
     }
+}
+
+/// 提交成绩：`POST /api/v70260/runnings/save/record`。
+///
+/// 这是整条链路唯一会产生真实记录的请求。失败要区分两类：
+/// - 网络/加密失败 → 可重试
+/// - 业务驳回 → **不能重试**，错误次数会累积
+///
+/// 成功码是 **10000**，不是 0。这一点很容易踩：接口在顶层 `error` 里回
+/// `{"error":10000,"message":"成功"}`，照「err != 0 就是失败」判断就会把
+/// 一次成功的提交当成驳回，用户看到「提交被驳回 error=10000: 成功」。
+/// 高频驳回码对应的引导文案。空串表示没有针对性提示，沿用原错误文案。
+///
+/// 抽成独立函数是为了能单测：这段逻辑早先被 `?` 之后恒假的条件挡在外面，
+/// 四条提示一行都执行不到（`expect_ok` 只放行 10000）。
+fn reject_hint(code: i64) -> &'static str {
+    match code {
+        11016 => "（不在有效跑步时段，记分跑有固定时段限制，等等再来）",
+        10003 => "（签名错误，检查 device_id 是否被重置）",
+        10121 => "（账号已在其他设备登录，先退出或等 1 小时）",
+        10603 => "（请求过于频繁，被限流）",
+        _ => "",
+    }
+}
+
+/// 一次提交的失败，带上「能不能确定没入账」这个关键区分。
+///
+/// 这里没有换成 `ErrorKind`：调用方要的是「明确驳回还是结果未知」，文案可能
+/// 还拼了针对该错误码的提示，类别本身没有消费者。
+#[derive(Debug)]
+pub struct SubmitFailure {
+    pub message: String,
+    /// `true` = 服务端明确驳回（有业务错误码），可以确定没有入账；
+    /// `false` = 网络错误 / HTTP 层异常 / 响应看不懂，**结果未知**。
+    ///
+    /// 这个区分决定了提交台账怎么写：明确驳回可以释放时间段，让用户重来；
+    /// 未知必须留着 pending，因为「查不到」不等于「没入账」。
+    pub rejected: bool,
+}
+
+pub fn save_record(
+    client: &Client,
+    body: &Value,
+    runes: &str,
+    runef: &str,
+) -> Result<Value, Error> {
+    save_record_detailed(client, body, runes, runef).map_err(|f| ErrorKind::protocol(f.message))
+}
+
+/// 同 [`save_record`]，但把「明确驳回」和「结果未知」分开回报。
+pub fn save_record_detailed(
+    client: &Client,
+    body: &Value,
+    runes: &str,
+    runef: &str,
+) -> Result<Value, SubmitFailure> {
+    // 真机提交会额外带 runes / runef 两个关联头：
+    //   runes = 策略时间戳 + uid      （这条记录基于哪一次策略下发）
+    //   runef = 运行 uuid + startTime （这份轨迹属于哪一次运行）
+    // 缺了它们提交照样能成，但风控侧少了把「策略→运行→成绩」串起来的
+    // 线索，关联性更弱。见 Miempire src/api/submit.rs:228-237。
+    // 网络层失败一律算「未知」：请求可能已经到达服务端并入了账，
+    // 只是响应没回来。这种时候自动重试就是制造重复记录。
+    let raw = client
+        .request_with_headers(
+            "POST",
+            &format!(
+                "{}/api/v70260/runnings/save/record",
+                crate::crypto::consts::hosts::RUN
+            ),
+            Some(body),
+            &[("runes", runes), ("runef", runef)],
+        )
+        .map_err(|e| SubmitFailure {
+            message: e.to_string(),
+            rejected: false,
+        })?;
+    // 业务层：`expect_ok` 只放行 10000，失败时直接给 Err。为了同时拿到
+    // 「明确驳回 / 结果未知」这个区分和四条高频驳回提示，这里自己回读原始
+    // 响应取错误码 —— 早先那段 `if err != 0 && err != 10000 { …hint… }`
+    // 在 `?` 之后恒假，提示一行都执行不到，而且明确的业务驳回会被当成「未知」。
+    let v = match crate::api::client::expect_ok(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            let code = serde_json::from_str::<Value>(&raw)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|x| x.as_i64()));
+            let hint = match code {
+                Some(c) => reject_hint(c),
+                None => "",
+            };
+            return Err(SubmitFailure {
+                message: if hint.is_empty() {
+                    e.to_string()
+                } else {
+                    format!("{e}{hint}")
+                },
+                // 正数业务码 = 服务端明确驳回，可以释放时间段；
+                // -10000 集群故障、解析不出码 = 结果未知，台账留 pending
+                rejected: matches!(code, Some(c) if c > 0),
+            });
+        }
+    };
+    Ok(v.get("data").cloned().unwrap_or(Value::Null))
+}
+
+/// 提交后的记录 id。
+pub fn extract_record_id(data: &Value) -> Option<i64> {
+    data.get("rrid")
+        .or_else(|| data.get("id"))
+        .and_then(|x| x.as_i64())
+        .or_else(|| {
+            data.get("recordId")
+                .and_then(|x| x.as_str())
+                .and_then(|s| s.parse().ok())
+        })
 }

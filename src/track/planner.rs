@@ -736,12 +736,8 @@ mod tests {
             res.points.len()
         );
     }
-}
 
-#[cfg(test)]
-mod corner_smooth_tests {
-    use super::*;
-    use rand::SeedableRng;
+    // ---- merged from former `mod corner_smooth_tests` ----
 
     /// 矩形四角上的打卡点：贪心连点必然产生 90° 尖角。
     fn rect_cps() -> Vec<Checkpoint> {

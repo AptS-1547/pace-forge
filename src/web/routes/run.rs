@@ -670,8 +670,11 @@ pub(crate) fn handle_run(
 }
 
 #[cfg(test)]
-mod fence_coord_tests {
+mod tests {
+    use super::input_to_bd09;
+    use super::parse_alt_range;
     use crate::api::coord::{bd09_to_gcj02, gcj02_to_bd09};
+    use crate::track::geo::distance;
 
     /// 围栏环必须从 BD-09 转到 GCJ-02，且转换量级要**明显可见**。
     ///
@@ -699,8 +702,8 @@ mod fence_coord_tests {
             assert!(
                 (80.0..=1200.0).contains(&d),
                 "第 {i} 点 BD-09→GCJ-02 位移 {d:.1}m，不在百米量级——\n\
-                 这条判断的依据是真机围栏整体偏几百米；如果位移接近 0，\n\
-                 说明转换被删了，或者两个坐标系被搞混了"
+             这条判断的依据是真机围栏整体偏几百米；如果位移接近 0，\n\
+             说明转换被删了，或者两个坐标系被搞混了"
             );
         }
     }
@@ -725,11 +728,8 @@ mod fence_coord_tests {
             bo
         );
     }
-}
 
-#[cfg(test)]
-mod alt_range_tests {
-    use super::parse_alt_range;
+    // ---- merged from former `mod alt_range_tests` ----
 
     /// 合法的海拔区间原样返回。
     #[test]
@@ -759,12 +759,8 @@ mod alt_range_tests {
             assert_eq!(parse_alt_range(&c), None, "该拒绝的没拒绝: {c}");
         }
     }
-}
 
-#[cfg(test)]
-mod center_input_tests {
-    use super::input_to_bd09;
-    use crate::track::geo::distance;
+    // ---- merged from former `mod center_input_tests` ----
 
     /// 三个坐标系喂同一个地点，转成 BD-09 后彼此相差几百米——这正是
     /// 不转换的代价。若哪天有人把转换删了，这条会立刻炸。

@@ -50,7 +50,7 @@ pub(super) const STATIC_ASSETS: &[(&str, &str, &str)] = &[
 ];
 
 #[cfg(test)]
-mod index_html_tests {
+mod tests {
     use super::{INDEX_HTML, STATIC_ASSETS};
 
     /// 供 contains 断言使用：全部 JS 资产按路由表顺序拼接。这些断言只关心

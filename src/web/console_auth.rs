@@ -108,8 +108,11 @@ pub(super) fn origin_matches_host(origin: Option<&str>, host: Option<&str>) -> b
 }
 
 #[cfg(test)]
-mod origin_tests {
+mod tests {
+    use super::is_loopback;
     use super::origin_matches_host;
+    use super::{check_auth, ct_eq};
+    use tiny_http::{Header, Request, TestRequest};
 
     #[test]
     fn same_origin_passes_and_cross_site_is_blocked() {
@@ -132,11 +135,8 @@ mod origin_tests {
         // 有 Origin 却没有 Host —— 不认
         assert!(!origin_matches_host(Some("http://127.0.0.1:9999"), None));
     }
-}
 
-#[cfg(test)]
-mod loopback_tests {
-    use super::is_loopback;
+    // ---- merged from former `mod loopback_tests` ----
 
     /// 本机判定必须覆盖整个回环段，包括双栈下 IPv4 的 mapped 形态。
     #[test]
@@ -160,12 +160,8 @@ mod loopback_tests {
             assert!(!is_loopback(no), "{no} 不该判为本机");
         }
     }
-}
 
-#[cfg(test)]
-mod token_tests {
-    use super::{check_auth, ct_eq};
-    use tiny_http::{Header, Request, TestRequest};
+    // ---- merged from former `mod token_tests` ----
 
     #[test]
     fn authenticated_api_accepts_header_and_ignores_query() {

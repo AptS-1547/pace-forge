@@ -327,7 +327,7 @@ fn handle(mut request: tiny_http::Request, state: Shared) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-mod inflight_tests {
+mod tests {
     use super::{INFLIGHT, MAX_INFLIGHT, try_admit};
     use std::sync::atomic::Ordering;
 

@@ -422,15 +422,8 @@ pub fn nudge_outside(
     moved
 }
 
-/// 蛇形扫描填充多边形，返回折线点。
-///
 /// `spacing_m` 是相邻扫描线的间距（米）。越小线越密、总长越长。
 // route_along_fence 已接管，保留作算法参考；现在只有测试在用。
-#[cfg(test)]
-fn boustrophedon(poly: &[(f64, f64)], spacing_m: f64) -> (Vec<(f64, f64)>, usize) {
-    boustrophedon_avoiding(poly, spacing_m, &[])
-}
-
 /// 带障碍的蛇形扫描。障碍（湖、河、楼）内部不铺线。
 fn boustrophedon_avoiding(
     poly: &[(f64, f64)],
@@ -1431,7 +1424,7 @@ mod tests {
         assert!(
             back > 0,
             "打卡点回钉必然把轨迹拖回禁区；哪天这里变成 0，说明 pin_checkpoints \\
-             开始考虑禁区了，flow 里那条警告可以改回「已绕行」"
+         开始考虑禁区了，flow 里那条警告可以改回「已绕行」"
         );
         // 而且被拖回去的必须包含打卡点本身
         assert!(
@@ -1714,11 +1707,8 @@ mod tests {
         let hit = pts.iter().any(|p| distance(*p, cp) < 0.1);
         assert!(hit, "打卡点应该被吸附到路径上");
     }
-}
 
-#[cfg(test)]
-mod order_debug_tests {
-    use super::*;
+    // ---- merged from former `mod order_debug_tests` ----
 
     /// 真实校区尺度下，按序串点不该产出公里级以外的长度。
     #[test]
@@ -1875,5 +1865,10 @@ mod order_debug_tests {
         assert!(r.is_some(), "detour_around 返回 None，绕行没生成");
         assert!(out.len() > 2, "avoid_blockers 没插点");
         assert_eq!(inside, 0, "仍有 {inside} 个点落在矩形内");
+    }
+
+    /// 蛇形扫描填充多边形，返回折线点（无障碍版本的薄封装）。
+    fn boustrophedon(poly: &[(f64, f64)], spacing_m: f64) -> (Vec<(f64, f64)>, usize) {
+        boustrophedon_avoiding(poly, spacing_m, &[])
     }
 }

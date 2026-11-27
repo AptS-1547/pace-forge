@@ -24,16 +24,6 @@ pub(super) enum AccountSessionAction {
 }
 
 impl State {
-    /// 只有测试在用：真实启动走 `restore`。
-    #[cfg(test)]
-    pub(super) fn new() -> Self {
-        Self {
-            book: crate::api::accounts::Book::default(),
-            clients: std::collections::HashMap::new(),
-            current: None,
-        }
-    }
-
     /// 从磁盘恢复所有账号的登录态。
     ///
     /// 两条来源都要看：登录成功时会写 `session.json`，但 `accounts.json` 里那一
@@ -307,10 +297,20 @@ pub(super) fn lock_state(state: &Shared) -> std::sync::MutexGuard<'_, State> {
 }
 
 #[cfg(test)]
-mod account_session_tests {
+mod tests {
+    use super::device_scope;
     use super::*;
     use crate::test_support::{TestDir, assert_isolated};
-
+    impl State {
+        /// 只有测试在用：真实启动走 `restore`。
+        pub(super) fn new() -> Self {
+            Self {
+                book: crate::api::accounts::Book::default(),
+                clients: std::collections::HashMap::new(),
+                current: None,
+            }
+        }
+    }
     fn saved_account(id: &str, uid: &str, username: &str) -> accounts::Account {
         accounts::Account {
             id: id.into(),
@@ -458,11 +458,8 @@ mod account_session_tests {
                 .logged_in()
         );
     }
-}
 
-#[cfg(test)]
-mod device_scope_tests {
-    use super::device_scope;
+    // ---- merged from former `mod device_scope_tests` ----
 
     /// 登录前后必须算出同一个设备作用域。
     ///

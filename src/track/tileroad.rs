@@ -84,12 +84,6 @@ pub struct Mask {
 }
 
 impl Mask {
-    #[cfg(test)]
-    #[inline]
-    fn at(&self, x: usize, y: usize) -> bool {
-        self.bits[y * self.w + x]
-    }
-
     /// 像素中心 → GCJ-02。
     /// BD-09 坐标反查像素（用于「这条直线是不是贴着路面」）。
     fn bd_to_pixel(&self, lat: f64, lng: f64) -> Option<(f64, f64)> {
@@ -1510,6 +1504,7 @@ mod tests {
     use crate::test_support::{TestDir, assert_isolated};
 
     /// 瓦片冷却窗口：四个域名全挂后 10 分钟内直接快速失败。
+
     #[test]
     fn tile_cooldown_window() {
         let t = 1_790_000_000_000u64;
@@ -1663,11 +1658,8 @@ mod tests {
         let covered = (12..15).any(|x| m.at(x, 1));
         assert!(covered, "缺口没被闭运算接上");
     }
-}
 
-#[cfg(test)]
-mod live_tests {
-    use super::*;
+    // ---- merged from former `mod live_tests` ----
 
     /// 闭环段不能原路折返，也不能提前穿过后面的打卡点。
     /// 用固定坐标离线跑，不依赖打卡点接口（那个 5 分钟限 3 次）。
@@ -1871,5 +1863,12 @@ mod live_tests {
         let _ = std::fs::write("/tmp/shape_raw.txt", dump(&raw));
         let _ = std::fs::write("/tmp/shape_soft.txt", dump(&soft));
         println!("已导出 /tmp/shape_raw.txt 与 /tmp/shape_soft.txt");
+    }
+
+    impl Mask {
+        #[inline]
+        fn at(&self, x: usize, y: usize) -> bool {
+            self.bits[y * self.w + x]
+        }
     }
 }

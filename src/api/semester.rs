@@ -373,11 +373,8 @@ mod tests {
         assert!(!g.in_term(1_700_000_000_000 - 86_400_000));
         assert_eq!(g.days_left(1_700_000_000_000 + 90 * 86_400_000), 10);
     }
-}
 
-#[cfg(test)]
-mod real_payload_tests {
-    use super::*;
+    // ---- merged from former `mod real_payload_tests` ----
 
     /// 7.4.01 响应结构（字段名经实测确认，账号信息已脱敏）
     #[test]
