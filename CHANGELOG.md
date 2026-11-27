@@ -17,6 +17,10 @@
 
 ### 文档
 
+- 提交报文有了字节级 golden 测试（`tests/golden/submit_payload.txt`）：一组固定
+  输入钉住 `objectKey`、签名原文、点位数组和 `save/record` 的每一个字节。
+  每次运行都会变的 `geeToken` 与它派生的 `signature` 在比较前抹掉，其余照比。
+  拆提交链路时可以确信「只是搬移」，红了就是搬错了。
 - `missing_docs` 设为 deny：所有公开项（含字段、变体、方法、crate 本身）
   都有说明，以后新增的公开项没写文档直接编不过。
 - 每个源文件只保留一个 `#[cfg(test)]` 和一个测试模块 `mod tests`（放在文件

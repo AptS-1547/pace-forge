@@ -2277,6 +2277,72 @@ mod tests {
         }
     }
 
+    /// 抹掉 `geeToken` 的值（签名原文里是 `geeToken=…&`，JSON 里是
+    /// `"geeToken": "…"`）。每次加密换随机盐，值不参与「报文结构是否被改坏」的比较。
+    fn redact_marker(s: &str, marker: &str, stops: &[char]) -> String {
+        let mut out = String::new();
+        let mut rest = s;
+        while let Some(i) = rest.find(marker) {
+            out.push_str(&rest[..i + marker.len()]);
+            out.push_str("<REDACTED>");
+            let after = &rest[i + marker.len()..];
+            let end = after.find(stops).unwrap_or(after.len());
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// 抹掉每次都会变的字段：`geeToken`（随机盐）和它派生的 `signature`。
+    /// 签名原文的其余部分照常逐字比较，签名算法本身不会因此漏掉。
+    fn scrub_volatile(s: &str) -> String {
+        let s = redact_marker(s, "\"geeToken\": \"", &['"']);
+        let s = redact_marker(&s, "\"signature\": \"", &['"']);
+        let s = redact_marker(&s, "geeToken=", &['&', '"']);
+        redact_marker(&s, "signature=", &['&', '"'])
+    }
+
+    /// 报文口径的字节级护栏（#60）：同一组输入必须产出逐字节相同的
+    /// `objectKey` / 签名原文 / 点位数组 / `save/record`。
+    ///
+    /// 这个提交前对 `submit.rs` 做过两次大改（点位统一构造、桶序列对齐），
+    /// 每次都得靠人在真机上比对才敢说「没变」。现在把当前 HEAD 的产物钉成
+    /// 一份 fixture，后续拆函数只做搬移——搬完这里红了，就说明搬出了问题，
+    /// 不用等真机。更新方式：`UPDATE_GOLDEN=1 cargo test --lib golden`。
+    #[test]
+    fn built_payload_is_byte_identical_golden() {
+        let p = params();
+        let pts = points();
+        let sim = test_sim(&p, &pts);
+        let sub = build(&p, &pts, &[], &sim).expect("报文应能组装");
+        let mut got = String::new();
+        got.push_str("object_key: ");
+        got.push_str(&sub.object_key);
+        got.push_str("\ncanonical: ");
+        got.push_str(&sub.canonical);
+        got.push_str("\npoints: ");
+        got.push_str(&serde_json::to_string(&sub.points).unwrap());
+        got.push_str("\nsave_record: ");
+        got.push_str(&serde_json::to_string_pretty(&sub.save_record).unwrap());
+        got.push('\n');
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/golden/submit_payload.txt"
+        );
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            std::fs::write(path, &got).expect("写 golden 文件");
+            return;
+        }
+        let want = include_str!("../../tests/golden/submit_payload.txt");
+        // `geeToken` 每次加密都换随机盐，值本身不参与「报文结构是否被改坏」的判断。
+        assert_eq!(
+            scrub_volatile(&got),
+            scrub_volatile(want),
+            "报文变了。如果这次是**有意**改口径，跑 UPDATE_GOLDEN=1 更新 fixture 并说明原因；\
+             如果只是拆函数，说明搬移出错"
+        );
+    }
+
     fn params() -> SubmitParams {
         SubmitParams {
             uid: "123456".into(),
