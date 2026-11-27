@@ -85,6 +85,24 @@ fn take_config_path(args: &mut Vec<String>) -> Option<String> {
     Some(p)
 }
 
+/// Not logged in / credentials missing. Same value as `ErrorKind::Auth` below.
+const EXIT_AUTH: i32 = 4;
+
+/// Exit code for a failed command, by error category. `0` is success and `2` is a
+/// usage error (handled at the argument parsers); `cheat` documents its own
+/// `0/2/3`, so these start at 4. Scripts should branch on these instead of on text.
+fn exit_code_for(e: &pace_forge::error::Error) -> i32 {
+    use pace_forge::error::ErrorKind;
+    match e {
+        ErrorKind::Auth(_) => EXIT_AUTH,
+        ErrorKind::RateLimit(_) => 5,
+        ErrorKind::Network(_) => 6,
+        ErrorKind::Protocol { .. } => 7,
+        ErrorKind::Fence(_) => 8,
+        _ => 1,
+    }
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let config_path = take_config_path(&mut args);
@@ -112,7 +130,7 @@ fn main() {
             }
             if let Err(e) = pace_forge::web::serve(&addr) {
                 eprintln!("启动失败: {e}");
-                std::process::exit(1);
+                std::process::exit(exit_code_for(&e));
             }
         }
         "semester" => show_semester(),
@@ -183,7 +201,7 @@ fn main() {
                 Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default()),
                 Err(e) => {
                     eprintln!("回读失败: {e}");
-                    std::process::exit(1);
+                    std::process::exit(exit_code_for(&e));
                 }
             }
         }
@@ -305,7 +323,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
     let sess = session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先通过 Web 控制台登录一次（会话存在 $HOME/.pace-forge/session.json）");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     let client =
         pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
@@ -326,7 +344,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("拿不到围栏中心点，无法规划轨迹: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     println!("围栏中心: ({clat:.5}, {clng:.5})");
@@ -364,7 +382,7 @@ fn dry_run(dist_km: f64, dur_min: f64) {
         }
         Err(e) => {
             eprintln!("\n预演失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -518,7 +536,7 @@ fn do_login(username: &str, password: &str) {
             };
             if let Err(e) = session::save_session(&sess) {
                 eprintln!("session 写入失败: {e}");
-                std::process::exit(1);
+                std::process::exit(exit_code_for(&e));
             }
             println!(
                 "✅ 登录成功：{}（{} / {}）",
@@ -531,7 +549,7 @@ fn do_login(username: &str, password: &str) {
         }
         Err(e) => {
             eprintln!("登录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -555,7 +573,7 @@ fn do_relogin() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("密码解密失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
 
@@ -591,7 +609,7 @@ fn do_relogin() {
         }
         Err(e) => {
             eprintln!("登录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -637,7 +655,7 @@ fn do_logout() {
         Ok(false) => println!("服务端没有返回明确的注销结果，可能是 token 已失效"),
         Err(e) => {
             eprintln!("注销请求失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 
@@ -700,7 +718,7 @@ fn do_review(n: u32) {
     let sess = session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     let c = client::Client::new(client::DeviceProfile::default()).with_credentials(
         client::Credentials {
@@ -713,7 +731,7 @@ fn do_review(n: u32) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("拉取记录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     let rows = list
@@ -1038,7 +1056,7 @@ fn do_export_records(rest: &[String]) {
     let sess = session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     let c = client::Client::new(client::DeviceProfile::default()).with_credentials(
         client::Credentials {
@@ -1052,7 +1070,7 @@ fn do_export_records(rest: &[String]) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("拉记录列表失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     let rows = list
@@ -1175,7 +1193,7 @@ fn do_cheat() {
     let sess = pace_forge::api::session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     let client =
         pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
@@ -1200,7 +1218,7 @@ fn do_cheat() {
         }
         Err(e) => {
             eprintln!("查询失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -1211,7 +1229,7 @@ fn show_semester() {
     let sess = session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     let client =
         pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
@@ -1245,7 +1263,10 @@ fn show_semester() {
                 }
             }
         }
-        Err(e) => eprintln!("查学期汇总失败: {e}"),
+        Err(e) => {
+            eprintln!("查学期汇总失败: {e}");
+            std::process::exit(exit_code_for(&e));
+        }
     }
 
     match goal {
@@ -1298,7 +1319,7 @@ fn run_with_start(
     let sess = session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     let client =
         pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
@@ -1384,7 +1405,7 @@ fn run_with_start(
         }
         Err(e) => {
             eprintln!("\n失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -1448,7 +1469,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     let now = pace_forge::crypto::envelope::now_ms() as i64;
@@ -1457,7 +1478,7 @@ fn do_at(hhmm: &str, days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     show_plan(st, dur_min);
@@ -1472,7 +1493,7 @@ fn do_ago(mins: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     show_plan(st, dur_min);
@@ -1489,7 +1510,7 @@ fn do_rand(days: i64, dist_km: f64, dur_min: f64, yes: bool) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     };
     show_plan(st, dur_min);
@@ -1505,7 +1526,7 @@ fn ai_client() -> pace_forge::api::client::Client {
     let sess = pace_forge::api::session::load_session();
     if !sess.is_valid() {
         eprintln!("未登录：先执行 `pace-forge web` 在网页里登录一次");
-        std::process::exit(1);
+        std::process::exit(EXIT_AUTH);
     }
     pace_forge::api::client::Client::new(pace_forge::api::client::DeviceProfile::default())
         .with_credentials(pace_forge::api::client::Credentials {
@@ -1527,7 +1548,7 @@ fn do_ai_list() {
         }
         Err(e) => {
             eprintln!("拉项目列表失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -1579,7 +1600,7 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
                 Ok(st) => Some(st.ms),
                 Err(e) => {
                     eprintln!("{e}");
-                    std::process::exit(1);
+                    std::process::exit(exit_code_for(&e));
                 }
             }
         }
@@ -1608,7 +1629,7 @@ fn do_ai(sport: i64, score: i64, minutes: bool, days: Option<i64>, yes: bool) {
         Ok(v) => println!("✅ 提交成功：{}", v.get("data").unwrap_or(&v)),
         Err(e) => {
             eprintln!("提交失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
@@ -1659,7 +1680,7 @@ fn do_ai_records(sport: i64, n: i64) {
         }
         Err(e) => {
             eprintln!("拉记录失败: {e}");
-            std::process::exit(1);
+            std::process::exit(exit_code_for(&e));
         }
     }
 }
