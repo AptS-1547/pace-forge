@@ -32,6 +32,9 @@ pub struct Guard {
 static GUARD_LOCK: Mutex<()> = Mutex::new(());
 
 impl Guard {
+    /// 把全局配置换成 `cfg`，返回的 [`Guard`] 在 drop 时恢复原值。
+    ///
+    /// 只给测试和「临时切换」用：持有期间其它线程读到的就是 `cfg`。
     pub fn replace(cfg: Config) -> Guard {
         let lock = GUARD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = CURRENT

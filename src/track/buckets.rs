@@ -13,17 +13,22 @@ use super::geo::distance;
 /// 速度桶。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeedBucket {
+    /// 桶内位移（米）。
     pub distance: f64,
     #[serde(rename = "beginTime")]
+    /// 桶起始时间戳（毫秒）。
     pub begin_time: i64,
     #[serde(rename = "endTime")]
+    /// 桶结束时间戳（毫秒）。
     pub end_time: i64,
     /// 整次跑步的起始毫秒戳（每桶都填同一个值）。
     pub flag: i64,
     /// 桶 id：提交用 `60000+i`，OBS 用 `(rrid%100000)*1000+endSec`。
     pub id: i64,
+    /// 恒 0，照真机报文。
     pub state: i32,
     #[serde(rename = "queueNum")]
+    /// 桶序号（`queueNum`）。
     pub queue_num: i32,
 }
 
@@ -31,21 +36,31 @@ pub struct SpeedBucket {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepBucket {
     #[serde(rename = "stepsNum")]
+    /// 桶内步数。
     pub steps_num: i32,
     #[serde(rename = "beginTime")]
+    /// 桶起始时间戳（毫秒）。
     pub begin_time: i64,
     #[serde(rename = "endTime")]
+    /// 桶结束时间戳（毫秒）。
     pub end_time: i64,
+    /// 整次跑步的起始毫秒戳。
     pub flag: i64,
+    /// 桶 id，规则同速度桶。
     pub id: i64,
     #[serde(rename = "maxDiff")]
+    /// 桶内最大步频差。
     pub max_diff: i32,
     #[serde(rename = "minDiff")]
+    /// 桶内最小步频差。
     pub min_diff: i32,
     #[serde(rename = "avgDiff")]
+    /// 桶内平均步频差。
     pub avg_diff: i32,
+    /// 恒 0，照真机报文。
     pub state: i32,
     #[serde(rename = "queueNum")]
+    /// 桶序号（`queueNum`）。
     pub queue_num: i32,
 }
 

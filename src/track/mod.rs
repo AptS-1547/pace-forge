@@ -155,6 +155,8 @@ pub fn cap_advances(adv: &mut [f64], caps: &[f64], total: f64) {
     }
 }
 
+/// 原地压缩起步窗口：把窗口内采样点的里程压到全程的约 1.1%，
+/// 后面的点顺延补上，末点仍钉在总长。
 pub fn compress_startup(
     pts: &mut [TrackPoint],
     start_ms: i64,
@@ -1061,6 +1063,7 @@ pub struct CheckpointSnap {
 /// 一批吸附的汇总。
 #[derive(Debug, Clone, Default)]
 pub struct SnapReport {
+    /// 每个打卡点的吸附结果。
     pub items: Vec<CheckpointSnap>,
     /// 吸附后相邻采样点的最大间距（米）——用来确认没把轨迹扯出 `GEO_JUMP`。
     pub max_gap_m: f64,

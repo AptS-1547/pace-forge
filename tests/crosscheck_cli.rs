@@ -1,3 +1,5 @@
+//! `pace-forge crosscheck` 的命令行回归：本地日切、时区提示和原始行号。
+
 // Integration tests panic on purpose; the workspace lints deny that only in production code.
 #![expect(
     clippy::unwrap_used,

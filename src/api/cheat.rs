@@ -38,6 +38,7 @@ pub enum Status {
 }
 
 impl Status {
+    /// 给用户看的状态说明。
     pub fn label(self) -> &'static str {
         match self {
             Status::NoRecord => "暂未发现违规记录",

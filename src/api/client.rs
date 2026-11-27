@@ -64,15 +64,25 @@ fn luhn_check_digit(body: &[u8]) -> u8 {
 /// 设备指纹。首次运行随机生成后应持久化，否则容易被判为异常设备。
 #[derive(Debug, Clone)]
 pub struct DeviceProfile {
+    /// App 版本号，要和服务端校验的那一套对得上。
     pub app_version: String,
+    /// 物理分辨率，形如 `1080x2400`。
     pub physic_pixel: String,
+    /// 逻辑分辨率。
     pub logic_pixel: String,
+    /// 是否 root：`0` / `1`。
     pub is_root: String,
+    /// 系统类型（`android`）。
     pub os_type: String,
+    /// SoC 型号，对应机型表里的 `soc`。
     pub cpu_model: String,
+    /// 设备名（`Pixel 6` 这类）。
     pub device_name: String,
+    /// 设备唯一 id。
     pub device_id: String,
+    /// 系统版本（`13`）。
     pub os_version: String,
+    /// 请求头里的 UA。
     pub user_agent: String,
     /// 安卓安装 ID：真机是 16 位小写 hex。
     ///
@@ -376,15 +386,20 @@ fn random_hex32() -> String {
 /// 鉴权凭据。
 #[derive(Debug, Clone, Default)]
 pub struct Credentials {
+    /// 用户 id。
     pub uid: Option<String>,
+    /// 登录 token。
     pub token: Option<String>,
+    /// 会话标识。
     pub unid: Option<String>,
 }
 
 /// 协议客户端。
 #[derive(Clone)]
 pub struct Client {
+    /// 设备指纹，随每个请求发出。
     pub device: DeviceProfile,
+    /// 鉴权凭据，未登录时全空。
     pub creds: Credentials,
     /// 强制验签。
     ///
@@ -393,10 +408,12 @@ pub struct Client {
     /// 接口整体失败。已用 Python 实现实测确认：不验签时三个接口全部 error=10000。
     /// 需要完整性保证时再打开。
     pub require_signature: bool,
+    /// HTTP 客户端（带代理、超时、证书配置）。
     pub agent: ureq::Agent,
 }
 
 impl Client {
+    /// 按设备指纹建一个未登录的客户端。
     pub fn new(device: DeviceProfile) -> Self {
         Self {
             device,
@@ -417,6 +434,7 @@ impl Client {
         }
     }
 
+    /// 带上凭据（builder 风格）。
     pub fn with_credentials(mut self, creds: Credentials) -> Self {
         self.creds = creds;
         self

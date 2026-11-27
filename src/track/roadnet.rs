@@ -140,13 +140,16 @@ const WALKABLE: &str = "footway|path|pedestrian|steps|track|service|residential|
 /// 一段路（OSM way 的几何）。
 #[derive(Debug, Clone)]
 pub struct RoadSegment {
+    /// 折线顶点（lat, lon）。
     pub points: Vec<(f64, f64)>,
+    /// OSM 的道路等级（`residential` 等）。
     pub kind: String,
 }
 
 /// 拉来的路网。
 #[derive(Debug, Clone, Default)]
 pub struct RoadNet {
+    /// 全部路段。
     pub segments: Vec<RoadSegment>,
     /// 数据来源描述，用于日志。
     pub source: String,
@@ -157,6 +160,7 @@ pub struct RoadNet {
 }
 
 impl RoadNet {
+    /// 一段路都没拉到。
     pub fn is_empty(&self) -> bool {
         self.segments.is_empty()
     }
@@ -651,7 +655,9 @@ fn urlencode(s: &str) -> String {
 /// 一条走出来的路线。
 #[derive(Debug, Clone)]
 pub struct RoadRoute {
+    /// 路线折线（lat, lon）。
     pub points: Vec<(f64, f64)>,
+    /// 路线长度（米）。
     pub length_m: f64,
     /// 走过的路段数。
     pub legs: usize,

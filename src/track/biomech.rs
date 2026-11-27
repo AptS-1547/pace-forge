@@ -51,6 +51,8 @@ pub struct Gait {
 /// 恒定、步幅继续缩。端点上 2.0 m/s 恰好回到回归值 125，两段连续。
 pub const GAIT_REGRESSION_FLOOR_MPS: f64 = 2.0;
 
+/// 按速度（m/s）和疲劳度（0~1）给出步频与步幅；
+/// 低于 [`GAIT_REGRESSION_FLOOR_MPS`] 走慢速分支，不外推回归。
 pub fn gait(v: f64, fatigue: f64) -> Gait {
     if v >= GAIT_REGRESSION_FLOOR_MPS {
         let target_cad = (34.4 + 44.5 * v) * (1.0 - 0.05 * fatigue);

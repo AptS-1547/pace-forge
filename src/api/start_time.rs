@@ -25,12 +25,15 @@ pub const DEFAULT_AGO_MIN: i64 = 30;
 pub const DEFAULT_AGO_MAX: i64 = 300;
 /// 随机时刻模式的窗口（本地时区小时）。
 pub const RAND_HOUR_LO: u32 = 7;
+/// 随机时刻窗口上界（本地时区 20 点）。
 pub const RAND_HOUR_HI: u32 = 20;
 
 /// 计算结果。`clamped` 为 true 表示原时刻会让结束时间越过当前，已提前。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartTime {
+    /// 起跑时间戳（毫秒）。
     pub ms: i64,
+    /// 原时刻会让结束时间晚于现在，已被提前。
     pub clamped: bool,
 }
 

@@ -31,13 +31,16 @@ pub struct Account {
     #[serde(default)]
     pub uid: String,
     #[serde(default)]
+    /// 登录 token，放在请求头里。
     pub token: String,
     #[serde(default)]
+    /// 服务端下发的会话/设备标识，鉴权头要带。
     pub unid: String,
     /// 展示用。
     #[serde(default)]
     pub name: String,
     #[serde(default)]
+    /// 学校名称，仅展示。
     pub school: String,
     /// 最后登录毫秒戳。
     #[serde(default)]
@@ -97,6 +100,7 @@ pub fn mask_phone(p: &str) -> String {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Book {
     #[serde(default)]
+    /// 全部账号，顺序即界面顺序。
     pub accounts: Vec<Account>,
     /// 加密这库密码的机器密钥指纹。老库没有这个字段（`None`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,10 +118,12 @@ impl Book {
         }
     }
 
+    /// 按 id 查账号。
     pub fn get(&self, id: &str) -> Option<&Account> {
         self.accounts.iter().find(|a| a.id == id)
     }
 
+    /// 按 id 取可变引用。
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Account> {
         self.accounts.iter_mut().find(|a| a.id == id)
     }
@@ -137,6 +143,7 @@ impl Book {
         id
     }
 
+    /// 删掉这个 id 的账号；返回是否真的删了一条。
     pub fn remove(&mut self, id: &str) -> bool {
         let n = self.accounts.len();
         self.accounts.retain(|a| a.id != id);
@@ -161,6 +168,7 @@ impl Book {
         n
     }
 
+    /// 已启用且已登录的账号，可以直接拿去跑。
     pub fn ready(&self) -> Vec<&Account> {
         self.accounts
             .iter()

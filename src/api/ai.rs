@@ -16,8 +16,11 @@ use super::client::{Client, expect_ok, uuid_v4};
 use crate::crypto::consts::hosts;
 use crate::error::Error;
 
+/// AI 运动项目列表接口。
 pub const AI_LIST_PATH: &str = "/api/v1/sport/ai/list";
+/// AI 运动记录上传接口。
 pub const AI_UPLOAD_PATH: &str = "/api/v65/sport/ai/record/upload";
+/// AI 运动记录列表接口。
 pub const AI_RECORDS_PATH: &str = "/api/v66/sport/ai/record/infos";
 
 /// 真人记录区间取来的常量（neko 标定）：持续频率 90 个/分、单次 240ms。
@@ -29,20 +32,25 @@ const MIN_DURATION_MS: i64 = 30_000;
 /// AI 运动项目。
 #[derive(Debug, Clone)]
 pub struct AiSport {
+    /// 项目 id，提交时原样带回。
     pub id: i64,
+    /// 项目名，仅展示。
     pub name: String,
 }
 
 /// 提交意图：按分钟或按次数。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AiMode {
+    /// 按分钟计成绩，参数是分钟数。
     Minutes(i64),
+    /// 按次数计成绩，参数是次数。
     Count(i64),
 }
 
 /// 项目详情：`type` 决定成绩语义（1 计次 / 2 计时）。
 #[derive(Debug, Clone, Copy)]
 pub struct SportInfo {
+    /// 成绩类型：1 计次 / 2 计时。
     pub sport_type: i64,
 }
 

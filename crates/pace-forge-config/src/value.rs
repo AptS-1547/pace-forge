@@ -5,9 +5,13 @@ use std::collections::HashMap;
 /// 解析后的单键值。键的 kind 由注册表保证，取值时按 kind 走对应入口。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// 字符串（地址、机型代号等）。
     Str(String),
+    /// 整数（端口、天数、次数）。
     Int(i64),
+    /// 浮点数（比例、公里、分钟）。
     Float(f64),
+    /// 布尔开关。
     Bool(bool),
 }
 
@@ -49,12 +53,16 @@ impl Value {
 /// 一个键的取值来自哪一层。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
+    /// 没有任何地方设置，取注册表里的默认值。
     Default,
+    /// 来自 `config.toml`。
     Toml,
+    /// 来自 `PACE_*` 环境变量（优先级最高）。
     Env,
 }
 
 impl Source {
+    /// 给人看的来源名，用在「非默认开关」那行提示里。
     pub fn label(self) -> &'static str {
         match self {
             Source::Default => "默认",

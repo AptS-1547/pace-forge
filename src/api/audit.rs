@@ -30,17 +30,25 @@ pub const REVERSE_TOL_M: f64 = 30.0;
 /// 一次体检的全部指标。字段全是算出来的数，没有判断。
 #[derive(Debug, Clone, Default)]
 pub struct Metrics {
+    /// 记录条数。
     pub count: usize,
     /// 首末记录跨了几天（含首末）
     pub span_days: usize,
+    /// 最长连续打卡天数。
     pub streak_best: usize,
+    /// 从最后一条往前数，当前连续了几天。
     pub streak_cur: usize,
     /// 起跑时刻最集中的整点（本地时区）
     pub hour: u32,
+    /// 落在最集中那个整点的记录占比（0~1）。
     pub hour_share: f64,
+    /// 平均里程（米）。
     pub dist_mean: f64,
+    /// 里程变异系数（标准差 / 均值），越小越整齐。
     pub dist_cv: f64,
+    /// 平均配速（秒/公里）。
     pub pace_mean: f64,
+    /// 配速变异系数，越小越像机器生成。
     pub pace_cv: f64,
     /// 重合度最高的一对：`(下标 a, 下标 b, 重合度)`，0 基
     pub overlap: Option<(usize, usize, f64)>,
@@ -50,12 +58,16 @@ pub struct Metrics {
     /// 只留「最高那一对」会漏报：一对反向的挡住第一名，后面同向的真复制就永远
     /// 不报警（#14 指出的方向性错误）。
     pub pairs: Vec<(usize, usize, f64, bool)>,
+    /// 起跑或结束贴着 0 点的记录数。
     pub near_midnight: usize,
+    /// 记录所在时区偏移（秒，东八区为 28800）。
     pub tz: i64,
+    /// 时区的人话说明。
     pub tz_desc: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 一条体检结论的严重程度。
 pub enum Level {
     /// 只是陈述，不是问题
     Info,
@@ -64,10 +76,13 @@ pub enum Level {
 }
 
 #[derive(Debug, Clone)]
+/// 一条体检结论。
 pub struct Finding {
     /// 检查码，`AUDIT_` 前缀
     pub code: &'static str,
+    /// 严重程度。
     pub level: Level,
+    /// 给用户看的说明。
     pub text: String,
 }
 

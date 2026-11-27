@@ -75,7 +75,9 @@ pub fn calendar_span(first_ms: i64, last_ms: i64, tz_offset_sec: i64) -> i64 {
 pub struct RunRecord {
     /// 起跑时间，毫秒戳
     pub start_ms: i64,
+    /// 里程（米）。
     pub distance_m: f64,
+    /// 用时（秒）。
     pub duration_sec: i64,
     /// 轨迹（BD-09 / WGS84 都行，只要同一批记录口径一致）
     pub track: Vec<(f64, f64)>,
@@ -173,8 +175,11 @@ pub fn parse_records(v: &Value) -> Vec<RunRecord> {
 
 /// 离线导入结果。行号对应原始文件中记录数组的位置。
 pub struct LocalRecordImport {
+    /// 能参与统计的记录。
     pub records: Vec<RunRecord>,
+    /// 每条记录在原文件里的行号（1 基），与 `records` 一一对应。
     pub row_numbers: Vec<usize>,
+    /// 被跳过或降级的记录及原因，带原始行号。
     pub issues: Vec<String>,
 }
 

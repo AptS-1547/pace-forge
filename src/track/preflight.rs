@@ -29,8 +29,11 @@ pub enum Level {
 /// 一条检查结果。
 #[derive(Debug, Clone)]
 pub struct Issue {
+    /// 严重程度。
     pub level: Level,
+    /// 检查码。
     pub code: &'static str,
+    /// 给用户看的说明。
     pub message: String,
 }
 
@@ -61,6 +64,7 @@ impl Issue {
 /// 自检报告。
 #[derive(Debug, Clone)]
 pub struct Report {
+    /// 全部检查结果。
     pub issues: Vec<Issue>,
 }
 
@@ -70,6 +74,7 @@ impl Report {
         self.issues.iter().any(|i| i.level == Level::Fatal)
     }
 
+    /// 致命问题数（非零就不能提交）。
     pub fn fatal_count(&self) -> usize {
         self.issues
             .iter()
@@ -77,6 +82,7 @@ impl Report {
             .count()
     }
 
+    /// 警告数。
     pub fn warn_count(&self) -> usize {
         self.issues
             .iter()
@@ -113,8 +119,11 @@ impl Report {
 
 /// 自检输入。
 pub struct Check<'a> {
+    /// 轨迹点。
     pub points: &'a [TrackPoint],
+    /// 合成的分桶与步数。
     pub sim: &'a SimResult,
+    /// 合成参数。
     pub params: &'a SimParams,
     /// 必过的打卡点（纬度, 经度, 名称）。
     pub checkpoints: &'a [(f64, f64, String)],
@@ -126,6 +135,7 @@ pub struct Check<'a> {
     pub total_steps: i32,
     /// 报文里的起止时间戳。
     pub start_time_ms: i64,
+    /// 报文里的结束时间戳。
     pub stop_time_ms: i64,
     /// 服务端规则允许的配速区间（分/公里），`None` 表示不校验。
     pub pace_range: Option<(f64, f64)>,

@@ -35,34 +35,44 @@ const CATALOG: &str = include_str!(concat!(
 pub const ABI_FALLBACK: &str = "arm64-v8a";
 
 #[derive(Debug, Clone)]
+/// 一个 SoC 平台。
 pub struct Platform {
     /// SoC 型号，真机 `cpuModel` 就是这一层（`SM8550`）
     pub soc: String,
     /// 商品名（`骁龙 8 Gen 2`），只用于打印
     pub name: String,
+    /// 厂商（`Qualcomm`），只用于打印。
     pub vendor: String,
 }
 
 #[derive(Debug, Clone)]
+/// 一款机型。
 pub struct Model {
     /// 平台代号（`kalama`），再查 `Platform`
     pub platform: String,
+    /// 品牌（`Xiaomi`），只用于打印。
     pub brand: String,
     /// 出处。空字符串视为「不可信」，`resolve` 不会用它
     pub src: String,
 }
 
 #[derive(Debug, Default)]
+/// 内置机型表：机型 → 平台 → SoC。
 pub struct Table {
+    /// 平台代号 → 平台信息。
     pub platforms: BTreeMap<String, Platform>,
+    /// 机型代号 → 机型信息。
     pub models: BTreeMap<String, Model>,
 }
 
 /// 官方目录里的一条：只描述「这台设备叫什么」，不含芯片。
 #[derive(Debug, Clone)]
 pub struct CatalogEntry {
+    /// 机型代号（`venus`）。
     pub codename: String,
+    /// 商品名。
     pub name: String,
+    /// 品牌。
     pub brand: String,
 }
 

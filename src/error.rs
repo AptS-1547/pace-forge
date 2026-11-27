@@ -21,7 +21,12 @@ pub enum ErrorKind {
     Auth(String),
     /// 厂商拒绝:业务 error 码 + 原始 message。
     #[error("{}", protocol_display(code, msg))]
-    Protocol { code: Option<i64>, msg: String },
+    Protocol {
+        /// 服务端业务错误码；响应里没有就是 `None`。
+        code: Option<i64>,
+        /// 服务端给的原始说明。
+        msg: String,
+    },
     /// 连接/超时/DNS。
     #[error("网络错误：{0}")]
     Network(String),
@@ -42,6 +47,7 @@ pub enum ErrorKind {
     Json(#[from] serde_json::Error),
 }
 
+/// 全库统一的错误类型；目前就是 [`ErrorKind`]，留个别名方便以后加 context。
 pub type Error = ErrorKind;
 
 fn protocol_display(code: &Option<i64>, m: &str) -> String {

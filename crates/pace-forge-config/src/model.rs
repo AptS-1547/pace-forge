@@ -148,10 +148,15 @@ pub enum FixedPoint {
 /// 「值来自哪一层」看 [`Config::sources`]。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Config {
+    /// 服务端地址与接口版本。
     pub server: Server,
+    /// 代理、出口与超时。
     pub network: Network,
+    /// 机型、系统版本等设备头。
     pub device: Device,
+    /// 轨迹与提交相关的运行参数。
     pub run: Run,
+    /// 每个键最终取自哪一层（默认 / toml / env），供「非默认开关」提示用。
     pub sources: Sources,
 }
 

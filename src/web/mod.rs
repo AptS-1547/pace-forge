@@ -59,6 +59,7 @@ fn try_admit() -> Option<InflightGuard> {
     }
 }
 
+/// 在 `addr` 上启动 Web 控制台并一直服务；只有监听失败才返回。
 pub fn serve(addr: &str) -> Result<(), Error> {
     let server =
         Server::http(addr).map_err(|e| ErrorKind::client(format!("监听 {addr} 失败: {e}")))?;

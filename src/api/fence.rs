@@ -29,11 +29,15 @@ pub const FENCE_PATH: &str = "/api/v1/getGeoFenceForRun";
 pub struct PassPoint {
     /// BD-09。
     pub lat: f64,
+    /// BD-09 经度。
     pub lon: f64,
     /// GCJ-02（有的响应只给这一套）。
     pub glat: f64,
+    /// GCJ-02 经度。
     pub glon: f64,
+    /// 服务端下发的是否固定点标记：`1` 是。
     pub is_fixed: i64,
+    /// 点名，仅展示。
     pub point_name: String,
 }
 
@@ -42,6 +46,7 @@ pub struct PassPoint {
 pub struct Fence {
     /// 服务端 id，`runAreaId` 通常取这个值。
     pub id: Option<i64>,
+    /// 围栏名（通常是校区名）。
     pub name: String,
     /// 闭合环，(lat, lon)，BD-09。
     pub ring: Vec<(f64, f64)>,
@@ -131,7 +136,9 @@ pub struct SelectedFence {
     pub polygons: Vec<Vec<(f64, f64)>>,
     /// 用于 `fixed_point_json` / OBS 的 `runAreaId`。
     pub run_area_id: i64,
+    /// 选中围栏的服务端 id（取第一个）；服务端没给则为 `None`。
     pub fence_id: Option<i64>,
+    /// 围栏名。
     pub name: String,
     /// 命中的围栏在原始列表里的下标。
     pub index: usize,
@@ -142,6 +149,7 @@ pub struct SelectedFence {
 /// 选择结果 + 兜底信息。
 #[derive(Debug, Clone)]
 pub struct FencePick {
+    /// 最终选中的围栏。
     pub selected: SelectedFence,
     /// 锚点不在任何围栏内，按最近围栏兜底。
     pub fallback: bool,

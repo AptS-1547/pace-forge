@@ -859,6 +859,7 @@ pub fn route_through(
 /// 未轮到的打卡点周围多少米算「不许擦过」。
 pub const ZONE_BAN_RADIUS_M: f64 = 12.0;
 
+/// 按顺序经过 `must` 各点走出约 `want_m` 米；`fix_end` 为真时不做末尾折返。
 pub fn route_through_ex(
     g: &RoadGraph,
     must: &[(f64, f64)],
@@ -1206,9 +1207,11 @@ pub fn soften(points: &[(f64, f64)], passes: usize, amp_m: f64, seed: u64) -> Ve
 /// 这里改成节点图：所有点按 1m 网格去重，段内相邻点连边，段间端点距离
 /// 小于 `hop_m` 就连边。之后在图上走，断口由连边补上，不需要「跳」。
 pub struct RoadGraph {
+    /// 去重后的节点坐标。
     pub nodes: Vec<(f64, f64)>,
     /// 邻接表：(邻居节点, 边长米, 边编号)
     pub adj: Vec<Vec<(usize, f64, usize)>>,
+    /// 每条边是否走过（规划时标记）。
     pub edge_used: Vec<bool>,
 }
 
@@ -1221,6 +1224,7 @@ fn node_key(p: (f64, f64)) -> (i64, i64) {
     )
 }
 
+/// 把路网的线段焊成图：端点相距不超过 `hop_m` 就连边。
 pub fn build_graph(net: &RoadNet, hop_m: f64) -> RoadGraph {
     use std::collections::HashMap;
     let mut nodes: Vec<(f64, f64)> = Vec::new();

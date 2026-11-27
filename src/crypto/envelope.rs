@@ -38,9 +38,13 @@ type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 /// 所以本地必须保留这个 key 才能解开响应。
 #[derive(Debug, Clone)]
 pub struct SessionKeys {
+    /// 第 1 段 `keyData`：随请求发出，本地留作解响应的 KDF 输入。
     pub kd1: String,
+    /// 第 2 段 `keyData`，同上。
     pub kd2: String,
+    /// 第 3 段 `keyData`，同上。
     pub kd3: String,
+    /// 第 4 段 `keyData`，同上。
     pub kd4: String,
     /// 响应解密用的 AES-128 key。
     pub response_key: [u8; 16],
@@ -87,6 +91,7 @@ pub enum OuterOrder {
 pub struct Envelope {
     /// 要作为 `headerSign` 头（或请求 body）发送的 JSON 串。
     pub wire: String,
+    /// 解响应用的会话密钥材料，必须留着。
     pub session: SessionKeys,
 }
 

@@ -18,29 +18,41 @@ use super::geo::{distance, nearest_index, nudge_to, sample_along, scale_to_lengt
 pub struct Checkpoint {
     /// BD-09（提交报文用）。
     pub lat: f64,
+    /// BD-09 经度。
     pub lng: f64,
     /// GCJ-02（高德地图展示用）。缺省时等于 BD-09，只在测试里出现。
     pub glat: f64,
+    /// GCJ-02 经度。
     pub glon: f64,
+    /// 点名。
     pub name: String,
 }
 
 /// 轨迹点。
 #[derive(Debug, Clone, Copy)]
 pub struct TrackPoint {
+    /// 纬度（BD-09）。
     pub lat: f64,
+    /// 经度（BD-09）。
     pub lon: f64,
+    /// 时间戳（毫秒）。
     pub time_ms: i64,
 }
 
 /// 规划请求。
 #[derive(Debug, Clone)]
 pub struct PlanRequest {
+    /// 校区中心纬度。
     pub center_lat: f64,
+    /// 校区中心经度。
     pub center_lng: f64,
+    /// 必须经过的打卡点，按顺序。
     pub checkpoints: Vec<Checkpoint>,
+    /// 目标里程（米）。
     pub total_distance_m: f64,
+    /// 目标时长（秒）。
     pub total_sec: i64,
+    /// 起跑时间戳（毫秒）。
     pub start_ms: i64,
     /// `sport_type=1` 计分跑（必须命中打卡点），`6` 自由跑。
     pub sport_type: i32,
@@ -72,8 +84,11 @@ impl Default for PlanRequest {
 /// 规划结果。
 #[derive(Debug, Clone)]
 pub struct PlanResult {
+    /// 轨迹点。
     pub points: Vec<TrackPoint>,
+    /// 回填后的打卡点。
     pub checkpoints: Vec<Checkpoint>,
+    /// 轨迹实际长度（米）。
     pub actual_length_m: f64,
 }
 
@@ -129,6 +144,7 @@ fn catmull_point(
     clippy::unwrap_used,
     reason = "non-empty is guaranteed by the construction above"
 )]
+/// 按请求规划一条轨迹；`rng` 供抖动使用，传入即可复现。
 pub fn plan(req: &PlanRequest, rng: &mut impl Rng) -> Result<PlanResult, Error> {
     if req.total_distance_m <= 0.0 {
         return Err(ErrorKind::fence("目标里程必须为正".into()));

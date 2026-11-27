@@ -702,13 +702,21 @@ pub type Log = dyn FnMut(&str);
 /// 流程产物。
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
+    /// 学校规则。
     pub policy: PolicyInfo,
+    /// 选中的围栏和兜底标记。
     pub fence: Option<FencePick>,
+    /// 打卡点上下文。
     pub points: PointsContext,
+    /// 轨迹点数。
     pub track_points: usize,
+    /// 轨迹实际长度（米）。
     pub actual_length_m: f64,
+    /// 总步数。
     pub total_steps: i32,
+    /// 平均步频（步/分钟）。
     pub avg_cadence: f64,
+    /// 自检报告。
     pub report: Report,
     /// 轨迹点（含时间戳），提交与明细上传都要用。
     pub track: Vec<crate::track::TrackPoint>,
@@ -718,9 +726,11 @@ pub struct RunOutcome {
     pub start_ms: i64,
     /// 几何实测里程（可能和目标有小偏差）。
     pub real_length_m: i64,
+    /// OBS 上传用的对象 key 列表。
     pub obs_keys: Vec<String>,
     /// 是否已提交。
     pub submitted: bool,
+    /// 服务端记录 id，提交成功后才有。
     pub record_id: Option<i64>,
     /// 本次报文用的点位数组（28 字段/点，与 `allLocJson` 同构）。
     ///
@@ -2282,6 +2292,8 @@ fn local_hms() -> String {
     )
 }
 
+/// 完整跑一遍：取规则、选围栏、取打卡点、规划并合成轨迹，
+/// 提交前调用 `confirm`，它回 `false` 就中止（已上传的 OBS 对象保留）。
 pub fn run_full(
     client: &Client,
     p: &RunParams,

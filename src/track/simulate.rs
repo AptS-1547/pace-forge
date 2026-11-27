@@ -27,8 +27,11 @@ use crate::error::{Error, ErrorKind};
 /// 合成参数。
 #[derive(Debug, Clone)]
 pub struct SimParams {
+    /// 目标里程（米）。
     pub total_distance_m: f64,
+    /// 目标时长（秒）。
     pub total_sec: i64,
+    /// 起跑时间戳（毫秒）。
     pub start_ms: i64,
     /// 目标步数。`None` 表示完全由步态模型决定。
     pub target_steps: Option<i32>,
@@ -36,7 +39,9 @@ pub struct SimParams {
     pub v_floor: f64,
     /// 速度剖面上限（m/s）。
     pub v_ceil: f64,
+    /// 运动学参数。
     pub kin: KinParams,
+    /// 随机种子。
     pub seed: u64,
 }
 
@@ -68,7 +73,9 @@ pub struct SimResult {
     pub total_steps: i32,
     /// 平均步频（步/分）。
     pub avg_cadence: f64,
+    /// 速度桶（10 秒一桶）。
     pub speed_buckets: Vec<SpeedBucket>,
+    /// 步频桶。
     pub step_buckets: Vec<StepBucket>,
     /// 实际总里程（应精确等于 `total_distance_m`）。
     pub actual_length_m: f64,

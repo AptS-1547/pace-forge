@@ -238,6 +238,7 @@ pub fn point_gcj(p: &Value) -> Option<(f64, f64)> {
     }
 }
 
+/// 从点位 JSON 里取 `(lat, lon)`，字段名兼容 `latitude` 等写法。
 pub fn point_xy(p: &Value) -> Option<(f64, f64)> {
     let lat = field_num(p, &["lat", "latitude"]);
     let lon = field_num(p, &["lon", "lng", "longitude"]);

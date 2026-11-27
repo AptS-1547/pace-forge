@@ -7,6 +7,7 @@ use crate::model::{Config, DEFAULT_APP_VERSION, FixedPoint, HwHeaders, PtScheme}
 use crate::registry::{TABLE, find_entry};
 use crate::value::{Source, Sources, Value};
 
+/// 配置文件名；默认位置是 `<数据目录>/config.toml`。
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
 /// 加载配置。`explicit` 来自 `--config <路径>` 或 `PACE_CONFIG`。

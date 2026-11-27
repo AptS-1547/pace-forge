@@ -21,20 +21,28 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Session {
     #[serde(default)]
+    /// 用户 id。
     pub uid: String,
     #[serde(default)]
+    /// 登录 token。
     pub token: String,
     #[serde(default)]
+    /// 会话标识。
     pub unid: String,
     #[serde(default)]
+    /// 登录名。
     pub username: String,
     #[serde(default)]
+    /// 姓名。
     pub name: String,
     #[serde(default)]
+    /// 校区名。
     pub campus_name: String,
     #[serde(default)]
+    /// 院系。
     pub depart: String,
     #[serde(default)]
+    /// 班级。
     pub grade_class: String,
     /// 登录时使用的设备标识，登出时用于确认是同一台机
     #[serde(default)]
@@ -42,6 +50,7 @@ pub struct Session {
 }
 
 impl Session {
+    /// token 和 uid 都在才算已登录（不校验是否过期）。
     pub fn is_valid(&self) -> bool {
         !self.token.is_empty() && !self.uid.is_empty()
     }

@@ -60,14 +60,23 @@ pub const MIN_STEPS: i32 = 2000;
 /// 构建参数。
 #[derive(Debug, Clone)]
 pub struct SubmitParams {
+    /// 用户 id。
     pub uid: String,
+    /// 会话标识。
     pub unid: String,
+    /// 这次提交的本地唯一 id。
     pub uuid: String,
+    /// 运动类型码（服务端的 `sportType`）。
     pub sport_type: i32,
+    /// 目标里程（米）。
     pub total_distance_m: i64,
+    /// 目标时长（秒）。
     pub total_time_sec: i64,
+    /// 总步数。
     pub total_steps: i32,
+    /// 起跑时间（毫秒）。
     pub start_time_ms: i64,
+    /// 结束时间（毫秒）。
     pub stop_time_ms: i64,
     /// 学期目标距离（米），决定 `complete`。
     pub sel_distance_m: i64,
@@ -75,8 +84,11 @@ pub struct SubmitParams {
     pub sel_run_time_sec: i64,
     /// 规则串，服务端原样回显。
     pub policy: String,
+    /// 围栏 id（`runAreaId`）。
     pub run_area_id: i64,
+    /// 围栏 JSON 串，服务端原样存。
     pub geo_fences_json: String,
+    /// 累计爬升（米）。
     pub total_ascent: i32,
     /// 海拔区间 `(最低, 最高)`，米。`None` 用默认 150±8m（142~158，取自真机
     /// `bdA` 实测 142.4~158.5）。
@@ -101,10 +113,15 @@ pub struct SubmitParams {
 /// 序号，App 详情页拿它排序/当索引，非连续值就只显示得出其中一部分点位。
 #[derive(Debug, Clone)]
 pub struct FixedPoint {
+    /// BD-09 纬度。
     pub lat: f64,
+    /// BD-09 经度。
     pub lon: f64,
+    /// 点名。
     pub point_name: String,
+    /// GCJ-02 纬度。
     pub glat: f64,
+    /// GCJ-02 经度。
     pub glon: f64,
     /// 服务端下发的 `isFixed`：1 = 固定打卡点（校门闸机这类），0 = 普通途经点。
     ///
@@ -216,9 +233,11 @@ impl SpeedFields {
     pub fn speed_json(&self) -> f64 {
         (self.speed.0 * 10_000.0).round() / 10_000.0
     }
+    /// 报文里的 `avgSpeed`，4 位小数。
     pub fn avg_speed_json(&self) -> f64 {
         (self.avg_speed.0 * 10_000.0).round() / 10_000.0
     }
+    /// 报文里的 `bdS`，2 位小数。
     pub fn bd_s_json(&self) -> f64 {
         (self.bd_s.0 * 100.0).round() / 100.0
     }
@@ -250,8 +269,21 @@ pub fn checkpoint_track_indexes(track: &[TrackPoint], coords: &[(f64, f64)]) -> 
 /// - `Missing`：没有可用采样点（严格模式下没放开半径，或轨迹压根没经过）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarkMatch {
-    Hit { index: usize, dist_m: f64 },
-    Relaxed { index: usize, dist_m: f64 },
+    /// 10 米内、且没被起点/终点/灰点占住（正常情形）。
+    Hit {
+        /// 命中的采样点下标。
+        index: usize,
+        /// 离必到点的距离（米）。
+        dist_m: f64,
+    },
+    /// 半径内全被占住，放开半径取了最近的非占用采样点（兜底）。
+    Relaxed {
+        /// 放开半径后取到的采样点下标。
+        index: usize,
+        /// 离必到点的距离（米）。
+        dist_m: f64,
+    },
+    /// 没有可用采样点，原因见 [`MissReason`]。
     Missing(MissReason),
 }
 
@@ -266,6 +298,7 @@ impl MarkMatch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+/// 没匹配上必到点的原因。
 pub enum MissReason {
     /// 轨迹点数组为空
     EmptyTrack,
@@ -395,25 +428,34 @@ fn fixed_strict() -> bool {
 /// 靠手拼 `json!` 时把键序写在注释里让人记，现在由 struct 声明钉死。
 #[derive(Debug, Clone, Serialize)]
 pub struct FixedPointItem<'a> {
+    /// BD-09 经度。
     pub lon: f64,
+    /// BD-09 纬度。
     pub lat: f64,
     /// 0 普通 / 1 必经。策略见 [`fixed_marks`]（#37 三档开关 + auto 规则）。
     #[serde(rename = "isFixed")]
     pub is_fixed: i64,
     #[serde(rename = "pointName")]
+    /// 点名。
     pub point_name: &'a str,
+    /// GCJ-02 经度。
     pub glon: f64,
+    /// GCJ-02 纬度。
     pub glat: f64,
     /// 该点在轨迹里的**首次经过下标**；没经过时用 rank 占位，不发 null。
     pub position: i64,
+    /// 起跑时间戳（毫秒），真机报文如此。
     pub flag: i64,
+    /// 点位 id：固定基数加上名次。
     pub id: i64,
     /// 给 App 详情页画绿点用，**恒 true**（服务端不认这个字段，它自己从轨迹判）。
     #[serde(rename = "isPass")]
     pub is_pass: bool,
+    /// 恒为 0。
     pub state: i64,
 }
 
+/// 把必到点转成 `fivePointJson` 的内层点位数组（JSON 值形式）。
 pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i64) -> Vec<Value> {
     // 每个点的首次经过下标；None = 轨迹没经过它
     let hits: Vec<Option<usize>> = fixed
@@ -504,8 +546,11 @@ pub fn fixed_point_items(fixed: &[FixedPoint], track: &[TrackPoint], flag_ms: i6
 /// - `FollowServer`：原样跟随服务端标记。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FixedPointMode {
+    /// 服务端标了必经点就至少保留一个 `isFixed=1`，否则全按普通点。
     Auto,
+    /// 全部发普通点（`isFixed=0`）。
     AllNormal,
+    /// 完全按服务端下发的 `isFixed`。
     FollowServer,
 }
 
@@ -696,12 +741,17 @@ fn point_type_scheme(has_fixed: bool) -> PointTypeScheme {
 /// 放一个结构体里，而不是在调用链上散成十几个位置参数。
 #[derive(Debug, Clone, Copy)]
 pub struct PointRunCtx {
+    /// 起跑时间（毫秒）。
     pub start_ms: i64,
+    /// 采样点总数。
     pub n: usize,
     /// 起步窗口点数（按时间戳数，与 `startup_point_count` 同口径）。
     pub startup: usize,
+    /// 抖动用的随机种子。
     pub seed: u64,
+    /// 点位类型分配方案。
     pub scheme: PointTypeScheme,
+    /// 海拔区间 `(最低, 最高)`，米；`None` 用默认。
     pub alt_range: Option<(f64, f64)>,
     /// 海拔噪声的点距缩放（1.0 = 真机标定点距）。
     pub alt_scale: f64,
@@ -711,10 +761,13 @@ pub struct PointRunCtx {
 /// 现在收成一个对象，「三条链共享同一 startup 窗口」从注释约定变成类型保证。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PointCursor {
+    /// 上一个采样点 `(lat, lon)`。
     pub prev: (f64, f64),
     /// 累计 `(位移 m, 时长 s, 步数)`。
     pub cum: (f64, i64, i64),
+    /// 上一个采样点的时间戳（毫秒）。
     pub prev_time: i64,
+    /// 到上一点的速度（m/s）。
     pub prev_v: f64,
 }
 
@@ -728,6 +781,7 @@ impl PointCursor {
     }
 }
 
+/// 构造第 `idx` 个采样点的完整报文对象，并推进游标 `cur`。
 pub fn point_json_full(
     p: &TrackPoint,
     idx: usize,
@@ -1084,10 +1138,15 @@ fn id_base(seed: u64, span: i64) -> i64 {
 pub struct VerifyView {
     /// 从报文点位反解出的轨迹（时间戳来自 totalTime）。
     pub points: Vec<TrackPoint>,
+    /// 报文里的总里程（米）。
     pub total_distance_m: f64,
+    /// 报文里的总时长（秒）。
     pub total_time_sec: i64,
+    /// 报文里的总步数。
     pub total_steps: i32,
+    /// 报文里的起跑时间（毫秒）。
     pub start_time_ms: i64,
+    /// 报文里的结束时间（毫秒）。
     pub stop_time_ms: i64,
     /// 报文里的步数桶（原样）。
     pub step_buckets: Vec<crate::track::StepBucket>,
@@ -5134,6 +5193,7 @@ fn reject_hint(code: i64) -> &'static str {
 /// 还拼了针对该错误码的提示，类别本身没有消费者。
 #[derive(Debug)]
 pub struct SubmitFailure {
+    /// 给用户看的失败说明。
     pub message: String,
     /// `true` = 服务端明确驳回（有业务错误码），可以确定没有入账；
     /// `false` = 网络错误 / HTTP 层异常 / 响应看不懂，**结果未知**。
@@ -5143,6 +5203,8 @@ pub struct SubmitFailure {
     pub rejected: bool,
 }
 
+/// 提交记录。失败统一归为厂商协议错误；
+/// 需要区分「明确驳回 / 结果未知」的调用方请用 `save_record_detailed`。
 pub fn save_record(
     client: &Client,
     body: &Value,

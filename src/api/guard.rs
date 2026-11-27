@@ -27,14 +27,25 @@ use std::path::{Path, PathBuf};
 pub enum Event {
     /// 请求已发出，结果未知。
     Pending {
+        /// 这次提交的本地唯一 id。
         uuid: String,
+        /// 提交窗口起点（毫秒）。
         start_ms: i64,
+        /// 提交窗口终点（毫秒）。
         stop_ms: i64,
     },
     /// 服务端接受了，`rrid` 是记录 id。
-    Accepted { uuid: String, rrid: i64 },
+    Accepted {
+        /// 对应的本地提交 id。
+        uuid: String,
+        /// 服务端返回的记录 id。
+        rrid: i64,
+    },
     /// 服务端明确拒绝（有错误码、且能确定没有入账）。
-    Rejected { uuid: String },
+    Rejected {
+        /// 被拒的那次提交的本地 id。
+        uuid: String,
+    },
 }
 
 /// 一次提交尝试（由事件流回放出来）。

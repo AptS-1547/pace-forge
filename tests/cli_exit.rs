@@ -1,3 +1,5 @@
+//! 命令行退出码约定的端到端回归：起真实的二进制，看它退几。
+
 // Integration tests panic on purpose; the workspace lints deny that only in production code.
 #![expect(
     clippy::unwrap_used,

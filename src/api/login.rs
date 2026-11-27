@@ -20,15 +20,25 @@ pub const LOGIN_CAPTCHA_ID: &str = "3b02ad39bd099fd3a8336d9347a189ab";
 /// 登录成功后的用户信息。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UserProfile {
+    /// 用户 id。
     pub uid: String,
+    /// 会话标识。
     pub unid: String,
+    /// 登录 token。
     pub token: String,
+    /// 姓名。
     pub name: String,
+    /// 登录名（手机号）。
     pub username: String,
+    /// 校区名。
     pub campus_name: String,
+    /// 校区 id。
     pub campus_id: String,
+    /// 院系。
     pub depart: String,
+    /// 班级。
     pub grade_class: String,
+    /// 性别（已转成文字）。
     pub sex: String,
 }
 
@@ -42,6 +52,7 @@ fn s(v: Option<&Value>) -> String {
 }
 
 impl UserProfile {
+    /// 从登录响应的 JSON 里取用户信息。
     pub fn from_data(d: &Value) -> Self {
         let sex = match d.get("sex").and_then(|x| x.as_i64()) {
             Some(1) => "男",
@@ -69,7 +80,12 @@ pub enum LoginOutcome {
     /// 成功，已把凭据写回 client。
     Ok(UserProfile),
     /// 需要过极验滑块。`uuid` 要透传给求解器。
-    NeedCaptcha { uuid: String, message: String },
+    NeedCaptcha {
+        /// 极验挑战 id，要透传给求解器。
+        uuid: String,
+        /// 服务端给的提示原文。
+        message: String,
+    },
 }
 
 /// 执行登录。成功时直接修改 `client.creds`。
