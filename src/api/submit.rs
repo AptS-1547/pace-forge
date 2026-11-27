@@ -2299,7 +2299,11 @@ mod tests {
         let s = redact_marker(s, "\"geeToken\": \"", &['"']);
         let s = redact_marker(&s, "\"signature\": \"", &['"']);
         let s = redact_marker(&s, "geeToken=", &['&', '"']);
-        redact_marker(&s, "signature=", &['&', '"'])
+        let s = redact_marker(&s, "signature=", &['&', '"']);
+        // `include_str!` 拿到的是工作区里的 fixture。Windows 上若按 CRLF 检出，
+        // 每行会多一个 `\r`，与生成的 LF 文本逐字比必然红（CI 的 windows-latest
+        // 就是这么红的）。统一成 LF 再比，比较对象的字节数不受平台影响。
+        s.replace("\r\n", "\n")
     }
 
     /// 报文口径的字节级护栏（#60）：同一组输入必须产出逐字节相同的
