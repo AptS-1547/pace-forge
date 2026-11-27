@@ -29,6 +29,9 @@
 
 ### 变更
 
+- **[仅修复]** `handle_plan` 拆成三条：参数与中心点解析留在本体，联网预演的
+  响应体搬到 `respond_online`，本地合成搬到 `respond_local`。纯搬移，响应
+  JSON 一字未改。
 - **[仅修复]** 网页控制台的请求体收进 `src/web/dto/`：每个路由域一个模块
   （run / accounts / meta / records / map_data），`body["x"].as_f64()` 这种散落
   取值变成 DTO 的字段 + 方法。字段全用宽松反序列化，类型不对仍然是「当没填」，

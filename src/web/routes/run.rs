@@ -131,125 +131,7 @@ pub(crate) fn handle_plan(
             drop(log);
 
             if let Ok(o) = r {
-                // 围栏多边形
-                let fence = o.fence.as_ref().map(|f| {
-                    // `Fence.ring` 是 **BD-09**（`fence::point_xy` 统一转过了），
-                    // 而底图是高德瓦片（GCJ-02 网格）。以前直接把 BD-09 的环
-                    // 喂给 `L.polygon`，围栏整体偏出去几百米——issue #3 里
-                    // 「电子围栏处于偏离状态」就是这个。轨迹点和打卡点当时都
-                    // 转过了，唯独围栏漏了。
-                    let to_gcj = |ring: &Vec<(f64, f64)>| -> Vec<Value> {
-                        ring.iter()
-                            .map(|&(la, lo)| {
-                                let (gl, go) = crate::api::coord::bd09_to_gcj02(la, lo);
-                                json!([gl, go])
-                            })
-                            .collect()
-                    };
-                    let ring = f.selected.polygons.first().cloned().unwrap_or_default();
-                    json!({
-                        "name": f.selected.name,
-                        "runAreaId": f.selected.run_area_id,
-                        "fallback": f.fallback,
-                        "distance": f.distance_m,
-                        "ring": ring.clone(),
-                        "ringGcj": to_gcj(&ring),
-                        "allPolygons": f.selected.polygons,
-                        "allPolygonsGcj": f.selected.polygons.iter().map(to_gcj).collect::<Vec<_>>(),
-                    })
-                });
-
-                // 打卡点 + 是否被轨迹覆盖
-                let track_xy: Vec<(f64, f64)> = o.track.iter().map(|t| (t.lat, t.lon)).collect();
-                let cps: Vec<Value> = o
-                    .points
-                    .coords
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &(a, b))| {
-                        let nearest = track_xy
-                            .iter()
-                            .map(|q| crate::track::geo::distance((a, b), *q))
-                            .fold(f64::MAX, f64::min);
-                        // 高德地图按 GCJ-02 网格切瓦片，前端摆点位必须用这一套，
-                        // 否则点位会整体偏出去几百米
-                        let (ga, go) = o.points.gcj_coords.get(i).copied().unwrap_or((a, b));
-                        json!({
-                            "index": i + 1,
-                            "lat": a,
-                            "lng": b,
-                            "gcjLat": ga,
-                            "gcjLng": go,
-                            "passed": nearest < 15.0,
-                            "nearest": (nearest * 10.0).round() / 10.0,
-                        })
-                    })
-                    .collect();
-
-                let passed = cps.iter().filter(|c| c["passed"] == true).count();
-                let step = (o.track.len() / 300).max(1);
-                let coords: Vec<Value> = o
-                    .track
-                    .iter()
-                    .step_by(step)
-                    // 底图是高德（GCJ-02 网格），轨迹点也要转过去才和瓦片对齐
-                    .map(|t| {
-                        let (gl, go) = crate::api::coord::bd09_to_gcj02(t.lat, t.lon);
-                        json!([gl, go])
-                    })
-                    .collect();
-
-                let ac = {
-                    let c: Vec<f64> = o
-                        .sim
-                        .step_buckets
-                        .iter()
-                        .map(|b| b.steps_num as f64)
-                        .collect();
-                    if c.len() >= 4 {
-                        let m = c.iter().sum::<f64>() / c.len() as f64;
-                        let den: f64 = c.iter().map(|x| (x - m).powi(2)).sum();
-                        if den > 1e-9 {
-                            c.windows(2).map(|w| (w[0] - m) * (w[1] - m)).sum::<f64>() / den
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    }
-                };
-
-                return json_ok(
-                    request,
-                    json!({
-                        "online": true,
-                        "distance": distance_km,
-                        "duration": duration_min,
-                        "actualLength": o.real_length_m,
-                        "steps": o.total_steps,
-                        "avgCadence": (o.avg_cadence * 10.0).round() / 10.0,
-                        "pointCount": o.track_points,
-                        "bucketCount": o.sim.step_buckets.len(),
-                        "stepAutocorr": (ac * 1000.0).round() / 1000.0,
-                        "blocked": o.report.blocked(),
-                        "issueSummary": o.report.summary(),
-                        "issues": o.report.lines(),
-                        "fence": fence,
-                        "checkpoints": cps,
-                        "checkpointTotal": o.points.coords.len(),
-                        "checkpointPassed": passed,
-                        "coords": coords,
-                        "mode": "online",
-                        "trackMode": o.track_mode,
-                        "stadiumFallback": o.stadium_fallback,
-                        "policy": {
-                            "minDistance": o.policy.min_distance,
-                            "validTime": o.policy.valid_time,
-                        },
-                        "logs": logs.borrow().clone(),
-                        "note": "已连服务端：围栏与打卡点为真实数据，未提交",
-                    }),
-                );
+                return respond_online(request, &o, distance_km, duration_min, &logs);
             }
             // dry_run 失败就退回本地合成，但要把原因带出来——
             // 否则页面只显示「本地合成」，完全不知道服务端哪一步卡住了
@@ -268,6 +150,153 @@ pub(crate) fn handle_plan(
         }
     }
 
+    respond_local(request, &f, lat, lng, steps, sport_type)
+}
+
+/// 在线预演成功时的响应：围栏、打卡点覆盖、抽稀轨迹、步频自相关。
+///
+/// 这一段原来长在 `handle_plan` 的 `if let Ok(o)` 里，纯搬移：逻辑和文案一字未改。
+fn respond_online(
+    request: tiny_http::Request,
+    o: &crate::api::flow::RunOutcome,
+    distance_km: f64,
+    duration_min: f64,
+    logs: &std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+) -> Result<(), Error> {
+    // 围栏多边形
+    let fence = o.fence.as_ref().map(|f| {
+        // `Fence.ring` 是 **BD-09**（`fence::point_xy` 统一转过了），
+        // 而底图是高德瓦片（GCJ-02 网格）。以前直接把 BD-09 的环
+        // 喂给 `L.polygon`，围栏整体偏出去几百米——issue #3 里
+        // 「电子围栏处于偏离状态」就是这个。轨迹点和打卡点当时都
+        // 转过了，唯独围栏漏了。
+        let to_gcj = |ring: &Vec<(f64, f64)>| -> Vec<Value> {
+            ring.iter()
+                .map(|&(la, lo)| {
+                    let (gl, go) = crate::api::coord::bd09_to_gcj02(la, lo);
+                    json!([gl, go])
+                })
+                .collect()
+        };
+        let ring = f.selected.polygons.first().cloned().unwrap_or_default();
+        json!({
+            "name": f.selected.name,
+            "runAreaId": f.selected.run_area_id,
+            "fallback": f.fallback,
+            "distance": f.distance_m,
+            "ring": ring.clone(),
+            "ringGcj": to_gcj(&ring),
+            "allPolygons": f.selected.polygons,
+            "allPolygonsGcj": f.selected.polygons.iter().map(to_gcj).collect::<Vec<_>>(),
+        })
+    });
+
+    // 打卡点 + 是否被轨迹覆盖
+    let track_xy: Vec<(f64, f64)> = o.track.iter().map(|t| (t.lat, t.lon)).collect();
+    let cps: Vec<Value> = o
+        .points
+        .coords
+        .iter()
+        .enumerate()
+        .map(|(i, &(a, b))| {
+            let nearest = track_xy
+                .iter()
+                .map(|q| crate::track::geo::distance((a, b), *q))
+                .fold(f64::MAX, f64::min);
+            // 高德地图按 GCJ-02 网格切瓦片，前端摆点位必须用这一套，
+            // 否则点位会整体偏出去几百米
+            let (ga, go) = o.points.gcj_coords.get(i).copied().unwrap_or((a, b));
+            json!({
+                "index": i + 1,
+                "lat": a,
+                "lng": b,
+                "gcjLat": ga,
+                "gcjLng": go,
+                "passed": nearest < 15.0,
+                "nearest": (nearest * 10.0).round() / 10.0,
+            })
+        })
+        .collect();
+
+    let passed = cps.iter().filter(|c| c["passed"] == true).count();
+    let step = (o.track.len() / 300).max(1);
+    let coords: Vec<Value> = o
+        .track
+        .iter()
+        .step_by(step)
+        // 底图是高德（GCJ-02 网格），轨迹点也要转过去才和瓦片对齐
+        .map(|t| {
+            let (gl, go) = crate::api::coord::bd09_to_gcj02(t.lat, t.lon);
+            json!([gl, go])
+        })
+        .collect();
+
+    let ac = {
+        let c: Vec<f64> = o
+            .sim
+            .step_buckets
+            .iter()
+            .map(|b| b.steps_num as f64)
+            .collect();
+        if c.len() >= 4 {
+            let m = c.iter().sum::<f64>() / c.len() as f64;
+            let den: f64 = c.iter().map(|x| (x - m).powi(2)).sum();
+            if den > 1e-9 {
+                c.windows(2).map(|w| (w[0] - m) * (w[1] - m)).sum::<f64>() / den
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    };
+
+    json_ok(
+        request,
+        json!({
+            "online": true,
+            "distance": distance_km,
+            "duration": duration_min,
+            "actualLength": o.real_length_m,
+            "steps": o.total_steps,
+            "avgCadence": (o.avg_cadence * 10.0).round() / 10.0,
+            "pointCount": o.track_points,
+            "bucketCount": o.sim.step_buckets.len(),
+            "stepAutocorr": (ac * 1000.0).round() / 1000.0,
+            "blocked": o.report.blocked(),
+            "issueSummary": o.report.summary(),
+            "issues": o.report.lines(),
+            "fence": fence,
+            "checkpoints": cps,
+            "checkpointTotal": o.points.coords.len(),
+            "checkpointPassed": passed,
+            "coords": coords,
+            "mode": "online",
+            "trackMode": o.track_mode,
+            "stadiumFallback": o.stadium_fallback,
+            "policy": {
+                "minDistance": o.policy.min_distance,
+                "validTime": o.policy.valid_time,
+            },
+            "logs": logs.borrow().clone(),
+            "note": "已连服务端：围栏与打卡点为真实数据，未提交",
+        }),
+    )
+}
+
+/// 离线预览：本地合成轨迹与报文，不联网。
+///
+/// `handle_plan` 的两条路径之一（未登录、或在线预演失败后退回）。纯搬移。
+fn respond_local(
+    request: tiny_http::Request,
+    f: &PlanForm,
+    lat: f64,
+    lng: f64,
+    steps: Option<i32>,
+    sport_type: i32,
+) -> Result<(), Error> {
+    let distance_km = f.distance_km();
+    let duration_min = f.duration_min();
     let total_m = distance_km * 1000.0;
     let total_sec = crate::number::round_to_i64(duration_min * 60.0).unwrap_or(0);
     let start_ms = std::time::SystemTime::now()
