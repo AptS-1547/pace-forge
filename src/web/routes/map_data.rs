@@ -1,6 +1,7 @@
 //! `/api/points` `/api/fences` `/api/blockers`：点位、围栏与手绘禁区。
 
 use crate::error::Error;
+use crate::web::dto::map_data::BlockersForm;
 use crate::web::http::{json_err, json_err_kind, json_ok, query_param};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
@@ -188,9 +189,11 @@ pub(crate) fn handle_blockers_get(request: tiny_http::Request) -> Result<(), Err
 /// 用法：OSM 在国内校园没有建筑轮廓，规划出来的轨迹会从楼里穿过去。
 /// 在地图上把楼圈成矩形，存一份，之后所有规划都会绕开。
 pub(crate) fn handle_blockers_put(request: tiny_http::Request, body: &Value) -> Result<(), Error> {
-    let Some(arr) = body.get("polys").and_then(|v| v.as_array()) else {
+    let form = BlockersForm::parse(body);
+    let Some(arr) = form.polys_array() else {
         return json_err(request, "polys 必须是数组");
     };
+    let arr = arr.clone();
     if arr.len() > 200 {
         return json_err(request, "禁区最多 200 块");
     }

@@ -4,8 +4,9 @@ use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{LoginOutcome, login};
 use crate::api::session;
 use crate::error::Error;
+use crate::web::dto::accounts::{AddAccountForm, BatchForm};
+use crate::web::dto::run::PlanForm;
 use crate::web::http::{json_err, json_err_kind, json_ok};
-use crate::web::routes::parse_alt_range;
 use crate::web::state::{AccountSessionAction, Shared, lock_state, remote_logout};
 use serde_json::{Value, json};
 
@@ -52,8 +53,9 @@ pub(crate) fn handle_add_account(
     state: Shared,
     body: &Value,
 ) -> Result<(), Error> {
-    let username = body["username"].as_str().unwrap_or("").trim().to_string();
-    let password = body["password"].as_str().unwrap_or("").to_string();
+    let form = AddAccountForm::parse(body);
+    let username = form.username().to_string();
+    let password = form.password().to_string();
     if username.is_empty() || password.is_empty() {
         return json_err(request, "手机号和密码都要填");
     }
@@ -295,20 +297,19 @@ pub(crate) fn handle_batch(
     state: Shared,
     body: &Value,
 ) -> Result<(), Error> {
-    let distance_km = body["distance"].as_f64().unwrap_or(2.0);
-    let duration_min = body["duration"].as_f64().unwrap_or(12.0);
-    let run_mode = body["runMode"].as_i64().unwrap_or(1);
-    let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
-    let sport_type = body["sportType"]
-        .as_i64()
-        .and_then(crate::number::i64_to_i32)
-        .unwrap_or(1);
+    let plan = PlanForm::parse(body);
+    let batch = BatchForm::parse(body);
+    let distance_km = plan.distance_km();
+    let duration_min = plan.duration_min();
+    let run_mode = plan.run_mode();
+    let start_at_ms = plan.start_at_ms();
+    let sport_type = plan.sport_type();
     // 跑之前必须确认「当前会话是谁」。
     //
     // 出过事：中途登录过另一个号做对比，回来忘了切，三条记录落到别人账号下，
     // 本地又没有删除接口，只能去 App 里手动删。提交是不可撤销的操作，宁可在
     // 这里多问一句——调用方明确给了 `expectUid` 就核对，对不上直接拒。
-    if let Some(want) = body["expectUid"].as_str().filter(|v| !v.is_empty()) {
+    if let Some(want) = plan.expect_uid() {
         let now = {
             let st = lock_state(&state);
             st.current.clone()
@@ -321,17 +322,10 @@ pub(crate) fn handle_batch(
             );
         }
     }
-    let dry = body["dry"].as_bool().unwrap_or(false);
+    let dry = batch.dry();
     // 账号间隔（毫秒），默认 8 秒，避免同 IP 高频
-    let gap_ms = body["gapMs"].as_u64().unwrap_or(8000);
-    let only: Vec<String> = body["ids"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let gap_ms = batch.gap_ms();
+    let only: Vec<String> = batch.ids();
 
     if distance_km <= 0.0 || distance_km > 42.0 {
         return json_err(request, "距离需在 0~42 公里之间");
@@ -393,9 +387,9 @@ pub(crate) fn handle_batch(
             run_mode,
             free_run: sport_type != 1,
             start_at_ms,
-            alt_range: parse_alt_range(body),
-            prefer_stadium: body["mode"].as_str() == Some("stadium"),
-            prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
+            alt_range: plan.alt_range(),
+            prefer_stadium: plan.prefer_stadium(),
+            prefer_roads: plan.prefer_roads(),
             ..Default::default()
         };
 

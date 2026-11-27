@@ -1,6 +1,7 @@
 //! 起跑时段、学期进度、出口设置、设备机型与网络自检。
 
 use crate::error::Error;
+use crate::web::dto::meta::{DeviceForm, EgressForm};
 use crate::web::http::{host_short, json_err, json_err_kind, json_ok, percent_encode, query_param};
 use crate::web::state::{Shared, device_scope, lock_state};
 use serde_json::{Value, json};
@@ -193,10 +194,8 @@ pub(crate) fn handle_egress_put(
     body: &Value,
 ) -> Result<(), Error> {
     use crate::api::egress;
-    let spec = body["proxy"]
-        .as_str()
-        .map(str::trim)
-        .filter(|p| !p.is_empty());
+    let form = EgressForm::parse(body);
+    let spec = form.proxy();
     if let Err(e) = egress::save_proxy(spec) {
         return json_err_kind(request, &e);
     }
@@ -307,23 +306,16 @@ pub(crate) fn handle_device_put(
             None => return json_err(request, "请先登录再设置机型"),
         }
     };
-    let model = body["model"]
-        .as_str()
-        .map(str::trim)
-        .filter(|m| !m.is_empty());
+    let dev = DeviceForm::parse(body);
+    let model = dev.model();
     if let Some(m) = model
         && (m.len() > 64 || m.chars().any(|c| c.is_control()))
     {
         return json_err(request, "机型 code 不合法（最长 64，不能含控制字符）");
     }
     // 给了平台代号就顺手记一条用户级映射（内置表查不到 SoC 时用得上）
-    if let (Some(m), Some(plat)) = (
-        model,
-        body["platform"]
-            .as_str()
-            .map(str::trim)
-            .filter(|p| !p.is_empty()),
-    ) && let Err(e) = crate::api::device_table::set_user_model(m, plat)
+    if let (Some(m), Some(plat)) = (model, dev.platform())
+        && let Err(e) = crate::api::device_table::set_user_model(m, plat)
     {
         return json_err_kind(request, &e);
     }

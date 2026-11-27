@@ -2,6 +2,7 @@
 
 use crate::api::records;
 use crate::error::Error;
+use crate::web::dto::records::{ObsFetchForm, RawForm};
 use crate::web::http::json_err_kind;
 use crate::web::http::{json_err, json_ok, query_param};
 use crate::web::state::{Shared, lock_state};
@@ -12,9 +13,8 @@ pub(crate) fn handle_obs_fetch(
     state: Shared,
     body: &Value,
 ) -> Result<(), Error> {
-    let key = match body.get("key").and_then(|v| v.as_str()) {
-        Some(k) if k.starts_with("run_data/") || k.starts_with("runData/") => k.to_string(),
-        _ => return json_err(request, "key 参数缺失或格式不对"),
+    let Some(key) = ObsFetchForm::parse(body).key().map(str::to_owned) else {
+        return json_err(request, "key 参数缺失或格式不对");
     };
     let client = {
         let st = lock_state(&state);
@@ -40,14 +40,16 @@ pub(crate) fn handle_raw(
     state: Shared,
     body: &Value,
 ) -> Result<(), Error> {
-    let path = body.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let form = RawForm::parse(body);
+    let path = form.path();
     if !path.starts_with("/api/") {
         return json_err(request, "path 必须是 /api/ 开头");
     }
-    let inner = body.get("body").cloned().unwrap_or_else(|| json!({}));
-    let host = match body.get("host").and_then(|v| v.as_str()).unwrap_or("run") {
-        "discovery" => crate::crypto::consts::hosts::DISCOVERY,
-        _ => crate::crypto::consts::hosts::RUN,
+    let inner = form.inner();
+    let host = if form.is_discovery() {
+        crate::crypto::consts::hosts::DISCOVERY
+    } else {
+        crate::crypto::consts::hosts::RUN
     };
 
     let client = {

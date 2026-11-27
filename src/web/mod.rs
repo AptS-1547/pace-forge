@@ -11,6 +11,7 @@
 
 mod assets;
 mod console_auth;
+mod dto;
 mod http;
 mod routes;
 mod state;

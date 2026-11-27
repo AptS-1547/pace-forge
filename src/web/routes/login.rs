@@ -3,6 +3,7 @@
 use crate::api::client::{Client, DeviceProfile};
 use crate::api::login::{LoginOutcome, login};
 use crate::error::Error;
+use crate::web::dto::accounts::AddAccountForm;
 use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
@@ -12,16 +13,9 @@ pub(crate) fn handle_login(
     state: Shared,
     body: &Value,
 ) -> Result<(), Error> {
-    let username = body
-        .get("username")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
-    let mut password = body
-        .get("password")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
+    let form = AddAccountForm::parse(body);
+    let username = form.username.as_deref().unwrap_or("").to_string();
+    let mut password = form.password.as_deref().unwrap_or("").to_string();
     if username.is_empty() {
         return json_err(request, "手机号要填");
     }

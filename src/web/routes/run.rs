@@ -1,6 +1,7 @@
 //! `/api/plan` 与 `/api/run`：参数解析、轨迹规划、预演与提交。
 
 use crate::error::{Error, ErrorKind};
+use crate::web::dto::run::PlanForm;
 use crate::web::http::{json_err, json_err_kind, json_ok};
 use crate::web::state::{Shared, lock_state};
 use serde_json::{Value, json};
@@ -17,14 +18,9 @@ use serde_json::{Value, json};
 /// 解析前端给的终点（可选）。坐标口径与锚点一致（默认 GCJ-02，服务端要 BD-09）。
 ///
 /// 两个字段都没填、或都是 0，就当没指定终点——保持原来的闭环行为。
-pub(crate) fn parse_end(body: &Value) -> Option<(f64, f64)> {
-    let la = body["endLat"].as_f64()?;
-    let ln = body["endLng"].as_f64()?;
-    if la == 0.0 && ln == 0.0 {
-        return None;
-    }
-    let cs = body["coord"].as_str().unwrap_or("gcj02");
-    input_to_bd09(la, ln, cs).ok()
+pub(crate) fn parse_end(f: &PlanForm) -> Option<(f64, f64)> {
+    let (la, ln) = f.end_raw()?;
+    input_to_bd09(la, ln, f.coord_sys()).ok()
 }
 
 pub(crate) fn input_to_bd09(lat: f64, lng: f64, sys: &str) -> Result<(f64, f64), Error> {
@@ -49,21 +45,16 @@ pub(crate) fn handle_plan(
     state: Shared,
     body: &serde_json::Value,
 ) -> Result<(), Error> {
-    let distance_km = body["distance"].as_f64().unwrap_or(2.0);
-    let duration_min = body["duration"].as_f64().unwrap_or(12.0);
+    let f = PlanForm::parse(body);
+    let distance_km = f.distance_km();
+    let duration_min = f.duration_min();
     // 0 或缺失都表示「没指定」，交给模型按配速推算。
     // 手填步数很容易和配速对不上——12 分钟 2300 步 = 192 步/分，
     // 而 2.78 m/s 的典型步频只有 158，差 34 步会被自检判 GAIT_MISMATCH。
-    let steps = body["steps"]
-        .as_i64()
-        .filter(|v| *v > 0)
-        .and_then(crate::number::i64_to_i32);
-    let sport_type = body["sportType"]
-        .as_i64()
-        .and_then(crate::number::i64_to_i32)
-        .unwrap_or(1);
-    let run_mode = body["runMode"].as_i64().unwrap_or(1);
-    let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
+    let steps = f.steps();
+    let sport_type = f.sport_type();
+    let run_mode = f.run_mode();
+    let start_at_ms = f.start_at_ms();
 
     // 中心点：请求里给的坐标 → 围栏环心 → 明确报错。
     //
@@ -73,9 +64,8 @@ pub(crate) fn handle_plan(
     //
     // 顺带修掉上一版的问题：原来持着 state 锁调 fetch_fences 做网络请求，
     // 会把 /api/accounts 之类的请求全部堵住，页面看起来像卡死。
-    let coord_sys = body["coord"].as_str().unwrap_or("gcj02");
-    let (lat, lng) = match (body["lat"].as_f64(), body["lng"].as_f64()) {
-        (Some(a), Some(b)) => match input_to_bd09(a, b, coord_sys) {
+    let (lat, lng) = match f.center() {
+        Some((a, b)) => match input_to_bd09(a, b, f.coord_sys()) {
             Ok(c) => c,
             Err(e) => return json_err_kind(request, &e),
         },
@@ -126,11 +116,11 @@ pub(crate) fn handle_plan(
                 run_mode,
                 free_run: sport_type != 1,
                 start_at_ms,
-                custom_path: parse_custom_path(body),
-                end: parse_end(body),
-                alt_range: parse_alt_range(body),
-                prefer_stadium: body["mode"].as_str() == Some("stadium"),
-                prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
+                custom_path: custom_path_bd09(&f),
+                end: parse_end(&f),
+                alt_range: f.alt_range(),
+                prefer_stadium: f.prefer_stadium(),
+                prefer_roads: f.prefer_roads(),
                 ..Default::default()
             };
             let logs: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
@@ -286,9 +276,8 @@ pub(crate) fn handle_plan(
         .unwrap_or(0);
 
     // ── 模式：自由路线 or 操场绕圈 ──
-    let mode = body["mode"].as_str().unwrap_or("free");
-    let lane =
-        crate::number::i64_to_u8(body["lane"].as_i64().unwrap_or(1).clamp(1, 8)).unwrap_or(1);
+    let mode = f.mode.as_deref().unwrap_or("free");
+    let lane = f.lane();
 
     // 离线预览用的是**固定尺寸**的标准跑道（`STRAIGHT` + `lane_radius`），
     // 而以你填的坐标当圆心。真正提交时走的是 `try_stadium_track`——拿打卡点
@@ -499,38 +488,13 @@ pub(crate) fn handle_plan(
 /// 前端底图是高德，瓦片按 GCJ-02 网格切，Leaflet 拿到手的就是 GCJ-02，
 /// 提交报文要 BD-09，所以逐点 `gcj02_to_bd09`。
 /// 少于 2 个点当作没传，退回算法规划。
-/// 从请求体读海拔区间 `[altMin, altMax]`（米）。
-///
-/// 不同校区海拔差得远，写死一个基准等于把「在哪跑」暴露出来。用户给了
-/// 区间就按中点+半宽生成，没给或给反了就返回 `None` 用默认值，不报错。
-pub(crate) fn parse_alt_range(body: &Value) -> Option<(f64, f64)> {
-    let lo = body.get("altMin").and_then(|v| v.as_f64())?;
-    let hi = body.get("altMax").and_then(|v| v.as_f64())?;
-    if hi > lo + 1.0 && lo > -500.0 && hi < 9000.0 {
-        Some((lo, hi))
-    } else {
-        None
-    }
-}
-
-pub(crate) fn parse_custom_path(body: &Value) -> Option<Vec<(f64, f64)>> {
-    body.get("customPath")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| {
-                    let pair = item.as_array()?;
-                    let lat = pair.first()?.as_f64()?;
-                    let lng = pair.get(1)?.as_f64()?;
-                    // 明显不是经纬度的值直接丢掉，别把脏数据带进报文
-                    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lng) {
-                        return None;
-                    }
-                    Some(crate::api::coord::gcj02_to_bd09(lat, lng))
-                })
-                .collect::<Vec<(f64, f64)>>()
-        })
-        .filter(|v| v.len() >= 2)
+/// 手绘轨迹从 GCJ-02（Leaflet 拿到的高德网格）转到 BD-09（提交口径）。
+pub(crate) fn custom_path_bd09(f: &PlanForm) -> Option<Vec<(f64, f64)>> {
+    f.custom_path().map(|pts| {
+        pts.into_iter()
+            .map(|(lat, lng)| crate::api::coord::gcj02_to_bd09(lat, lng))
+            .collect()
+    })
 }
 
 pub(crate) fn handle_run(
@@ -538,16 +502,13 @@ pub(crate) fn handle_run(
     state: Shared,
     body: &Value,
 ) -> Result<(), Error> {
-    let distance_km = body["distance"].as_f64().unwrap_or(2.0);
-    let duration_min = body["duration"].as_f64().unwrap_or(12.0);
-    let lat = body["lat"].as_f64();
-    let lng = body["lng"].as_f64();
-    let run_mode = body["runMode"].as_i64().unwrap_or(1);
-    let start_at_ms = body["startAtMs"].as_i64().filter(|v| *v > 0);
-    let sport_type = body["sportType"]
-        .as_i64()
-        .and_then(crate::number::i64_to_i32)
-        .unwrap_or(1);
+    let f = PlanForm::parse(body);
+    let distance_km = f.distance_km();
+    let duration_min = f.duration_min();
+    let center_in = f.center();
+    let run_mode = f.run_mode();
+    let start_at_ms = f.start_at_ms();
+    let sport_type = f.sport_type();
 
     // 提交前核对当前会话账号。
     //
@@ -555,7 +516,7 @@ pub(crate) fn handle_run(
     // 本地没有删除接口，只能去 App 里手动删。调用方给了 `expectUid` 就核对，
     // 对不上直接拒。**注意这个校验必须落在 `handle_run` 里**——上一版误加到了
     // `handle_batch`，那条入口根本没人走，等于没加。
-    if let Some(want) = body["expectUid"].as_str().filter(|v| !v.is_empty()) {
+    if let Some(want) = f.expect_uid() {
         let now = { lock_state(&state).current.clone() };
         let now_str = now.clone().unwrap_or_else(|| "（未登录）".into());
         if now.as_deref() != Some(want) {
@@ -594,9 +555,8 @@ pub(crate) fn handle_run(
     //
     // 兜底坐标不该出现在业务路径上：拿不到真实位置就明确报错，别静默
     // 生成一条荒唐轨迹——错误信息比一条假轨迹有用。
-    let coord_sys = body["coord"].as_str().unwrap_or("gcj02");
-    let (clat, clng) = match (lat, lng) {
-        (Some(a), Some(b)) => match input_to_bd09(a, b, coord_sys) {
+    let (clat, clng) = match center_in {
+        Some((a, b)) => match input_to_bd09(a, b, f.coord_sys()) {
             Ok(c) => c,
             Err(e) => return json_err_kind(request, &e),
         },
@@ -614,7 +574,7 @@ pub(crate) fn handle_run(
         },
     };
 
-    let custom_path = parse_custom_path(body);
+    let custom_path = custom_path_bd09(&f);
 
     let p = crate::api::flow::RunParams {
         center_lat: clat,
@@ -626,9 +586,9 @@ pub(crate) fn handle_run(
         free_run: sport_type != 1,
         start_at_ms,
         custom_path,
-        alt_range: parse_alt_range(body),
-        prefer_stadium: body["mode"].as_str() == Some("stadium"),
-        prefer_roads: body["preferRoads"].as_bool().unwrap_or(true),
+        alt_range: f.alt_range(),
+        prefer_stadium: f.prefer_stadium(),
+        prefer_roads: f.prefer_roads(),
         ..Default::default()
     };
 
@@ -683,9 +643,9 @@ pub(crate) fn handle_run(
 #[cfg(test)]
 mod tests {
     use super::input_to_bd09;
-    use super::parse_alt_range;
     use crate::api::coord::{bd09_to_gcj02, gcj02_to_bd09};
     use crate::track::geo::distance;
+    use crate::web::dto::run::PlanForm;
 
     /// 围栏环必须从 BD-09 转到 GCJ-02，且转换量级要**明显可见**。
     ///
@@ -746,10 +706,10 @@ mod tests {
     #[test]
     fn accepts_valid_range() {
         let v = serde_json::json!({"altMin": 100, "altMax": 140});
-        assert_eq!(parse_alt_range(&v), Some((100.0, 140.0)));
+        assert_eq!(PlanForm::parse(&v).alt_range(), Some((100.0, 140.0)));
         // 沿海校区：区间窄但仍有意义（比 GPS 高程噪声 0.8m 宽就行）
         let v = serde_json::json!({"altMin": 5.0, "altMax": 9.0});
-        assert_eq!(parse_alt_range(&v), Some((5.0, 9.0)));
+        assert_eq!(PlanForm::parse(&v).alt_range(), Some((5.0, 9.0)));
     }
 
     /// 上下界搞反、只填一个、超出地形范围，一律当没填（退回默认），
@@ -767,7 +727,7 @@ mod tests {
             serde_json::json!({"altMin": "高", "altMax": "低"}), // 不是数字
         ];
         for c in cases {
-            assert_eq!(parse_alt_range(&c), None, "该拒绝的没拒绝: {c}");
+            assert_eq!(PlanForm::parse(&c).alt_range(), None, "该拒绝的没拒绝: {c}");
         }
     }
 
