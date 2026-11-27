@@ -29,6 +29,9 @@
 
 ### 变更
 
+- **[仅修复]** `dry_run` 的①策略、②围栏、③打卡点、④规划四段各自提成
+  `stage_policy` / `stage_fence` / `stage_points` / `plan_stage`，本体从 1300
+  行降到约 560 行，只剩「按什么顺序、失败怎么降级」。日志文案和降级规则一字未改。
 - **[仅修复]** `handle_plan` 拆成三条：参数与中心点解析留在本体，联网预演的
   响应体搬到 `respond_online`，本地合成搬到 `respond_local`。纯搬移，响应
   JSON 一字未改。

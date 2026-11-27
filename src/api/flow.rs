@@ -770,85 +770,10 @@ fn rerun_start_ms(local_t: i64, skew: Option<i64>) -> i64 {
     local_t + skew.unwrap_or(0)
 }
 
-/// 只做到自检为止（不发任何写请求）。
+/// ① 拉取策略串（记分跑在时段外会 11016，允许按配置兜底）。
 ///
-/// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
-pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutcome, Error> {
-    p.validate()?;
-    // 校时：之后所有时间戳都必须落在服务器时间轴上。
-    // 「开始时间 + 时长 ≤ 服务器现在」是服务端硬判据，本机时钟偏十几分钟
-    // 就直接驳回，而本地自检用同一个时钟，永远发现不了这个偏差。
-    // 阶段计时：每一步都报耗时，卡住时日志里能直接看出卡在哪一段。
-    let dry_t0 = std::time::Instant::now();
-    let mut stage_t = dry_t0;
-
-    let (server_now, skew) = super::gmttime::server_now_ms(client);
-    match skew {
-        Some(off) if off.abs() >= 1000 => log(&format!(
-            "√ [clock] 已校时：服务器比本机{}{}ms",
-            if off > 0 { "快" } else { "慢" },
-            off.abs()
-        )),
-        Some(_) => log("√ [clock] 已校时：与本机一致"),
-        None => log("· [clock] 校时失败，按本机时钟继续"),
-    }
-    let start_ms = match p.start_at_ms {
-        // 补跑：时间是外部算好的，但**必须搬到服务器时间轴上**再发。
-        //
-        // `start_time` 模块用的是本机时钟（它没有服务器时间），算出来的 `t`
-        // 带本机误差。校时拿到的 `skew` 原来只写进日志就丢了——本机快 10 分钟
-        // 时，补跑记录会原样落到服务器未来轴，同样被「开始 + 时长 ≤ 现在」
-        // 驳回。`skew = 服务器 - 本机`，所以是加。
-        Some(t) => {
-            use rand::Rng;
-            let mut r = rand::rng();
-            rerun_start_ms(t, skew) + r.random_range(0..4_000i64)
-        }
-        // 「现在跑」= 补一条**刚跑完**的记录，不是「从现在开始跑」。
-        //
-        // 早先这里取 `server_now + 0~5s`，而 `stop = start + duration*1000`，
-        // 于是整条记录的时间窗必然落在服务器未来——服务端按「开始 + 时长 ≤
-        // 服务器当前时间」判据会驳回，且失败计入错误次数。现在把结束时刻压到
-        // 服务器现在之前的 5~9 秒（留余量吸收往返延迟与毫秒抖动），
-        // 起跑时刻随之倒推一整个时长。
-        None => {
-            use rand::Rng;
-            let mut r = rand::rng();
-            // 5~9 秒余量：吸收提交往返延迟与服务端毫秒级抖动
-            start_for_immediate_run(
-                server_now,
-                p.duration_sec,
-                5_000 + r.random_range(0..4_000i64),
-            )
-        }
-    };
-
-    // ⓿ 学期进度：记分跑要先知道还差多少
-    if p.run_mode == 1 {
-        match super::semester::fetch_summary(client) {
-            Ok(sm) => log(&format!("√ [semester] {}", sm.summary())),
-            Err(e) => log(&format!("· [semester] 查询失败（不影响流程）: {e}")),
-        }
-        match super::semester::fetch_goal(client, p.run_mode) {
-            Ok(g) if g.target_dis > 0.0 => {
-                let left = g.remaining_dis(0.0) / 1000.0;
-                log(&format!(
-                    "√ [goal] 学期目标 {:.1}km / {} 次{}",
-                    left,
-                    g.target_count,
-                    if g.days_left(server_now) >= 0 {
-                        format!("，还剩 {} 天", g.days_left(server_now))
-                    } else {
-                        String::new()
-                    }
-                ));
-            }
-            Ok(_) => {}
-            Err(e) => log(&format!("· [goal] 查询失败（不影响流程）: {e}")),
-        }
-    }
-
-    // ① policy
+/// 提出来是为了让 [`dry_run`] 只剩「哪一步、什么顺序」，降级规则留在这里。
+fn stage_policy(client: &Client, p: &RunParams, log: &mut Log) -> Result<PolicyInfo, Error> {
     log(&format!("[policy] 拉取策略 runMode={}…", p.run_mode));
     // 记分跑在时段外会直接 11016，连策略串都拿不到。但提交报文只要
     // policy 这个字符串（实测恒为 "0"），timestamp 不进签名，点位又走
@@ -875,14 +800,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         }
         Err(e) => return Err(e),
     };
+    Ok(pol)
+}
 
-    log(&format!(
-        "[耗时] 校时+策略 {:.1}s",
-        stage_t.elapsed().as_secs_f64()
-    ));
-    stage_t = std::time::Instant::now();
-
-    // ② fence
+/// ② 拉围栏并选锚点所在的圈；计分跑拿不到围栏就是硬失败（issue #8）。
+fn stage_fence(client: &Client, p: &RunParams, log: &mut Log) -> Result<Option<FencePick>, Error> {
     // 自由跑 / 户外跑：runMode=2 服务端本来就不下发围栏（geoFence=null），
     // 跳过拉取，直接走「无围栏」支路（轨迹绕锚点自由生成）。
     let fences = if p.free_run {
@@ -935,16 +857,18 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             None
         }
     };
+    Ok(pick)
+}
 
-    log(&format!(
-        "[耗时] 围栏 {:.1}s",
-        stage_t.elapsed().as_secs_f64()
-    ));
-    stage_t = std::time::Instant::now();
-
-    // ③ points
+/// ③ 拉打卡点：接口空数组时退回围栏下发的必经点，失败则无点位继续。
+fn stage_points(
+    client: &Client,
+    p: &RunParams,
+    pick: Option<&FencePick>,
+    log: &mut Log,
+) -> PointsContext {
     // 自由跑 / 户外跑：没有打卡点，跳过拉取（neko 的自由跑同样不拉点位）。
-    let pt = match if p.free_run {
+    match if p.free_run {
         log("[points] 自由跑：跳过打卡点拉取，轨迹将绕锚点自由生成");
         Ok(PointsContext::default())
     } else {
@@ -1014,15 +938,22 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             ));
             PointsContext::default()
         }
-    };
+    }
+}
 
-    log(&format!(
-        "[耗时] 打卡点 {:.1}s",
-        stage_t.elapsed().as_secs_f64()
-    ));
-    stage_t = std::time::Instant::now();
-
-    // ④ 规划
+/// ④ 规划：手绘 > 操场 > 围栏路线/自由规划，产出 `track` 与支路标记。
+///
+/// 这一段原来占 `dry_run` 500 行，分支判断（终点优先于操场、操场点位顺序闸、
+/// 手绘不缩放）都留在这里；`dry_run` 只拿到结果，不再看过程。
+fn plan_stage(
+    p: &RunParams,
+    pt: &PointsContext,
+    pick: Option<&FencePick>,
+    start_ms: i64,
+    log: &mut Log,
+) -> Result<TrackStage, Error> {
+    // 子阶段计时（手绘/操场），与 `dry_run` 的整段计时互不影响。
+    let mut stage_t = std::time::Instant::now();
     let cps: Vec<Checkpoint> = pt
         .coords
         .iter()
@@ -1338,7 +1269,6 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             "[耗时] 拉路网 {:.1}s",
             stage_t.elapsed().as_secs_f64()
         ));
-        stage_t = std::time::Instant::now();
 
         let route = if let Some(r) = on_roads {
             r
@@ -1541,6 +1471,140 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         p.distance_m,
         (track.actual_length_m - p.distance_m).abs() / p.distance_m * 100.0
     ));
+    Ok(TrackStage {
+        cps,
+        blockers_used,
+        track,
+        track_mode,
+        stadium_fallback,
+    })
+}
+
+/// [`plan_stage`] 的产出：后续 ⑤ 采样、⑥ 仿真、⑦ 自检都要用。
+struct TrackStage {
+    /// 打卡点（含 GCJ-02 坐标与 `P{i}` 名字）。
+    cps: Vec<Checkpoint>,
+    /// 本次避让用的障碍轮廓；只有围栏支路会填。
+    blockers_used: Vec<Vec<(f64, f64)>>,
+    /// 规划出来的几何。
+    track: crate::track::PlanResult,
+    /// `"draw"` / `"stadium"` / `"route"`。
+    track_mode: &'static str,
+    /// 请求了操场但回退到路线规划。
+    stadium_fallback: bool,
+}
+
+/// 只做到自检为止（不发任何写请求）。
+///
+/// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
+pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutcome, Error> {
+    p.validate()?;
+    // 校时：之后所有时间戳都必须落在服务器时间轴上。
+    // 「开始时间 + 时长 ≤ 服务器现在」是服务端硬判据，本机时钟偏十几分钟
+    // 就直接驳回，而本地自检用同一个时钟，永远发现不了这个偏差。
+    // 阶段计时：每一步都报耗时，卡住时日志里能直接看出卡在哪一段。
+    let dry_t0 = std::time::Instant::now();
+    let mut stage_t = dry_t0;
+
+    let (server_now, skew) = super::gmttime::server_now_ms(client);
+    match skew {
+        Some(off) if off.abs() >= 1000 => log(&format!(
+            "√ [clock] 已校时：服务器比本机{}{}ms",
+            if off > 0 { "快" } else { "慢" },
+            off.abs()
+        )),
+        Some(_) => log("√ [clock] 已校时：与本机一致"),
+        None => log("· [clock] 校时失败，按本机时钟继续"),
+    }
+    let start_ms = match p.start_at_ms {
+        // 补跑：时间是外部算好的，但**必须搬到服务器时间轴上**再发。
+        //
+        // `start_time` 模块用的是本机时钟（它没有服务器时间），算出来的 `t`
+        // 带本机误差。校时拿到的 `skew` 原来只写进日志就丢了——本机快 10 分钟
+        // 时，补跑记录会原样落到服务器未来轴，同样被「开始 + 时长 ≤ 现在」
+        // 驳回。`skew = 服务器 - 本机`，所以是加。
+        Some(t) => {
+            use rand::Rng;
+            let mut r = rand::rng();
+            rerun_start_ms(t, skew) + r.random_range(0..4_000i64)
+        }
+        // 「现在跑」= 补一条**刚跑完**的记录，不是「从现在开始跑」。
+        //
+        // 早先这里取 `server_now + 0~5s`，而 `stop = start + duration*1000`，
+        // 于是整条记录的时间窗必然落在服务器未来——服务端按「开始 + 时长 ≤
+        // 服务器当前时间」判据会驳回，且失败计入错误次数。现在把结束时刻压到
+        // 服务器现在之前的 5~9 秒（留余量吸收往返延迟与毫秒抖动），
+        // 起跑时刻随之倒推一整个时长。
+        None => {
+            use rand::Rng;
+            let mut r = rand::rng();
+            // 5~9 秒余量：吸收提交往返延迟与服务端毫秒级抖动
+            start_for_immediate_run(
+                server_now,
+                p.duration_sec,
+                5_000 + r.random_range(0..4_000i64),
+            )
+        }
+    };
+
+    // ⓿ 学期进度：记分跑要先知道还差多少
+    if p.run_mode == 1 {
+        match super::semester::fetch_summary(client) {
+            Ok(sm) => log(&format!("√ [semester] {}", sm.summary())),
+            Err(e) => log(&format!("· [semester] 查询失败（不影响流程）: {e}")),
+        }
+        match super::semester::fetch_goal(client, p.run_mode) {
+            Ok(g) if g.target_dis > 0.0 => {
+                let left = g.remaining_dis(0.0) / 1000.0;
+                log(&format!(
+                    "√ [goal] 学期目标 {:.1}km / {} 次{}",
+                    left,
+                    g.target_count,
+                    if g.days_left(server_now) >= 0 {
+                        format!("，还剩 {} 天", g.days_left(server_now))
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => log(&format!("· [goal] 查询失败（不影响流程）: {e}")),
+        }
+    }
+
+    // ① policy
+    let pol = stage_policy(client, p, log)?;
+    log(&format!(
+        "[耗时] 校时+策略 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
+    stage_t = std::time::Instant::now();
+
+    // ② fence
+    let pick = stage_fence(client, p, log)?;
+    log(&format!(
+        "[耗时] 围栏 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
+    stage_t = std::time::Instant::now();
+
+    // ③ points
+    let pt = stage_points(client, p, pick.as_ref(), log);
+    log(&format!(
+        "[耗时] 打卡点 {:.1}s",
+        stage_t.elapsed().as_secs_f64()
+    ));
+    stage_t = std::time::Instant::now();
+
+    // ④ 规划
+    let stage = plan_stage(p, &pt, pick.as_ref(), start_ms, log)?;
+    let TrackStage {
+        cps,
+        blockers_used,
+        track,
+        track_mode,
+        stadium_fallback,
+    } = stage;
 
     log(&format!(
         "[耗时] 规划 {:.1}s",
