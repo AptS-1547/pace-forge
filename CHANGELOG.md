@@ -29,6 +29,15 @@
 
 ### 变更
 
+- **[仅修复]** `dry_run` 的 ⑦ 自检段拆成四块：`inspect_probe`（报文反解视图交给
+  preflight）、`audit_points`（必到点齐 / `isPass` / `type=2` 三道校验）、
+  `log_point_distances`（两套坐标系最近距离与首次经过下标）、`warn_point_order`
+  （轨迹经过次序 vs 点位数组同序）。本体从约 560 行降到约 280 行。
+- **[仅修复]** `track::preflight::inspect_at` 按检查项拆成 `check_timeline` /
+  `check_point_times` / `check_distance_and_geo` / `check_checkpoints` /
+  `check_buckets` / `check_sampling` / `check_physics` / `check_totals` /
+  `check_startup` 九个函数，本体只剩「依次调用、最后拼 Report」。检查项顺序与
+  输出文案一字未改（有 golden 之外的既有断言兜底）。
 - **[仅修复]** `dry_run` 的 ⑤ 采样段提成 `sample_stage`，产出收成 `SampleStage`
   （上报点、实测里程、仿真输入），本体再降到约 300 行。
 - **[仅修复]** `dry_run` 的①策略、②围栏、③打卡点、④规划四段各自提成

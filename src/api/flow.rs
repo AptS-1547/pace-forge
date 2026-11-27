@@ -1795,6 +1795,236 @@ struct SampleStage {
 /// 只做到自检为止（不发任何写请求）。
 ///
 /// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
+/// ⑦ 自检：把报文反解的视图交给 preflight，拦在本地。
+fn inspect_probe(
+    view: &super::submit::VerifyView,
+    pol: &PolicyInfo,
+    cp_tuples: &[(f64, f64, String)],
+    sim_params: &SimParams,
+    sample_interval_sec: f64,
+    server_now: i64,
+    log: &mut Log,
+) -> Result<crate::track::preflight::Report, Error> {
+    let view_sim = view.as_sim();
+    let check = Check {
+        points: &view.points,
+        sim: &view_sim,
+        params: sim_params,
+        checkpoints: cp_tuples,
+        total_distance_m: view.total_distance_m as i64,
+        total_time_sec: view.total_time_sec,
+        total_steps: view.total_steps,
+        start_time_ms: view.start_time_ms,
+        stop_time_ms: view.stop_time_ms,
+        pace_range: pol.pace_range,
+        step_range: pol.step_range,
+        expected_interval_sec: Some(sample_interval_sec),
+    };
+    let report = inspect_at(&check, Some(server_now));
+    if report.blocked() {
+        for line in report.lines() {
+            log(&format!("  {line}"));
+        }
+        return Err(ErrorKind::client(format!(
+            "自检未通过：{}",
+            report.summary()
+        )));
+    }
+    log(&format!("√ [preflight] {}", report.summary()));
+    for line in report.lines() {
+        log(&format!("  {line}"));
+    }
+
+    Ok(report)
+}
+
+/// 自检点位数组的三道校验：必到点齐、isPass 全 true、type=2 数量对得上。
+fn audit_points(
+    sub: &super::submit::Submission,
+    fixed: &[super::submit::FixedPoint],
+    log: &mut Log,
+) -> Result<(), Error> {
+    // 自检与上传必须共用同一份点位。
+    //
+    // 早先这里是数 `type=2` 打卡标记的个数，用来兜「`fixed` 传空」——
+    // 后来口径分了流（见 submit::PointTypeScheme）：带必到点的跑法才撒
+    // `type=2`，没有必到点的跑法不发。数标记就不再可靠，改成直接数必到点
+    // 数组，不依赖采样点 `type` 的口径。
+    let fp_items: Vec<Value> = sub
+        .save_record
+        .get("fivePointJson")
+        .and_then(|v| v.as_str())
+        .and_then(|x| serde_json::from_str::<Value>(x).ok())
+        .and_then(|v| v.get("fivePointJson").cloned())
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|x| serde_json::from_str::<Vec<Value>>(x).ok())
+        })
+        .unwrap_or_default();
+    let n_fixed = fp_items.len();
+
+    // isPass 必须全 true —— App 详情页就按它画绿点。
+    //
+    // 少一个就少画一个绿点（4 绿 1 橙）。成因通常是：起点(`type=7`) 或起步
+    // 窗口的灰点(`type=-1`) 把某个必到点 10m 命中圈里唯一的采样点占掉了，
+    // `type=2` 还能靠 Relaxed 兜到圈外，但 `isPass` 用的是严格 10m，于是 false。
+    //
+    // 这种记录发出去等于白跑一次（App 里那个点是橙的），所以拦在本地。
+    let not_passed: Vec<String> = fp_items
+        .iter()
+        .filter(|p| p.get("isPass").and_then(|v| v.as_bool()) == Some(false))
+        .map(|p| {
+            p.get("pointName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(未命名)")
+                .to_string()
+        })
+        .collect();
+    if !not_passed.is_empty() {
+        return Err(ErrorKind::client(format!(
+            "有 {} 个必到点是 isPass=false：{}。\n    App 详情页会显示成橙点，这次打卡等于没算。\n    成因通常是起点或起步窗口的采样点占掉了该点位 10m 内唯一的采样点。\n    处理：把「纬度/经度」锚点挪到离这些点位 20m 以外再跑，或者换一个场地。",
+            not_passed.len(),
+            not_passed.join("、")
+        )));
+    }
+
+    // type=2 的数量必须等于必到点数。
+    //
+    // `isPass` 管成绩（服务端判「经过没有」），`type=2` 管**显示**：App 详情页
+    // 按 type=2 的点位画绿点，少一个就少画一个（issue #11：起点压在打卡点上时
+    // 5 个点只标出 4 个）。两者都得齐，缺 display 那层用户会以为没跑成。
+    let marked = sub
+        .points
+        .iter()
+        .filter(|p| p.get("type").and_then(|v| v.as_i64()) == Some(2))
+        .count();
+    if !fixed.is_empty() && marked < fixed.len() {
+        // **只警告，不拦**。
+        //
+        // 这是显示层问题：服务端判 `complete=true`、成绩照算，只是 App 详情页
+        // 少画一个绿点。拦下来等于用户跑不了——代价比少画一个点大得多。
+        // 拦过一版，实测刘的号也被挡住（他的点位批次同样会命中），说明这个
+        // 条件在某些围栏形状下是常态，不适合当门槛。
+        eprintln!(
+            "! [points] 必到点 {} 个，报文里只有 {marked} 个 type=2 标记：App 详情页会少画 {} 个绿点（成绩不受影响）",
+            fixed.len(),
+            fixed.len().saturating_sub(marked)
+        );
+    }
+    if !fixed.is_empty() && n_fixed != fixed.len() {
+        return Err(ErrorKind::client(format!(
+            "自检点位里必到点数量对不上（报文 {n_fixed} 个，应有 {} 个）：probe 的 fixed 传空了？",
+            fixed.len()
+        )));
+    }
+    log(&format!(
+        "√ [points] 自检与上传共用同一份点位：{} 点 / {} 个必到点",
+        sub.points.len(),
+        n_fixed
+    ));
+
+    Ok(())
+}
+
+/// 打印每个点位两套坐标系下的最近距离与首次经过下标，返回首次经过序列。
+fn log_point_distances(
+    pt: &PointsContext,
+    view: &super::submit::VerifyView,
+    log: &mut Log,
+) -> Vec<(usize, i64, String)> {
+    // 服务端「经过点位」到底比哪套坐标？BD-09 的 lat/lon 与 GCJ-02 的
+    // glat/glon 差 ~850m，选错一套整条记录的点位项就全是 False。
+    let mut order_seen: Vec<(usize, i64, String)> = Vec::new();
+    for (i, raw) in pt.points.iter().enumerate() {
+        let name = raw.get("pointName").and_then(|v| v.as_str()).unwrap_or("");
+        let bd = (
+            raw.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            raw.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        );
+        let gcj = (
+            raw.get("glat").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            raw.get("glon").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        );
+        let d_bd = view
+            .points
+            .iter()
+            .map(|p| crate::track::geo::distance((p.lat, p.lon), bd))
+            .fold(f64::MAX, f64::min);
+        let d_gcj = view
+            .points
+            .iter()
+            .map(|p| {
+                let (a, o) = crate::api::coord::bd09_to_gcj02(p.lat, p.lon);
+                crate::track::geo::distance((a, o), gcj)
+            })
+            .fold(f64::MAX, f64::min);
+        // 首次经过索引：服务端「按顺序通过所有点位」看的就是这个。
+        // 距离 0.1m 只说明穿过了，顺序错了一样判 False。
+        let first_bd = view
+            .points
+            .iter()
+            .position(|p| crate::track::geo::distance((p.lat, p.lon), bd) < 10.0)
+            .map(|x| x as i64)
+            .unwrap_or(-1);
+        log(&format!(
+            "[point-dist] #{i} {name}: BD-09 {d_bd:.1}m / GCJ-02 {d_gcj:.1}m / 首次经过 idx={first_bd}"
+        ));
+        // 记录每个点位"首次经过"的索引，下面统一检查顺序
+        if first_bd >= 0 {
+            order_seen.push((i, first_bd, name.to_string()));
+        }
+    }
+
+    order_seen
+}
+
+/// 点位顺序自检：轨迹实际穿过点位的次序必须与点位数组同序。
+fn warn_point_order(order_seen: &[(usize, i64, String)], log: &mut Log) {
+    // 点位顺序自检。
+    //
+    // 服务端的「按顺序通过所有点位」不是看 `fixed_point_json` 里的
+    // position，而是自己从轨迹里找出每个点位被经过的位置，再检查这个
+    // 序列是否和点位数组同序。也就是说：**position 传得再对也没用，
+    // 轨迹本身必须按顺序穿过它们**。
+    //
+    // 实测踩过的坑：从 #0 到 #1 的那段路径向外扩得太远，中途擦过了 #4。
+    // 轨迹实际经过顺序变成 0,4,1,2,3,4,0，服务端直接判 false，而日志里
+    // 五个点位距离全是 0.1m、detect 满分区 100%，看起来毫无问题。
+    if order_seen.len() >= 2 {
+        let mut sorted = order_seen.to_vec();
+        sorted.sort_by_key(|x| x.1);
+        let bad: Vec<String> = sorted
+            .windows(2)
+            .filter(|w| w[1].0 < w[0].0)
+            // w[0] 是索引更小的那个，所以是它抢在了 w[1] 前面
+            .map(|w| format!("#{} {} 先于 #{} {} 被经过", w[0].0, w[0].2, w[1].0, w[1].2))
+            .collect();
+        if bad.is_empty() {
+            let seq: Vec<String> = sorted.iter().map(|x| format!("#{}@{}", x.0, x.1)).collect();
+            log(&format!("[point-order] 顺序正确：{}", seq.join(" → ")));
+        } else {
+            // `isFixed` 全发 0 之后服务端认为「本场没有必经点」，也就不再
+            // 判「按顺序通过所有点位」——那时这条日志纯属吓人。只有真的带上
+            // 必经点（PACE_FORCE_NORMAL_POINT=0）才需要它。
+            if crate::api::submit::force_normal_point() {
+                log(&format!(
+                    "[point-order] 顺序乱了（{}），但点位全部按普通点发出，服务端不判顺序——可以提交",
+                    bad.join("；")
+                ));
+            } else {
+                log(&format!(
+                    "[point-order] 顺序错误，服务端会判「按顺序通过所有点位」失败：{}",
+                    bad.join("；")
+                ));
+                log("[point-order] 重新规划或调整手绘轨迹，让轨迹只按点位次序穿过每个点");
+            }
+        }
+    }
+}
+
+/// 只做到自检为止（不发任何写请求）。
+///
+/// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
 pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutcome, Error> {
     p.validate()?;
     // 校时：之后所有时间戳都必须落在服务器时间轴上。
@@ -2028,199 +2258,21 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         view.total_steps,
         view.step_buckets.len()
     ));
-    let view_sim = view.as_sim();
+    let report = inspect_probe(
+        &view,
+        &pol,
+        &cp_tuples,
+        &sp,
+        p.sample_interval_sec,
+        server_now,
+        log,
+    )?;
 
-    let check = Check {
-        points: &view.points,
-        sim: &view_sim,
-        params: &sp,
-        checkpoints: &cp_tuples,
-        total_distance_m: view.total_distance_m as i64,
-        total_time_sec: view.total_time_sec,
-        total_steps: view.total_steps,
-        start_time_ms: view.start_time_ms,
-        stop_time_ms: view.stop_time_ms,
-        pace_range: pol.pace_range,
-        step_range: pol.step_range,
-        expected_interval_sec: Some(p.sample_interval_sec),
-    };
-    let report = inspect_at(&check, Some(server_now));
-    if report.blocked() {
-        for line in report.lines() {
-            log(&format!("  {line}"));
-        }
-        return Err(ErrorKind::client(format!(
-            "自检未通过：{}",
-            report.summary()
-        )));
-    }
-    log(&format!("√ [preflight] {}", report.summary()));
-    for line in report.lines() {
-        log(&format!("  {line}"));
-    }
+    audit_points(&probe_sub, &fixed, log)?;
 
-    // 自检与上传必须共用同一份点位。
-    //
-    // 早先这里是数 `type=2` 打卡标记的个数，用来兜「`fixed` 传空」——
-    // 后来口径分了流（见 submit::PointTypeScheme）：带必到点的跑法才撒
-    // `type=2`，没有必到点的跑法不发。数标记就不再可靠，改成直接数必到点
-    // 数组，不依赖采样点 `type` 的口径。
-    let fp_items: Vec<Value> = probe_sub
-        .save_record
-        .get("fivePointJson")
-        .and_then(|v| v.as_str())
-        .and_then(|x| serde_json::from_str::<Value>(x).ok())
-        .and_then(|v| v.get("fivePointJson").cloned())
-        .and_then(|v| {
-            v.as_str()
-                .and_then(|x| serde_json::from_str::<Vec<Value>>(x).ok())
-        })
-        .unwrap_or_default();
-    let n_fixed = fp_items.len();
+    let order_seen = log_point_distances(&pt, &view, log);
 
-    // isPass 必须全 true —— App 详情页就按它画绿点。
-    //
-    // 少一个就少画一个绿点（4 绿 1 橙）。成因通常是：起点(`type=7`) 或起步
-    // 窗口的灰点(`type=-1`) 把某个必到点 10m 命中圈里唯一的采样点占掉了，
-    // `type=2` 还能靠 Relaxed 兜到圈外，但 `isPass` 用的是严格 10m，于是 false。
-    //
-    // 这种记录发出去等于白跑一次（App 里那个点是橙的），所以拦在本地。
-    let not_passed: Vec<String> = fp_items
-        .iter()
-        .filter(|p| p.get("isPass").and_then(|v| v.as_bool()) == Some(false))
-        .map(|p| {
-            p.get("pointName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("(未命名)")
-                .to_string()
-        })
-        .collect();
-    if !not_passed.is_empty() {
-        return Err(ErrorKind::client(format!(
-            "有 {} 个必到点是 isPass=false：{}。\n    App 详情页会显示成橙点，这次打卡等于没算。\n    成因通常是起点或起步窗口的采样点占掉了该点位 10m 内唯一的采样点。\n    处理：把「纬度/经度」锚点挪到离这些点位 20m 以外再跑，或者换一个场地。",
-            not_passed.len(),
-            not_passed.join("、")
-        )));
-    }
-
-    // type=2 的数量必须等于必到点数。
-    //
-    // `isPass` 管成绩（服务端判「经过没有」），`type=2` 管**显示**：App 详情页
-    // 按 type=2 的点位画绿点，少一个就少画一个（issue #11：起点压在打卡点上时
-    // 5 个点只标出 4 个）。两者都得齐，缺 display 那层用户会以为没跑成。
-    let marked = probe_sub
-        .points
-        .iter()
-        .filter(|p| p.get("type").and_then(|v| v.as_i64()) == Some(2))
-        .count();
-    if !fixed.is_empty() && marked < fixed.len() {
-        // **只警告，不拦**。
-        //
-        // 这是显示层问题：服务端判 `complete=true`、成绩照算，只是 App 详情页
-        // 少画一个绿点。拦下来等于用户跑不了——代价比少画一个点大得多。
-        // 拦过一版，实测刘的号也被挡住（他的点位批次同样会命中），说明这个
-        // 条件在某些围栏形状下是常态，不适合当门槛。
-        eprintln!(
-            "! [points] 必到点 {} 个，报文里只有 {marked} 个 type=2 标记：App 详情页会少画 {} 个绿点（成绩不受影响）",
-            fixed.len(),
-            fixed.len().saturating_sub(marked)
-        );
-    }
-    if !fixed.is_empty() && n_fixed != fixed.len() {
-        return Err(ErrorKind::client(format!(
-            "自检点位里必到点数量对不上（报文 {n_fixed} 个，应有 {} 个）：probe 的 fixed 传空了？",
-            fixed.len()
-        )));
-    }
-    log(&format!(
-        "√ [points] 自检与上传共用同一份点位：{} 点 / {} 个必到点",
-        probe_sub.points.len(),
-        n_fixed
-    ));
-
-    // 服务端「经过点位」到底比哪套坐标？BD-09 的 lat/lon 与 GCJ-02 的
-    // glat/glon 差 ~850m，选错一套整条记录的点位项就全是 False。
-    let mut order_seen: Vec<(usize, i64, String)> = Vec::new();
-    for (i, raw) in pt.points.iter().enumerate() {
-        let name = raw.get("pointName").and_then(|v| v.as_str()).unwrap_or("");
-        let bd = (
-            raw.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            raw.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        );
-        let gcj = (
-            raw.get("glat").and_then(|v| v.as_f64()).unwrap_or(0.0),
-            raw.get("glon").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        );
-        let d_bd = view
-            .points
-            .iter()
-            .map(|p| crate::track::geo::distance((p.lat, p.lon), bd))
-            .fold(f64::MAX, f64::min);
-        let d_gcj = view
-            .points
-            .iter()
-            .map(|p| {
-                let (a, o) = crate::api::coord::bd09_to_gcj02(p.lat, p.lon);
-                crate::track::geo::distance((a, o), gcj)
-            })
-            .fold(f64::MAX, f64::min);
-        // 首次经过索引：服务端「按顺序通过所有点位」看的就是这个。
-        // 距离 0.1m 只说明穿过了，顺序错了一样判 False。
-        let first_bd = view
-            .points
-            .iter()
-            .position(|p| crate::track::geo::distance((p.lat, p.lon), bd) < 10.0)
-            .map(|x| x as i64)
-            .unwrap_or(-1);
-        log(&format!(
-            "[point-dist] #{i} {name}: BD-09 {d_bd:.1}m / GCJ-02 {d_gcj:.1}m / 首次经过 idx={first_bd}"
-        ));
-        // 记录每个点位"首次经过"的索引，下面统一检查顺序
-        if first_bd >= 0 {
-            order_seen.push((i, first_bd, name.to_string()));
-        }
-    }
-
-    // 点位顺序自检。
-    //
-    // 服务端的「按顺序通过所有点位」不是看 `fixed_point_json` 里的
-    // position，而是自己从轨迹里找出每个点位被经过的位置，再检查这个
-    // 序列是否和点位数组同序。也就是说：**position 传得再对也没用，
-    // 轨迹本身必须按顺序穿过它们**。
-    //
-    // 实测踩过的坑：从 #0 到 #1 的那段路径向外扩得太远，中途擦过了 #4。
-    // 轨迹实际经过顺序变成 0,4,1,2,3,4,0，服务端直接判 false，而日志里
-    // 五个点位距离全是 0.1m、detect 满分区 100%，看起来毫无问题。
-    if order_seen.len() >= 2 {
-        let mut sorted = order_seen.clone();
-        sorted.sort_by_key(|x| x.1);
-        let bad: Vec<String> = sorted
-            .windows(2)
-            .filter(|w| w[1].0 < w[0].0)
-            // w[0] 是索引更小的那个，所以是它抢在了 w[1] 前面
-            .map(|w| format!("#{} {} 先于 #{} {} 被经过", w[0].0, w[0].2, w[1].0, w[1].2))
-            .collect();
-        if bad.is_empty() {
-            let seq: Vec<String> = sorted.iter().map(|x| format!("#{}@{}", x.0, x.1)).collect();
-            log(&format!("[point-order] 顺序正确：{}", seq.join(" → ")));
-        } else {
-            // `isFixed` 全发 0 之后服务端认为「本场没有必经点」，也就不再
-            // 判「按顺序通过所有点位」——那时这条日志纯属吓人。只有真的带上
-            // 必经点（PACE_FORCE_NORMAL_POINT=0）才需要它。
-            if crate::api::submit::force_normal_point() {
-                log(&format!(
-                    "[point-order] 顺序乱了（{}），但点位全部按普通点发出，服务端不判顺序——可以提交",
-                    bad.join("；")
-                ));
-            } else {
-                log(&format!(
-                    "[point-order] 顺序错误，服务端会判「按顺序通过所有点位」失败：{}",
-                    bad.join("；")
-                ));
-                log("[point-order] 重新规划或调整手绘轨迹，让轨迹只按点位次序穿过每个点");
-            }
-        }
-    }
+    warn_point_order(&order_seen, log);
 
     log(&format!(
         "[耗时] 采样+自检 {:.1}s · 全程 {:.1}s",
