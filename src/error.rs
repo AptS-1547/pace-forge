@@ -52,6 +52,22 @@ fn protocol_display(code: &Option<i64>, m: &str) -> String {
 }
 
 impl ErrorKind {
+    /// Vendor response that is missing or malformed, with no code to attach.
+    pub fn protocol(msg: String) -> Self {
+        Self::Protocol { code: None, msg }
+    }
+    /// Local validation or environment failure.
+    pub fn client(msg: String) -> Self {
+        Self::Client(msg)
+    }
+    /// Transport failure: connect, timeout, DNS, non-2xx from object storage.
+    pub fn network(msg: String) -> Self {
+        Self::Network(msg)
+    }
+    /// Fence or checkpoint geometry that cannot be satisfied.
+    pub fn fence(msg: String) -> Self {
+        Self::Fence(msg)
+    }
     /// 厂商业务码 → 类别。唯一分类点:新码出现时改这里。
     ///
     /// 已知码(依据 submit.rs 的说明表、issue 记录与真机实测):

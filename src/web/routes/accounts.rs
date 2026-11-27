@@ -427,7 +427,7 @@ pub(crate) fn handle_batch(
                 }));
             }
             Err(e) => results.push(json!({
-                "id": id, "ok": false, "error": e,
+                "id": id, "ok": false, "error": e.to_string(),
                 "logs": logs.borrow().clone(),
             })),
         }

@@ -25,6 +25,7 @@ use super::fence::{self, FencePick};
 use super::obs;
 use super::points::{self, PointsContext};
 use super::policy::{self, PolicyInfo};
+use crate::error::{Error, ErrorKind};
 use crate::track::{
     Check, Checkpoint, KinParams, PlanRequest, PlanResult, Report, SimParams, TrackPoint,
     inspect_at, plan, simulate,
@@ -567,42 +568,51 @@ impl RunParams {
     /// 之前三个入口各写一套：Web 拦到 300 分钟，CLI 什么都不拦，
     /// `MAX_RUN_TIME`（7200 秒 = 120 分钟）这个常量定义了却从没被引用。
     /// 结果 `run 2 200` 能一路走到提交，必然被服务端驳回，还累计风控次数。
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), Error> {
         if !self.distance_m.is_finite() || self.distance_m <= 0.0 {
-            return Err(format!("距离必须是正数，收到 {}", self.distance_m));
+            return Err(ErrorKind::client(format!(
+                "距离必须是正数，收到 {}",
+                self.distance_m
+            )));
         }
         if self.distance_m > 42_000.0 {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "距离 {} m 超过上限 42000 m（42 公里）",
                 self.distance_m
-            ));
+            )));
         }
         if self.duration_sec <= 0 {
-            return Err(format!("时长必须为正，收到 {} 秒", self.duration_sec));
+            return Err(ErrorKind::client(format!(
+                "时长必须为正，收到 {} 秒",
+                self.duration_sec
+            )));
         }
         if self.duration_sec > super::submit::MAX_RUN_TIME {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "时长 {} 秒超过上限 {} 秒（{} 分钟）——超过这个值服务端必然驳回",
                 self.duration_sec,
                 super::submit::MAX_RUN_TIME,
                 super::submit::MAX_RUN_TIME / 60
-            ));
+            )));
         }
         if let Some(st) = self.steps
             && st < 0
         {
-            return Err(format!("步数不能为负，收到 {st}"));
+            return Err(ErrorKind::client(format!("步数不能为负，收到 {st}")));
         }
         if !(-90.0..=90.0).contains(&self.center_lat)
             || !(-180.0..=180.0).contains(&self.center_lng)
         {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "定位锚点越界: ({}, {})",
                 self.center_lat, self.center_lng
-            ));
+            )));
         }
         if self.sample_step_m <= 0.0 || self.sample_step_m > 100.0 {
-            return Err(format!("几何采样间距不合理: {} m", self.sample_step_m));
+            return Err(ErrorKind::client(format!(
+                "几何采样间距不合理: {} m",
+                self.sample_step_m
+            )));
         }
         // 上报节奏校验。
         //
@@ -616,35 +626,35 @@ impl RunParams {
         //   （硬拦在 15 秒，容忍度留给压测；更严的「必须贴着 5 秒」在
         //   `preflight::SAMPLE_RATE` 里，那里看的是**生成结果**的分布。）
         if !self.sample_interval_sec.is_finite() || self.sample_interval_sec < 1.0 {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "上报采样间隔 {}s 不合理：报文时间精度是秒，小于 1 秒会画出 0 时长段",
                 self.sample_interval_sec
-            ));
+            )));
         }
         if self.sample_interval_sec > 15.0 {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "上报采样间隔 {}s 超过真机节奏（{:.2}s）的三倍，点数会明显偏少",
                 self.sample_interval_sec,
                 crate::track::REAL_MEAN_INTERVAL_SEC
-            ));
+            )));
         }
         // 点数下界：一条轨迹至少要有两个点，且起步额外点需要时长够长。
         let est = crate::track::sample_times(self.duration_sec, 0, self.sample_interval_sec);
         if est.len() < 4 {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "时长 {}s / 间隔 {}s 只能采出 {} 个点，至少要 4 个",
                 self.duration_sec,
                 self.sample_interval_sec,
                 est.len()
-            ));
+            )));
         }
         if est.len() > 40_000 {
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "时长 {}s / 间隔 {}s 会采出 {} 个点，报文过大",
                 self.duration_sec,
                 self.sample_interval_sec,
                 est.len()
-            ));
+            )));
         }
         Ok(())
     }
@@ -753,7 +763,7 @@ fn rerun_start_ms(local_t: i64, skew: Option<i64>) -> i64 {
 /// 只做到自检为止（不发任何写请求）。
 ///
 /// 用来在提交前确认数据没问题——大部分坑在这一步就能发现。
-pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutcome, String> {
+pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutcome, Error> {
     p.validate()?;
     // 校时：之后所有时间戳都必须落在服务器时间轴上。
     // 「开始时间 + 时长 ≤ 服务器现在」是服务端硬判据，本机时钟偏十几分钟
@@ -907,9 +917,9 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
             // 还看不到哪一步降级了（issue #8）。这里只拦「拿不到」，学校确实
             // 没配围栏是 `Ok(空)`，仍按原行为继续。
             if p.run_mode == 1 {
-                return Err(format!(
+                return Err(ErrorKind::client(format!(
                     "计分跑必须拿到官方围栏，但接口失败：{e}\n                     这不是重试能绕过的问题——先确认登录态和校区选择，再重新生成"
-                ));
+                )));
             }
             log(&format!("⚠ [fence] 接口失败，按自由跑继续: {e}"));
             None
@@ -1343,12 +1353,14 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
                         p.distance_m,
                         25.0,
                         &must,
-                    )?
+                    )
+                    .map_err(ErrorKind::client)?
                 }
             }
         } else {
             log("[track] 没有打卡点，沿围栏内缩 25m 跑");
-            crate::track::fence_route::route_along_fence(&fence_ring, p.distance_m, 25.0, &must)?
+            crate::track::fence_route::route_along_fence(&fence_ring, p.distance_m, 25.0, &must)
+                .map_err(ErrorKind::fence)?
         };
         // 沿边界是贴着围墙的稀疏折线，拐角磨圆 + 轻微摆动，别像尺子画的。
         //
@@ -1494,7 +1506,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         let mut rng =
             rand::rngs::StdRng::seed_from_u64(if p.seed != 0 { p.seed } else { start_ms as u64 });
         let _ = &mut rng;
-        plan(&req, &mut rng)?
+        plan(&req, &mut rng).map_err(ErrorKind::fence)?
     };
     // 指定了终点就核对一下末点：planner 里已经钉住了，但 flow 后面还有
     // 避让/采样/吸附几道处理，任何一道都可能把末点挪开。这里的日志是给
@@ -1583,7 +1595,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         &cp_pairs,
     );
     if track_points.len() < 2 {
-        return Err("上报采样失败：时间轴或几何为空".into());
+        return Err(ErrorKind::client("上报采样失败：时间轴或几何为空".into()));
     }
     log(&format!(
         "[sample] 等时间采样 {:.1}s → {} 点（几何折线 {} 点 / 步长 {:.1}m）",
@@ -1806,7 +1818,7 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         seed: if p.seed != 0 { p.seed } else { start_ms as u64 },
         ..Default::default()
     };
-    let sim = simulate(&timed, &sp)?;
+    let sim = simulate(&timed, &sp).map_err(ErrorKind::fence)?;
     log(&format!(
         "√ [simulate] {} 步，平均步频 {:.1} 步/分，{} 个分桶",
         sim.total_steps,
@@ -1929,7 +1941,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         for line in report.lines() {
             log(&format!("  {line}"));
         }
-        return Err(format!("自检未通过：{}", report.summary()));
+        return Err(ErrorKind::client(format!(
+            "自检未通过：{}",
+            report.summary()
+        )));
     }
     log(&format!("√ [preflight] {}", report.summary()));
     for line in report.lines() {
@@ -1973,11 +1988,11 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         })
         .collect();
     if !not_passed.is_empty() {
-        return Err(format!(
+        return Err(ErrorKind::client(format!(
             "有 {} 个必到点是 isPass=false：{}。\n    App 详情页会显示成橙点，这次打卡等于没算。\n    成因通常是起点或起步窗口的采样点占掉了该点位 10m 内唯一的采样点。\n    处理：把「纬度/经度」锚点挪到离这些点位 20m 以外再跑，或者换一个场地。",
             not_passed.len(),
             not_passed.join("、")
-        ));
+        )));
     }
 
     // type=2 的数量必须等于必到点数。
@@ -2004,10 +2019,10 @@ pub fn dry_run(client: &Client, p: &RunParams, log: &mut Log) -> Result<RunOutco
         );
     }
     if !fixed.is_empty() && n_fixed != fixed.len() {
-        return Err(format!(
+        return Err(ErrorKind::client(format!(
             "自检点位里必到点数量对不上（报文 {n_fixed} 个，应有 {} 个）：probe 的 fixed 传空了？",
             fixed.len()
-        ));
+        )));
     }
     log(&format!(
         "√ [points] 自检与上传共用同一份点位：{} 点 / {} 个必到点",
@@ -2301,7 +2316,7 @@ pub fn run_full(
     p: &RunParams,
     log: &mut Log,
     confirm: &mut dyn FnMut(&RunOutcome) -> bool,
-) -> Result<RunOutcome, String> {
+) -> Result<RunOutcome, Error> {
     // 前七步与 dry_run 完全一致
     let mut out = dry_run(client, p, log)?;
 
@@ -2361,13 +2376,13 @@ pub fn run_full(
                         (after - cap as f64).round()
                     ));
                 } else {
-                    return Err(format!(
+                    return Err(ErrorKind::client(format!(
                         "今日已跑 {done:.0}m，再加 {:.0}m 合计 {after:.0}m，超过日上限 {cap}m。\n    \
                          超出部分不计入有效里程。把距离降到 {:.0}m 以内，\n    \
                          或者设 PACE_IGNORE_DAILY_LIMIT=1 硬跑。",
                         p.distance_m,
                         (cap as f64 - done).max(0.0)
-                    ));
+                    )));
                 }
             }
         }
@@ -2384,9 +2399,9 @@ pub fn run_full(
                     "√ [window] 当前 {now} 在有效时段 {start}–{end} 内"
                 ));
             } else {
-                return Err(format!(
+                return Err(ErrorKind::client(format!(
                     "当前 {now} 不在学校有效时段 {start}–{end} 内，服务端会回 11016（不在有效时段）。\n    换个时间再跑，别在这里白烧一次提交。"
-                ));
+                )));
             }
         }
         None => log("[window] 拿不到学校时段（不影响提交）"),
@@ -2408,10 +2423,10 @@ pub fn run_full(
         let now = crate::crypto::envelope::now_ms() as i64;
         if freeze > now {
             let left = (freeze - now) / 1000;
-            return Err(format!(
+            return Err(ErrorKind::client(format!(
                 "账号处于跑步冻结期，还剩 {left} 秒（至 {}）：冻结期提交会被再记一次违规。\n    等解冻后再跑，或用 App 里的申诉通道。",
                 freeze / 1000
-            ));
+            )));
         }
         if freeze > 0 {
             log(&format!(
@@ -2428,10 +2443,10 @@ pub fn run_full(
         match crate::api::cheat::query(client, 1, &mut |l| log(l)) {
             Ok(rep) => match rep.status() {
                 Status::Flagged => {
-                    return Err(format!(
+                    return Err(ErrorKind::client(format!(
                         "服务端已把当前账号标记为违规（{}）：先处理，别继续提交。详见 [cheat] 那几行",
                         rep.summary()
-                    ));
+                    )));
                 }
                 Status::NoRecord => log("√ [cheat] 违规名单自查：当前账号无记录"),
                 s => log(&format!(
@@ -2444,7 +2459,10 @@ pub fn run_full(
     }
 
     if out.report.blocked() {
-        return Err(format!("自检未通过，不提交：{}", out.report.summary()));
+        return Err(ErrorKind::client(format!(
+            "自检未通过，不提交：{}",
+            out.report.summary()
+        )));
     }
     if !confirm(&out) {
         log("[flow] 已取消，未提交");
@@ -2494,7 +2512,9 @@ pub fn run_full(
             log(&format!("  · {line}"));
         }
         if rep.blocked() {
-            return Err("点位体检未通过，提交会被判异常，已中止".into());
+            return Err(ErrorKind::client(
+                "点位体检未通过，提交会被判异常，已中止".into(),
+            ));
         }
     }
 
@@ -2521,7 +2541,8 @@ pub fn run_full(
     //
     // 三道拦截见 `guard::Guard::check`：上次结果未知 → 拦；时间段重叠 →
     // 拦；不同账号 → 各记各的。
-    let mut guard = super::guard::Guard::open(&super::session::data_dir(), &uid)?;
+    let mut guard =
+        super::guard::Guard::open(&super::session::data_dir(), &uid).map_err(ErrorKind::client)?;
     // 有别的时段的未知结果时放行（它不影响这一段的判重），但要说一声：
     // 那条记录可能已经在服务端，用户该去核对。
     if let Some((ps, pe)) = guard.pending_range() {
@@ -2532,7 +2553,9 @@ pub fn run_full(
             super::guard::fmt_ms(pe)
         ));
     }
-    guard.begin(&uuid, start_ms, stop_ms)?;
+    guard
+        .begin(&uuid, start_ms, stop_ms)
+        .map_err(ErrorKind::client)?;
     log(&format!(
         "[guard] 台账已记 pending（{} ~ {}），提交中…",
         start_ms, stop_ms
@@ -2602,7 +2625,9 @@ pub fn run_full(
     // 结构上不可能不等（同一个 Vec 的克隆），但真出现「谁在中途改了点位」
     // 就是 A4 回归，宁可在这里停住也别把两份数据分别发出去。
     if submission.points != out.submission_points {
-        return Err("点位数组在自检与提交之间被改动过（A4 回归）".into());
+        return Err(ErrorKind::client(
+            "点位数组在自检与提交之间被改动过（A4 回归）".into(),
+        ));
     }
 
     // 7.4.01 已移除 BODY_SENSORS，报文里不许出现心率字段
@@ -2627,10 +2652,10 @@ pub fn run_full(
     // 记录判成来源可疑，所以宁可在这里拦下。
     let derived_problems = super::submit::audit_derived(&body, &submission.points);
     if !derived_problems.is_empty() {
-        return Err(format!(
+        return Err(ErrorKind::client(format!(
             "报文派生字段自检失败（未提交）：{}",
             derived_problems.join("；")
-        ));
+        )));
     }
     log("√ [selfcheck] 派生字段与点位列自洽（爬升/卡路里/功率/配速/圈）");
     // 必到点次序回显。App 详情页的「必到点位」就是按这段报文显示的：
@@ -2680,7 +2705,7 @@ pub fn run_full(
             // 响应解析失败一律留着 pending —— 请求可能已经入账，只是我们
             // 没看到回执。这条区分是整套台账的立足点。
             if f.rejected {
-                guard.rejected(&uuid)?;
+                guard.rejected(&uuid).map_err(ErrorKind::client)?;
                 log("[guard] 服务端明确驳回，已释放该时间段");
             } else {
                 log("[guard] 提交结果未知，台账保留 pending（不会自动重试）");
@@ -2693,7 +2718,7 @@ pub fn run_full(
                 "  服务端有 3 天补传窗口：这条记录客户端侧已生成，先到 App 记录页\n  \
                  核对是否入账，别立刻重刷（重复提交比失败更麻烦）",
             );
-            return Err(f.message);
+            return Err(ErrorKind::protocol(f.message));
         }
     };
     out.submitted = true;
@@ -2744,7 +2769,8 @@ pub fn run_full(
         // rrid 前 4 位——前端注释的说法
         format!("run_data/{}/{rrid}.json", rrid / 1_000_000),
     ];
-    let bytes = serde_json::to_vec(&payload).map_err(|e| format!("明细序列化失败: {e}"))?;
+    let bytes = serde_json::to_vec(&payload)
+        .map_err(|e| ErrorKind::client(format!("明细序列化失败: {e}")))?;
     let (ok, errs) = obs::upload_keys(client, &keys, &bytes);
     for e in &errs {
         log(&format!("  ⚠ {e}"));
@@ -3055,20 +3081,21 @@ pub fn upload_detail(
     start_ms: i64,
     uid: &str,
     log: &mut Log,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, Error> {
     let uuid = super::client::uuid_v4();
     let keys = vec![
         obs::detail_key(start_ms, &uuid),
         obs::fallback_key(uid, p.sport_type, start_ms / 1000, &uuid),
     ];
-    let bytes = serde_json::to_vec(payload).map_err(|e| format!("明细序列化失败: {e}"))?;
+    let bytes = serde_json::to_vec(payload)
+        .map_err(|e| ErrorKind::client(format!("明细序列化失败: {e}")))?;
     log(&format!("[obs] 上传明细 {} 字节…", bytes.len()));
     let (ok, errs) = obs::upload_keys(client, &keys, &bytes);
     for e in &errs {
         log(&format!("  ⚠ {e}"));
     }
     if ok == 0 {
-        return Err("OBS 全部 key 上传失败".into());
+        return Err(ErrorKind::client("OBS 全部 key 上传失败".into()));
     }
     log(&format!("√ [obs] {ok}/{} 个 key 上传成功", keys.len()));
     Ok(keys)

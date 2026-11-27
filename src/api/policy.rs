@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use super::client::{Client, expect_ok};
 use super::coord::gcj02_to_bd09;
 use crate::crypto::consts::hosts;
+use crate::error::{Error, ErrorKind};
 
 /// 规则接口路径。
 pub const POLICY_PATH: &str = "/api/v70103/runModePolicy";
@@ -66,10 +67,10 @@ fn get_field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 }
 
 /// 解析 policy 响应。
-pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
+pub fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, Error> {
     let timestamp = get_field(biz, "timestamp")
         .and_then(|t| t.as_i64())
-        .ok_or("policy 响应缺 timestamp")?;
+        .ok_or_else(|| ErrorKind::protocol("policy 响应缺 timestamp".into()))?;
     let policy = get_field(biz, "policy")
         .and_then(|t| t.as_i64())
         .unwrap_or(0);
@@ -259,7 +260,7 @@ fn field_num(p: &Value, keys: &[&str]) -> Option<f64> {
 /// 拉策略。
 ///
 /// body：`{"runMode":1,"ruleUpdateTime":0,"geoFenceUpdateTime":0,"selectUnid":<unid>,"operateType":0}`
-pub fn fetch_policy_for(client: &Client, run_mode: i64) -> Result<PolicyInfo, String> {
+pub fn fetch_policy_for(client: &Client, run_mode: i64) -> Result<PolicyInfo, Error> {
     let select_unid = client
         .credentials()
         .and_then(|c| c.unid.as_ref())
@@ -274,14 +275,12 @@ pub fn fetch_policy_for(client: &Client, run_mode: i64) -> Result<PolicyInfo, St
         "operateType": 0,
     });
 
-    let raw = client
-        .request(
-            "POST",
-            &format!("{}{}", hosts::RUN, POLICY_PATH),
-            Some(&body),
-        )
-        .map_err(|e| e.to_string())?;
-    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
+    let raw = client.request(
+        "POST",
+        &format!("{}{}", hosts::RUN, POLICY_PATH),
+        Some(&body),
+    )?;
+    let v = expect_ok(&raw)?;
     // 策略响应里可能有点位判定相关的字段，我们只解析了四个。
     // 把原始 JSON 落盘，逐字段比对 runMode=1 与 runMode=2 的差异。
     dump_policy_in(dump_dir().as_deref(), run_mode, &v);
@@ -386,15 +385,13 @@ pub fn in_window(now_hms: &str, start: &str, end: &str) -> bool {
 ///
 /// 依据：Nyx4 探测报告 §四.1（「每月随机核验」= 支付宝信用分，接口
 /// `creditscore/v70390/popup`，返回 `{needPopup: bool}`）。
-pub fn monthly_verify_needed(client: &Client) -> Result<bool, String> {
-    let raw = client
-        .request(
-            "GET",
-            &format!("{}/api/creditscore/v70390/popup?taskType=1", hosts::RUN),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-    let v = expect_ok(&raw).map_err(|e| e.to_string())?;
+pub fn monthly_verify_needed(client: &Client) -> Result<bool, Error> {
+    let raw = client.request(
+        "GET",
+        &format!("{}/api/creditscore/v70390/popup?taskType=1", hosts::RUN),
+        None,
+    )?;
+    let v = expect_ok(&raw)?;
     Ok(v.get("data")
         .and_then(|d| d.get("needPopup"))
         .and_then(|x| x.as_bool())
@@ -402,7 +399,7 @@ pub fn monthly_verify_needed(client: &Client) -> Result<bool, String> {
 }
 
 /// 默认按校园跑拉策略。
-pub fn fetch_policy(client: &Client) -> Result<PolicyInfo, String> {
+pub fn fetch_policy(client: &Client) -> Result<PolicyInfo, Error> {
     fetch_policy_for(client, 1)
 }
 

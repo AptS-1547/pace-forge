@@ -27,8 +27,7 @@ pub(crate) fn handle_obs_fetch(
     };
     match crate::api::obs::fetch_object(&client, &key) {
         Ok(v) => json_ok(request, v),
-        // TODO(#62): obs 转换后改走 json_err_kind
-        Err(e) => json_err(request, &e),
+        Err(e) => json_err_kind(request, &e),
     }
 }
 
